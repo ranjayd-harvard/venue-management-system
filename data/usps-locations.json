@@ -1,0 +1,252 @@
+[
+  {
+    "name": "USPS Manhattan Midtown",
+    "address": "223 W 38th St",
+    "city": "New York",
+    "state": "NY",
+    "zipCode": "10018",
+    "country": "USA",
+    "latitude": 40.7549,
+    "longitude": -73.9912
+  },
+  {
+    "name": "USPS Brooklyn Downtown",
+    "address": "271 Cadman Plaza E",
+    "city": "Brooklyn",
+    "state": "NY",
+    "zipCode": "11201",
+    "country": "USA",
+    "latitude": 40.6957,
+    "longitude": -73.9901
+  },
+  {
+    "name": "USPS San Francisco Main",
+    "address": "1300 Evans Ave",
+    "city": "San Francisco",
+    "state": "CA",
+    "zipCode": "94124",
+    "country": "USA",
+    "latitude": 37.7437,
+    "longitude": -122.3892
+  },
+  {
+    "name": "USPS Los Angeles Downtown",
+    "address": "7001 S Central Ave",
+    "city": "Los Angeles",
+    "state": "CA",
+    "zipCode": "90052",
+    "country": "USA",
+    "latitude": 33.9771,
+    "longitude": -118.2479
+  },
+  {
+    "name": "USPS Chicago Loop",
+    "address": "433 W Harrison St",
+    "city": "Chicago",
+    "state": "IL",
+    "zipCode": "60607",
+    "country": "USA",
+    "latitude": 41.8744,
+    "longitude": -87.6396
+  },
+  {
+    "name": "USPS Houston Main",
+    "address": "401 Franklin St",
+    "city": "Houston",
+    "state": "TX",
+    "zipCode": "77201",
+    "country": "USA",
+    "latitude": 29.7604,
+    "longitude": -95.3698
+  },
+  {
+    "name": "USPS Phoenix Main",
+    "address": "4949 E Van Buren St",
+    "city": "Phoenix",
+    "state": "AZ",
+    "zipCode": "85008",
+    "country": "USA",
+    "latitude": 33.4484,
+    "longitude": -111.9784
+  },
+  {
+    "name": "USPS Philadelphia Main",
+    "address": "2970 Market St",
+    "city": "Philadelphia",
+    "state": "PA",
+    "zipCode": "19104",
+    "country": "USA",
+    "latitude": 39.9555,
+    "longitude": -75.1805
+  },
+  {
+    "name": "USPS San Antonio Main",
+    "address": "10410 Perrin Beitel Rd",
+    "city": "San Antonio",
+    "state": "TX",
+    "zipCode": "78284",
+    "country": "USA",
+    "latitude": 29.5134,
+    "longitude": -98.4001
+  },
+  {
+    "name": "USPS San Diego Main",
+    "address": "2535 Midway Dr",
+    "city": "San Diego",
+    "state": "CA",
+    "zipCode": "92110",
+    "country": "USA",
+    "latitude": 32.7535,
+    "longitude": -117.2104
+  },
+  {
+    "name": "USPS Dallas Downtown",
+    "address": "401 DFW Turnpike",
+    "city": "Dallas",
+    "state": "TX",
+    "zipCode": "75261",
+    "country": "USA",
+    "latitude": 32.7767,
+    "longitude": -96.7970
+  },
+  {
+    "name": "USPS Austin Main",
+    "address": "8225 Cross Park Dr",
+    "city": "Austin",
+    "state": "TX",
+    "zipCode": "78754",
+    "country": "USA",
+    "latitude": 30.3646,
+    "longitude": -97.6909
+  },
+  {
+    "name": "USPS Seattle Main",
+    "address": "301 Union St",
+    "city": "Seattle",
+    "state": "WA",
+    "zipCode": "98101",
+    "country": "USA",
+    "latitude": 47.6097,
+    "longitude": -122.3331
+  },
+  {
+    "name": "USPS Denver Main",
+    "address": "7500 E 53rd Pl",
+    "city": "Denver",
+    "state": "CO",
+    "zipCode": "80217",
+    "country": "USA",
+    "latitude": 39.7974,
+    "longitude": -104.9123
+  },
+  {
+    "name": "USPS Boston Main",
+    "address": "25 Dorchester Ave",
+    "city": "Boston",
+    "state": "MA",
+    "zipCode": "02205",
+    "country": "USA",
+    "latitude": 42.3526,
+    "longitude": -71.0563
+  },
+  {
+    "name": "USPS Miami Main",
+    "address": "2200 NW 72nd Ave",
+    "city": "Miami",
+    "state": "FL",
+    "zipCode": "33122",
+    "country": "USA",
+    "latitude": 25.7959,
+    "longitude": -80.3150
+  },
+  {
+    "name": "USPS Atlanta Main",
+    "address": "3900 Crown Rd SW",
+    "city": "Atlanta",
+    "state": "GA",
+    "zipCode": "30304",
+    "country": "USA",
+    "latitude": 33.7490,
+    "longitude": -84.3880
+  },
+  {
+    "name": "USPS Portland Main",
+    "address": "715 NW Hoyt St",
+    "city": "Portland",
+    "state": "OR",
+    "zipCode": "97208",
+    "country": "USA",
+    "latitude": 45.5272,
+    "longitude": -122.6795
+  },
+  {
+    "name": "USPS Las Vegas Main",
+    "address": "1001 E Sunset Rd",
+    "city": "Las Vegas",
+    "state": "NV",
+    "zipCode": "89199",
+    "country": "USA",
+    "latitude": 36.0691,
+    "longitude": -115.1359
+  },
+  {
+    "name": "USPS Detroit Main",
+    "address": "1401 W Fort St",
+    "city": "Detroit",
+    "state": "MI",
+    "zipCode": "48233",
+    "country": "USA",
+    "latitude": 42.3270,
+    "longitude": -83.0755
+  },
+  {
+    "name": "USPS Minneapolis Main",
+    "address": "100 S 1st St",
+    "city": "Minneapolis",
+    "state": "MN",
+    "zipCode": "55401",
+    "country": "USA",
+    "latitude": 44.9778,
+    "longitude": -93.2650
+  },
+  {
+    "name": "USPS Nashville Main",
+    "address": "525 Royal Pkwy",
+    "city": "Nashville",
+    "state": "TN",
+    "zipCode": "37229",
+    "country": "USA",
+    "latitude": 36.0780,
+    "longitude": -86.7025
+  },
+  {
+    "name": "USPS Charlotte Main",
+    "address": "201 N McDowell St",
+    "city": "Charlotte",
+    "state": "NC",
+    "zipCode": "28204",
+    "country": "USA",
+    "latitude": 35.2271,
+    "longitude": -80.8431
+  },
+  {
+    "name": "USPS Baltimore Main",
+    "address": "900 E Fayette St",
+    "city": "Baltimore",
+    "state": "MD",
+    "zipCode": "21233",
+    "country": "USA",
+    "latitude": 39.2904,
+    "longitude": -76.6122
+  },
+  {
+    "name": "USPS Milwaukee Main",
+    "address": "345 W St Paul Ave",
+    "city": "Milwaukee",
+    "state": "WI",
+    "zipCode": "53203",
+    "country": "USA",
+    "latitude": 43.0389,
+    "longitude": -87.9065
+  }
+]

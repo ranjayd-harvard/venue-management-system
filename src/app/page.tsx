@@ -99,6 +99,13 @@ export default function Home() {
             <span className="text-2xl">+</span>
             <span>New Sub-Location</span>
           </Link>
+          <Link 
+            href="/admin/seed" 
+            className="bg-white border-2 border-red-500 hover:bg-red-50 text-red-600 rounded-lg p-4 transition-colors flex items-center justify-center gap-2"
+          >
+            <span className="text-2xl">+</span>
+            <span>Admin - Database Seeding</span>
+          </Link>          
         </div>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">

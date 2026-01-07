@@ -1,0 +1,348 @@
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { DEFAULT_SEED_CONFIG } from '@/models/SeedConfig';
+
+export default function AdminSeedPage() {
+  const [config, setConfig] = useState(DEFAULT_SEED_CONFIG);
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [seedLog, setSeedLog] = useState<string[]>([]);
+
+  const handleInputChange = (field: string, value: string | boolean) => {
+    setConfig((prev) => ({
+      ...prev,
+      [field]: typeof value === 'boolean' ? value : parseInt(value) || prev[field as keyof typeof prev],
+    }));
+  };
+
+  const handlePrefixChange = (field: string, value: string) => {
+    setConfig((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const calculateTotals = () => {
+    const totalLocations = config.customers * config.locationsPerCustomer;
+    const totalSubLocations = totalLocations * config.subLocationsPerLocation;
+    const totalLocationVenueRelations = totalLocations * config.venuesPerLocation;
+    const totalSubLocationVenueRelations = totalSubLocations * config.venuesPerSubLocation;
+    
+    return {
+      totalLocations,
+      totalSubLocations,
+      totalLocationVenueRelations,
+      totalSubLocationVenueRelations,
+      totalRecords: config.customers + totalLocations + totalSubLocations + config.venues + totalLocationVenueRelations + totalSubLocationVenueRelations,
+    };
+  };
+
+  const handleSeed = async () => {
+    setIsLoading(true);
+    setMessage(null);
+    setSeedLog([]);
+
+    try {
+      const response = await fetch('/api/admin/seed', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(config),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Database seeded successfully!' });
+        setSeedLog(data.log || []);
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Failed to seed database' });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: 'An error occurred while seeding the database' });
+      console.error('Seed error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const totals = calculateTotals();
+
+  return (
+    <main className="min-h-screen p-8 bg-gray-50">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-800">Admin - Database Seeding</h1>
+            <p className="text-gray-600 mt-2">Configure and generate sample data</p>
+          </div>
+          <Link
+            href="/"
+            className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded transition-colors"
+          >
+            Back to Home
+          </Link>
+        </div>
+
+        {/* Configuration Form */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <h2 className="text-2xl font-semibold mb-4 text-gray-800">Seed Configuration</h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Entity Quantities */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-gray-700">Entity Quantities</h3>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Number of Customers
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={config.customers}
+                  onChange={(e) => handleInputChange('customers', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Locations per Customer
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={config.locationsPerCustomer}
+                  onChange={(e) => handleInputChange('locationsPerCustomer', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Sub-Locations per Location
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={config.subLocationsPerLocation}
+                  onChange={(e) => handleInputChange('subLocationsPerLocation', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Total Number of Venues
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={config.venues}
+                  onChange={(e) => handleInputChange('venues', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Venues per Location
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={config.venuesPerLocation}
+                  onChange={(e) => handleInputChange('venuesPerLocation', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Venues per Sub-Location
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  value={config.venuesPerSubLocation}
+                  onChange={(e) => handleInputChange('venuesPerSubLocation', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+              </div>
+            </div>
+
+            {/* Naming Prefixes */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-gray-700">Naming Prefixes</h3>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Customer Prefix
+                </label>
+                <input
+                  type="text"
+                  value={config.customerPrefix}
+                  onChange={(e) => handlePrefixChange('customerPrefix', e.target.value)}
+                  placeholder="e.g., Customer"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+                <p className="text-xs text-gray-500 mt-1">Example: {config.customerPrefix}-1</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Location Prefix
+                </label>
+                <input
+                  type="text"
+                  value={config.locationPrefix}
+                  onChange={(e) => handlePrefixChange('locationPrefix', e.target.value)}
+                  placeholder="e.g., Location"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+                <p className="text-xs text-gray-500 mt-1">Example: {config.locationPrefix}-1</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Sub-Location Prefix
+                </label>
+                <input
+                  type="text"
+                  value={config.subLocationPrefix}
+                  onChange={(e) => handlePrefixChange('subLocationPrefix', e.target.value)}
+                  placeholder="e.g., SubLocation"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+                <p className="text-xs text-gray-500 mt-1">Example: {config.subLocationPrefix}-1</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Venue Prefix
+                </label>
+                <input
+                  type="text"
+                  value={config.venuePrefix}
+                  onChange={(e) => handlePrefixChange('venuePrefix', e.target.value)}
+                  placeholder="e.g., Venue"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                />
+                <p className="text-xs text-gray-500 mt-1">Example: {config.venuePrefix}-1</p>
+              </div>
+
+              <div className="pt-4">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.useUSPSLocations}
+                    onChange={(e) => handleInputChange('useUSPSLocations', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Use Real USPS Postal Locations with Geo-Coordinates
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 mt-1 ml-6">
+                  When enabled, locations will use real USPS addresses and coordinates
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Calculated Totals */}
+        <div className="bg-blue-50 rounded-lg shadow-md p-6 mb-6">
+          <h2 className="text-2xl font-semibold mb-4 text-blue-800">Calculated Totals</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-gray-700">
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">Customers</p>
+              <p className="text-2xl font-bold text-blue-600">{config.customers}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">Locations</p>
+              <p className="text-2xl font-bold text-green-600">{totals.totalLocations}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">Sub-Locations</p>
+              <p className="text-2xl font-bold text-orange-600">{totals.totalSubLocations}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">Venues</p>
+              <p className="text-2xl font-bold text-purple-600">{config.venues}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">Location-Venue Relations</p>
+              <p className="text-2xl font-bold text-indigo-600">{totals.totalLocationVenueRelations}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-600">SubLocation-Venue Relations</p>
+              <p className="text-2xl font-bold text-pink-600">{totals.totalSubLocationVenueRelations}</p>
+            </div>
+            <div className="bg-gradient-to-r from-blue-500 to-purple-500 p-4 rounded-lg md:col-span-3">
+              <p className="text-sm text-white">Total Records</p>
+              <p className="text-3xl font-bold text-white">{totals.totalRecords}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <div className="flex gap-4">
+            <button
+              onClick={handleSeed}
+              disabled={isLoading}
+              className={`flex-1 py-3 px-6 rounded-lg font-semibold text-white transition-colors ${
+                isLoading
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+            >
+              {isLoading ? 'Seeding Database...' : 'Generate Sample Data'}
+            </button>
+          </div>
+          <p className="text-sm text-gray-500 mt-2 text-center">
+            Warning: This will clear all existing data and generate new sample data
+          </p>
+        </div>
+
+        {/* Status Message */}
+        {message && (
+          <div
+            className={`rounded-lg p-4 mb-6 ${
+              message.type === 'success'
+                ? 'bg-green-100 text-green-800 border border-green-300'
+                : 'bg-red-100 text-red-800 border border-red-300'
+            }`}
+          >
+            <p className="font-semibold">{message.text}</p>
+          </div>
+        )}
+
+        {/* Seed Log */}
+        {seedLog.length > 0 && (
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-2xl font-semibold mb-4 text-gray-800">Seed Log</h2>
+            <div className="bg-gray-50 rounded p-4 max-h-96 overflow-y-auto font-mono text-sm">
+              {seedLog.map((log, index) => (
+                <div key={index} className="mb-1 text-gray-700">
+                  {log}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
