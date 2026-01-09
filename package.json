@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3021",
+    "dev": "next dev -p 3031",
     "build": "next build",
-    "start": "next start -p 3021",
+    "start": "next start -p 3031",
     "lint": "next lint",
     "seed": "tsx scripts/seed.ts",
     "seed:dynamic": "tsx scripts/seed-dynamic.ts"
