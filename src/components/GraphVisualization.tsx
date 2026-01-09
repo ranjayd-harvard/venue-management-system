@@ -94,6 +94,8 @@ export default function GraphVisualization() {
   const [showAttributeModal, setShowAttributeModal] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState<any>(null);
   const [selectedEntityType, setSelectedEntityType] = useState<string>('');
+  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [positionsDirty, setPositionsDirty] = useState(false);
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -614,6 +616,32 @@ export default function GraphVisualization() {
         ? { customers, locations, sublocations, venues, slvRelations }
         : getFilteredDataForVisualization();
 
+      if (activeFilters.location !== 'all') {
+        filteredLocations = filteredLocations.filter((l: any) => l._id === activeFilters.location);
+        filteredSublocations = sublocations.filter((sl: any) => sl.locationId === activeFilters.location);
+        // Filter relations for this location's sublocations
+        const locationSublocationIds = filteredSublocations.map((sl: any) => sl._id);
+        filteredSlvRelations = slvRelations.filter((rel: any) => locationSublocationIds.includes(rel.subLocationId));
+      }
+
+      if (activeFilters.sublocation !== 'all') {
+        filteredSublocations = filteredSublocations.filter((sl: any) => sl._id === activeFilters.sublocation);
+        // Filter relations for this specific sublocation
+        filteredSlvRelations = slvRelations.filter((rel: any) => rel.subLocationId === activeFilters.sublocation);
+      }
+
+      if (activeFilters.venue !== 'all') {
+        filteredVenues = venues.filter((v: any) => v._id === activeFilters.venue);
+        // Filter relations for this specific venue
+        filteredSlvRelations = filteredSlvRelations.filter((rel: any) => rel.venueId === activeFilters.venue);
+      }
+
+      console.log('Active filters:', activeFilters);
+      console.log('Filtered counts:', {
+        customers: filteredCustomers.length,
+        locations: filteredLocations.length,
+      });
+
       const newNodes: Node[] = [];
       const newEdges: Edge[] = [];
 
@@ -982,6 +1010,7 @@ export default function GraphVisualization() {
 
   // Initial load - only once
   useEffect(() => {
+    console.log('♻️ Loading data for filters:', activeFilters);
     loadGraphData();
   }, []);
 
@@ -1199,6 +1228,16 @@ export default function GraphVisualization() {
                 ))}
               </select>
             </div>
+            
+            <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
+              {/* Inherited Attributes */}
+              {inherited.length > 0 && (
+                <AttributeEditor
+                  attributes={inherited}
+                  type="inherited"
+                  canEdit={false}
+                />
+              )}
 
             {/* Venue Filter */}
             <div>
