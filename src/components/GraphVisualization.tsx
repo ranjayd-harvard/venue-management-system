@@ -14,7 +14,10 @@ import ReactFlow, {
   EdgeMouseHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { RefreshCw, Filter, X, Info } from 'lucide-react';
+
+import { RefreshCw, Filter, X, Info, Edit2 } from 'lucide-react'; 
+import GraphFilterPanel, { FilterState } from './GraphFilterPanel';
+import AttributeEditor from './AttributeEditor';
 
 export default function GraphVisualization() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -34,13 +37,20 @@ export default function GraphVisualization() {
   }>({ customers: [], locations: [], sublocations: [], venues: [], slvRelations: [] });
   
   // Filter states
-  const [selectedVenue, setSelectedVenue] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [activeFilters, setActiveFilters] = useState<FilterState>({
+    customer: 'all',
+    location: 'all',
+    sublocation: 'all',
+    venue: 'all',
+  });
   
   // Modal states
   const [showAttributeModal, setShowAttributeModal] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState<any>(null);
   const [selectedEntityType, setSelectedEntityType] = useState<string>('');
+  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [positionsDirty, setPositionsDirty] = useState(false);
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -74,13 +84,11 @@ export default function GraphVisualization() {
     const overridden: any[] = [];
     
     if (!entity || entityType === 'customer') {
-      // Customers don't inherit
       return { inherited: [], own: entity?.attributes || [], overridden: [] };
     }
     
     const attributeMap = new Map<string, { value: string; source: string }>();
     
-    // Build inheritance chain
     if (entityType === 'location') {
       const customer = allData.customers.find((c: any) => c._id === entity.customerId);
       if (customer?.attributes) {
@@ -162,9 +170,7 @@ export default function GraphVisualization() {
     return paths;
   }, [allData]);
 
-  // Handle node click - only highlight paths
   const handleNodeClick: NodeMouseHandler = useCallback((event, node) => {
-    // Highlight paths only
     const allPaths = findAllPathsToRoot(node.id);
     const allNodesSet = new Set<string>();
     const allEdgesSet = new Set<string>();
@@ -183,6 +189,7 @@ export default function GraphVisualization() {
     
     setHighlightedNodes(allNodesSet);
     setHighlightedEdges(allEdgesSet);
+    //setFilterVersion(v => v + 1);
   }, [edges, findAllPathsToRoot]);
 
   // Handle node right-click - show context menu
@@ -232,10 +239,17 @@ export default function GraphVisualization() {
 
   // Handle pane click - clear highlighting and close context menu
   const handlePaneClick = useCallback(() => {
-    setHighlightedNodes(new Set());
-    setHighlightedEdges(new Set());
+    // Close context menu
     setContextMenu({ visible: false, x: 0, y: 0 });
-  }, []);
+    
+    // Clear highlights if any exist
+    if (highlightedNodes.size > 0 || highlightedEdges.size > 0) {
+      console.log('🧹 Clearing highlights');
+      setHighlightedNodes(new Set());
+      setHighlightedEdges(new Set());
+      setFilterVersion(v => v + 1); // Trigger reload to show cleared state
+    }
+  }, [highlightedNodes, highlightedEdges]);
 
   // Context menu actions
   const handleViewAttributes = useCallback(() => {
@@ -275,12 +289,7 @@ export default function GraphVisualization() {
     setContextMenu({ visible: false, x: 0, y: 0 });
   }, [contextMenu, findAllPathsToRoot, edges]);
 
-  const handleClearHighlight = useCallback(() => {
-    setHighlightedNodes(new Set());
-    setHighlightedEdges(new Set());
-    setContextMenu({ visible: false, x: 0, y: 0 });
-  }, []);
-
+  // Load graph data with filtering
   const loadGraphData = useCallback(async () => {
     setLoading(true);
     try {
@@ -292,30 +301,60 @@ export default function GraphVisualization() {
         fetch('/api/sublocation-venues').then(r => r.json()),
       ]);
 
-      // Store data for path finding and filtering
       setAllData({ customers, locations, sublocations, venues, slvRelations });
 
-      // Apply venue filter if selected
+      // Apply filters
+      let filteredCustomers = customers;
+      let filteredLocations = locations;
+      let filteredSublocations = sublocations;
       let filteredVenues = venues;
       let filteredSlvRelations = slvRelations;
-      
-      if (selectedVenue !== 'all') {
-        filteredVenues = venues.filter((v: any) => v._id === selectedVenue);
-        filteredSlvRelations = slvRelations.filter((rel: any) => rel.venueId === selectedVenue);
+
+      if (activeFilters.customer !== 'all') {
+        filteredCustomers = customers.filter((c: any) => c._id === activeFilters.customer);
+        filteredLocations = locations.filter((l: any) => l.customerId === activeFilters.customer);
+        // Filter sublocations for this customer's locations
+        const customerLocationIds = filteredLocations.map((l: any) => l._id);
+        filteredSublocations = sublocations.filter((sl: any) => customerLocationIds.includes(sl.locationId));
+        // Filter relations for these sublocations
+        const customerSublocationIds = filteredSublocations.map((sl: any) => sl._id);
+        filteredSlvRelations = slvRelations.filter((rel: any) => customerSublocationIds.includes(rel.subLocationId));
       }
+
+      if (activeFilters.location !== 'all') {
+        filteredLocations = filteredLocations.filter((l: any) => l._id === activeFilters.location);
+        filteredSublocations = sublocations.filter((sl: any) => sl.locationId === activeFilters.location);
+        // Filter relations for this location's sublocations
+        const locationSublocationIds = filteredSublocations.map((sl: any) => sl._id);
+        filteredSlvRelations = slvRelations.filter((rel: any) => locationSublocationIds.includes(rel.subLocationId));
+      }
+
+      if (activeFilters.sublocation !== 'all') {
+        filteredSublocations = filteredSublocations.filter((sl: any) => sl._id === activeFilters.sublocation);
+        // Filter relations for this specific sublocation
+        filteredSlvRelations = slvRelations.filter((rel: any) => rel.subLocationId === activeFilters.sublocation);
+      }
+
+      if (activeFilters.venue !== 'all') {
+        filteredVenues = venues.filter((v: any) => v._id === activeFilters.venue);
+        // Filter relations for this specific venue
+        filteredSlvRelations = filteredSlvRelations.filter((rel: any) => rel.venueId === activeFilters.venue);
+      }
+
+      console.log('Active filters:', activeFilters);
+      console.log('Filtered counts:', {
+        customers: filteredCustomers.length,
+        locations: filteredLocations.length,
+      });
 
       const newNodes: Node[] = [];
       const newEdges: Edge[] = [];
 
-      let yOffset = 0;
-      const xSpacing = 350; // Increased from 300 to reduce edge overlap
-      const ySpacing = 150;
-      
-      // Track venue Y positions globally to avoid overlap
-      const usedVenueYPositions = new Map<string, number>(); // venueId -> Y position
+      const xSpacing = 350;
+      const ySpacing = 160;
 
       // Create customer nodes
-      customers.forEach((customer: any, cIndex: number) => {
+      filteredCustomers.forEach((customer: any, cIndex: number) => {
         const customerId = `customer-${customer._id}`;
         const isHighlighted = highlightedNodes.has(customerId);
         
@@ -330,31 +369,29 @@ export default function GraphVisualization() {
                 </div>
                 <div className={`text-xs ${isHighlighted ? 'text-blue-100' : 'text-gray-600'}`}>
                   {customer.email}
-                </div>
+                </div>                
               </div>
             )
           },
-          position: { x: 0, y: cIndex * 700 },
+          position: nodePositions[customerId] || { x: 0, y: cIndex * 700 },
           style: { 
-            background: isHighlighted ? '#1E40AF' : '#DBEAFE',
-            border: `3px solid ${isHighlighted ? '#1E3A8A' : '#3B82F6'}`,
+            background: isHighlighted ? '#3B82F6' : '#DBEAFE',
+            border: `2px solid ${isHighlighted ? '#1E40AF' : '#3B82F6'}`,
             borderRadius: '8px',
             padding: '10px',
             width: 220,
-            cursor: 'pointer',
+            boxShadow: isHighlighted ? '0 0 20px rgba(59, 130, 246, 0.5)' : undefined,
           },
         });
 
-        // Get locations for this customer
-        const customerLocations = locations.filter((l: any) => l.customerId === customer._id);
+        const customerLocations = filteredLocations.filter((l: any) => l.customerId === customer._id);
         
         customerLocations.forEach((location: any, lIndex: number) => {
           const locationId = `location-${location._id}`;
-          const isLocHighlighted = highlightedNodes.has(locationId);
           const locationY = cIndex * 700 + lIndex * 300;
+          const isLocationHighlighted = highlightedNodes.has(locationId);
           
-          // Calculate total allocated capacity from sublocations
-          const locationSublocations = sublocations.filter((sl: any) => sl.locationId === location._id);
+          const locationSublocations = filteredSublocations.filter((sl: any) => sl.locationId === location._id);
           const totalAllocated = locationSublocations.reduce((sum: number, sl: any) => sum + (sl.allocatedCapacity || 0), 0);
           const remainingCapacity = location.totalCapacity ? location.totalCapacity - totalAllocated : null;
           
@@ -364,26 +401,16 @@ export default function GraphVisualization() {
             data: { 
               label: (
                 <div className="text-center">
-                  <div className={`font-bold ${isLocHighlighted ? 'text-white' : 'text-green-700'}`}>
-                    {location.name}
-                  </div>
-                  <div className={`text-xs ${isLocHighlighted ? 'text-green-100' : 'text-gray-600'}`}>
-                    {location.city}
-                  </div>
+                  <div className="font-bold"
+                    style={{ color: isHighlighted ? '#ffffff' : '#1d4ed8' }}>{location.name}</div>
+                  <div className="text-xs"
+                    style={{ color: isHighlighted ? '#dbeafe' : '#4b5563' }}>{location.address}</div>
                   {location.totalCapacity && (
-                    <div className="mt-1 space-y-0.5">
-                      <div className={`text-xs font-semibold ${isLocHighlighted ? 'text-white' : 'text-green-800'}`}>
-                        Total: {location.totalCapacity}
-                      </div>
-                      <div className={`text-xs ${isLocHighlighted ? 'text-green-100' : 'text-gray-600'}`}>
-                        Allocated: {totalAllocated}
-                      </div>
+                    <div className="text-xs mt-1 font-semibold">
+                      Total: {location.totalCapacity}
                       {remainingCapacity !== null && (
-                        <div className={`text-xs font-medium ${
-                          isLocHighlighted ? 'text-white' :
-                          remainingCapacity >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          Available: {remainingCapacity}
+                        <div className={`text-xs ${remainingCapacity >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {remainingCapacity >= 0 ? '✓' : '⚠️'} {remainingCapacity} left
                         </div>
                       )}
                     </div>
@@ -391,45 +418,43 @@ export default function GraphVisualization() {
                 </div>
               )
             },
-            position: { x: xSpacing, y: locationY },
+            position: nodePositions[locationId] || { x: xSpacing, y: locationY },
             style: { 
-              background: isLocHighlighted ? '#047857' : '#D1FAE5',
-              border: `3px solid ${isLocHighlighted ? '#065F46' : '#10B981'}`,
+              background: isLocationHighlighted ? '#10B981' : '#D1FAE5',
+              border: `2px solid ${isLocationHighlighted ? '#047857' : '#10B981'}`,
               borderRadius: '8px',
-              padding: '12px',
-              width: 200,
-              cursor: 'pointer',
+              padding: '10px',
+              width: 180,
+              boxShadow: isLocationHighlighted ? '0 0 20px rgba(16, 185, 129, 0.5)' : undefined,
             },
           });
 
-          // Edge from customer to location
-          const edgeId1 = `e-${customer._id}-${location._id}`;
+          const edgeId = `e-${customer._id}-${location._id}`;
+          const isEdgeHighlighted = highlightedEdges.has(edgeId);
+          
           newEdges.push({
-            id: edgeId1,
+            id: edgeId,
             source: customerId,
             target: locationId,
             type: 'smoothstep',
-            animated: highlightedEdges.has(edgeId1),
+            animated: isEdgeHighlighted,
             markerEnd: { type: MarkerType.ArrowClosed },
             style: { 
-              stroke: '#10B981',
-              strokeWidth: highlightedEdges.has(edgeId1) ? 4 : 2,
+              stroke: isEdgeHighlighted ? '#1E40AF' : '#3B82F6',
+              strokeWidth: isEdgeHighlighted ? 4 : 2,
             },
           });
 
-          // Get sublocations for this location
-          
           locationSublocations.forEach((sublocation: any, slIndex: number) => {
             const sublocationId = `sublocation-${sublocation._id}`;
-            const isSlHighlighted = highlightedNodes.has(sublocationId);
-            const sublocationY = locationY - 120 + slIndex * 160; // Increased from 140 for better spacing
+            const sublocationY = locationY - 100 + slIndex * 140;
+            const isSublocationHighlighted = highlightedNodes.has(sublocationId);
             
-            // Calculate total venue capacity for this sublocation
-            const sublocationVenueRels = filteredSlvRelations.filter((rel: any) => rel.subLocationId === sublocation._id);
-            const sublocationVenues = sublocationVenueRels
-              .map((rel: any) => filteredVenues.find((v: any) => v._id === rel.venueId))
-              .filter(Boolean);
-            const totalVenueCapacity = sublocationVenues.reduce((sum: number, v: any) => sum + (v.capacity || 0), 0);
+            const sublocationVenueRels = filteredSlvRelations.filter((r: any) => r.subLocationId === sublocation._id);
+            const totalVenueCapacity = sublocationVenueRels.reduce((sum: number, rel: any) => {
+              const venue = filteredVenues.find((v: any) => v._id === rel.venueId);
+              return sum + (venue?.capacity || 0);
+            }, 0);
             
             newNodes.push({
               id: sublocationId,
@@ -437,22 +462,12 @@ export default function GraphVisualization() {
               data: { 
                 label: (
                   <div className="text-center">
-                    <div className={`font-bold ${isSlHighlighted ? 'text-white' : 'text-orange-700'}`}>
-                      {sublocation.label}
-                    </div>
-                    {sublocation.allocatedCapacity !== undefined && (
-                      <div className="mt-1 space-y-0.5">
-                        <div className={`text-xs font-semibold ${isSlHighlighted ? 'text-white' : 'text-orange-800'}`}>
-                          Allocated: {sublocation.allocatedCapacity}
-                        </div>
-                        <div className={`text-xs ${isSlHighlighted ? 'text-orange-100' : 'text-gray-600'}`}>
-                          Venues: {totalVenueCapacity}
-                        </div>
-                        {sublocation.allocatedCapacity > 0 && (
-                          <div className={`text-xs font-medium ${
-                            isSlHighlighted ? 'text-white' :
-                            totalVenueCapacity <= sublocation.allocatedCapacity ? 'text-green-600' : 'text-red-600'
-                          }`}>
+                    <div className={`font-bold ${isHighlighted ? 'text-white' : 'text-orange-700'}`}>{sublocation.label}</div>
+                    {sublocation.allocatedCapacity && (
+                      <div className="text-xs mt-1">
+                        Allocated: {sublocation.allocatedCapacity}
+                        {totalVenueCapacity > 0 && (
+                          <div className={`text-xs font-semibold ${totalVenueCapacity <= sublocation.allocatedCapacity ? 'text-green-600' : 'text-red-600'}`}>
                             {totalVenueCapacity <= sublocation.allocatedCapacity ? '✓' : '⚠️'} {sublocation.allocatedCapacity - totalVenueCapacity} left
                           </div>
                         )}
@@ -461,86 +476,43 @@ export default function GraphVisualization() {
                   </div>
                 )
               },
-              position: { x: xSpacing * 2, y: sublocationY },
+              position: nodePositions[sublocationId] || { x: xSpacing * 2, y: sublocationY },
               style: { 
-                background: isSlHighlighted ? '#C2410C' : '#FED7AA',
-                border: `3px solid ${isSlHighlighted ? '#9A3412' : '#F97316'}`,
+                background: isSublocationHighlighted ? '#F97316' : '#FED7AA',
+                border: `2px solid ${isSublocationHighlighted ? '#C2410C' : '#F97316'}`,
                 borderRadius: '8px',
                 padding: '10px',
                 width: 160,
-                cursor: 'pointer',
+                boxShadow: isSublocationHighlighted ? '0 0 20px rgba(249, 115, 22, 0.5)' : undefined,
               },
             });
 
-            // Edge from location to sublocation
-            const edgeId2 = `e-${location._id}-${sublocation._id}`;
+            const slEdgeId = `e-${location._id}-${sublocation._id}`;
+            const isSlEdgeHighlighted = highlightedEdges.has(slEdgeId);
+            
             newEdges.push({
-              id: edgeId2,
+              id: slEdgeId,
               source: locationId,
               target: sublocationId,
               type: 'smoothstep',
-              animated: highlightedEdges.has(edgeId2),
+              animated: isSlEdgeHighlighted,
               markerEnd: { type: MarkerType.ArrowClosed },
               style: { 
-                stroke: '#F97316',
-                strokeWidth: highlightedEdges.has(edgeId2) ? 4 : 2,
+                stroke: isSlEdgeHighlighted ? '#C2410C' : '#F97316',
+                strokeWidth: isSlEdgeHighlighted ? 4 : 2,
               },
               label: sublocation.allocatedCapacity ? `${sublocation.allocatedCapacity}` : '',
-              labelStyle: { 
-                fill: '#EA580C', 
-                fontWeight: 700,
-                fontSize: 12,
-                backgroundColor: 'white',
-                padding: '2px 4px',
-              },
-              labelBgStyle: { 
-                fill: 'white',
-                fillOpacity: 0.9,
-              },
             });
 
-            // Get venues for this sublocation
             sublocationVenueRels.forEach((rel: any, vIndex: number) => {
               const venue = filteredVenues.find((v: any) => v._id === rel.venueId);
               if (!venue) return;
 
               const venueId = `venue-${venue._id}`;
-              const isVHighlighted = highlightedNodes.has(venueId);
+              const isVenueHighlighted = highlightedNodes.has(venueId);
               
-              // Check if venue node already exists
               if (!newNodes.find(n => n.id === venueId)) {
-                let venueY: number;
-                
-                // Check if this venue already has a position (shared across sublocations)
-                if (usedVenueYPositions.has(venueId)) {
-                  venueY = usedVenueYPositions.get(venueId)!;
-                } else {
-                  // Calculate initial position based on sublocation
-                  let proposedY = sublocationY - 60 + vIndex * 130;
-                  
-                  // Find next available position without conflicts
-                  const minDistance = 130; // Minimum vertical distance between venue nodes
-                  const allUsedPositions = Array.from(usedVenueYPositions.values()).sort((a, b) => a - b);
-                  
-                  // Keep checking and adjusting until we find a free spot
-                  let foundFreeSpot = false;
-                  while (!foundFreeSpot) {
-                    foundFreeSpot = true;
-                    
-                    // Check if proposed position conflicts with any existing venue
-                    for (const usedY of allUsedPositions) {
-                      if (Math.abs(usedY - proposedY) < minDistance) {
-                        // Conflict found - try next position below the conflicting venue
-                        proposedY = usedY + minDistance;
-                        foundFreeSpot = false;
-                        break;
-                      }
-                    }
-                  }
-                  
-                  venueY = proposedY;
-                  usedVenueYPositions.set(venueId, venueY);
-                }
+                const venueY = sublocationY - 60 + vIndex * 100;
                 
                 newNodes.push({
                   id: venueId,
@@ -548,64 +520,55 @@ export default function GraphVisualization() {
                   data: { 
                     label: (
                       <div className="text-center">
-                        <div className={`font-bold text-sm ${isVHighlighted ? 'text-white' : 'text-purple-700'}`}>
-                          {venue.name}
-                        </div>
-                        <div className={`text-xs ${isVHighlighted ? 'text-purple-100' : 'text-gray-600'}`}>
-                          {venue.venueType}
-                        </div>
+                        <div className="font-bold"
+                          style={{ color: isHighlighted ? '#ffffff' : '#9203caff' }}>{venue.name}</div>
+                        <div className="text-xs"
+                          style={{ color: isHighlighted ? '#edbaf2ff' : '#4b5563' }}>{venue.venueType}</div>
                         {venue.capacity !== undefined && (
-                          <div className={`text-xs font-semibold mt-1 ${isVHighlighted ? 'text-white' : 'text-purple-600'}`}>
+                          <div className="text-xs font-semibold text-purple-600 mt-1">
                             Cap: {venue.capacity}
                           </div>
                         )}
                       </div>
                     )
                   },
-                  position: { x: xSpacing * 3 + 50, y: venueY }, // Added +50 offset for better spacing
+                  position: nodePositions[venueId] || { x: xSpacing * 3, y: venueY },
                   style: { 
-                    background: isVHighlighted ? '#7E22CE' : '#E9D5FF',
-                    border: `3px solid ${isVHighlighted ? '#6B21A8' : '#A855F7'}`,
+                    background: isVenueHighlighted ? '#A855F7' : '#E9D5FF',
+                    border: `2px solid ${isVenueHighlighted ? '#7E22CE' : '#A855F7'}`,
                     borderRadius: '8px',
                     padding: '8px',
                     width: 130,
-                    cursor: 'pointer',
+                    boxShadow: isVenueHighlighted ? '0 0 20px rgba(168, 85, 247, 0.5)' : undefined,
                   },
                 });
-              } else {
-                // Venue already exists, just store its position if not already stored
-                const existingNode = newNodes.find(n => n.id === venueId);
-                if (existingNode && !usedVenueYPositions.has(venueId)) {
-                  usedVenueYPositions.set(venueId, existingNode.position.y);
-                }
               }
 
-              // Edge from sublocation to venue with capacity label
-              const edgeId3 = `e-${sublocation._id}-${venue._id}`;
-              if (!newEdges.find(e => e.id === edgeId3)) {
-                newEdges.push({
-                  id: edgeId3,
-                  source: sublocationId,
-                  target: venueId,
-                  type: 'smoothstep',
-                  animated: highlightedEdges.has(edgeId3),
-                  markerEnd: { type: MarkerType.ArrowClosed },
-                  style: { 
-                    stroke: '#A855F7',
-                    strokeWidth: highlightedEdges.has(edgeId3) ? 4 : 2,
-                  },
-                  label: venue.capacity ? `${venue.capacity}` : '',
-                  labelStyle: { 
-                    fill: '#9333EA', 
-                    fontWeight: 700,
-                    fontSize: 12,
-                  },
-                  labelBgStyle: { 
-                    fill: 'white',
-                    fillOpacity: 0.9,
-                  },
-                });
-              }
+              const venueEdgeId = `e-${sublocation._id}-${venue._id}`;
+              const isVenueEdgeHighlighted = highlightedEdges.has(venueEdgeId);
+              
+              newEdges.push({
+                id: venueEdgeId,
+                source: sublocationId,
+                target: venueId,
+                type: 'smoothstep',
+                animated: isVenueEdgeHighlighted,
+                markerEnd: { type: MarkerType.ArrowClosed },
+                style: { 
+                  stroke: isVenueEdgeHighlighted ? '#7E22CE' : '#A855F7',
+                  strokeWidth: isVenueEdgeHighlighted ? 4 : 2,
+                },
+                label: venue.capacity ? `${venue.capacity}` : '',
+                labelStyle: { 
+                  fill: '#9333EA', 
+                  fontWeight: 700,
+                  fontSize: 12,
+                },
+                labelBgStyle: { 
+                  fill: 'white',
+                  fillOpacity: 0.9,
+                },
+              });
             });
           });
         });
@@ -618,7 +581,7 @@ export default function GraphVisualization() {
     } finally {
       setLoading(false);
     }
-  }, [setNodes, setEdges, highlightedNodes, highlightedEdges, selectedVenue]);
+  }, [setNodes, setEdges, activeFilters, highlightedNodes, highlightedEdges]);
 
   const syncToNeo4j = async () => {
     setSyncing(true);
@@ -637,9 +600,115 @@ export default function GraphVisualization() {
     }
   };
 
+  // Add a refresh trigger
+  const [filterVersion, setFilterVersion] = useState(0);
+
+  const handleFilterChange = (filters: FilterState) => {
+    console.log('🔄 Received filters:', filters);
+    setActiveFilters(filters);
+    setFilterVersion(v => v + 1); // Trigger refresh
+  };
+
+  const handleSaveAttributes = async (updatedAttributes: any[]) => {
+    if (!selectedEntity || !selectedEntityType) return;
+
+    try {
+      const endpoint = `/api/${selectedEntityType}s/${selectedEntity._id}`;
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attributes: updatedAttributes }),
+      });
+
+      if (response.ok) {
+        // Update local state
+        setSelectedEntity({ ...selectedEntity, attributes: updatedAttributes });
+        // Reload graph to reflect changes
+        setFilterVersion(v => v + 1);
+        alert('Attributes updated successfully!');
+      } else {
+        alert('Failed to update attributes');
+      }
+    } catch (error) {
+      console.error('Error updating attributes:', error);
+      alert('Error updating attributes');
+    }
+  };
+
+  const handleDeleteAttribute = async (index: number) => {
+    if (!selectedEntity) return;
+
+    const updatedAttributes = [...(selectedEntity.attributes || [])];
+    updatedAttributes.splice(index, 1);
+    
+    await handleSaveAttributes(updatedAttributes);
+  };  
+
+  // Load positions from localStorage
+  const loadNodePositions = useCallback(() => {
+    try {
+      const saved = localStorage.getItem('graph_node_positions');
+      if (saved) {
+        setNodePositions(JSON.parse(saved));
+      }
+    } catch (error) {
+      console.error('Failed to load positions from localStorage:', error);
+    }
+  }, []);
+
+  // Save positions to localStorage
+  const saveNodePositions = useCallback((positions: Record<string, { x: number; y: number }>) => {
+    try {
+      localStorage.setItem('graph_node_positions', JSON.stringify(positions));
+      setPositionsDirty(false);
+    } catch (error) {
+      console.error('Failed to save positions to localStorage:', error);
+    }
+  }, []);
+  
+  // ADD THIS HANDLER:
+  const handleNodeDragStop = useCallback((event: any, node: any) => {
+    console.log('Node dragged:', node.id, node.position);
+    setNodePositions(prev => ({
+      ...prev,
+      [node.id]: node.position
+    }));
+    setPositionsDirty(true);
+  }, []);
+
+  // ADD THIS AUTO-SAVE EFFECT:
   useEffect(() => {
+    if (!positionsDirty) return;
+    
+    console.log('Auto-saving positions...');
+    const timer = setTimeout(() => {
+      saveNodePositions(nodePositions);
+    }, 2000);
+    
+    return () => clearTimeout(timer);
+  }, [positionsDirty, nodePositions, saveNodePositions]);  
+
+  // Load positions only on initial mount
+  useEffect(() => {
+    console.log('🚀 Initial mount - loading positions');
+    loadNodePositions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reload graph when filters change
+  useEffect(() => {
+    console.log('♻️ Loading data for filters:', activeFilters);
     loadGraphData();
-  }, [loadGraphData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterVersion]);
+
+  // Trigger reload when highlights change
+  useEffect(() => {
+    if (highlightedNodes.size > 0 || highlightedEdges.size > 0) {
+      loadNodePositions();
+      loadGraphData();
+    }
+  }, [highlightedNodes, highlightedEdges])
 
   if (loading) {
     return (
@@ -653,244 +722,166 @@ export default function GraphVisualization() {
     ? getAttributeBreakdown(selectedEntity, selectedEntityType)
     : { inherited: [], own: [], overridden: [] };
 
+  const activeFilterCount = Object.values(activeFilters).filter(v => v !== 'all').length;
+
   return (
     <div className="relative">
-      {/* Attribute Modal */}
-      {showAttributeModal && selectedEntity && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-          onClick={() => setShowAttributeModal(false)}
-        >
-          <div 
-            className="bg-white rounded-lg shadow-2xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center mb-4">
-              <div>
-                <h3 className="text-2xl font-bold text-gray-900">
-                  {selectedEntity.name || selectedEntity.label}
-                </h3>
-                <p className="text-sm text-gray-600 capitalize">{selectedEntityType}</p>
-              </div>
-              <button
-                onClick={() => setShowAttributeModal(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            {/* Entity Details */}
-            <div className="mb-4 bg-gray-50 rounded p-4">
-              <h4 className="font-semibold text-gray-800 mb-2">Details</h4>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {selectedEntity.email && (
-                  <div><span className="text-gray-600">Email:</span> <span className="text-gray-900">{selectedEntity.email}</span></div>
-                )}
-                {selectedEntity.city && (
-                  <div><span className="text-gray-600">City:</span> <span className="text-gray-900">{selectedEntity.city}</span></div>
-                )}
-                {selectedEntity.venueType && (
-                  <div><span className="text-gray-600">Type:</span> <span className="text-gray-900">{selectedEntity.venueType}</span></div>
-                )}
-                {selectedEntity.totalCapacity !== undefined && (
-                  <div><span className="text-gray-600">Total Capacity:</span> <span className="text-gray-900">{selectedEntity.totalCapacity}</span></div>
-                )}
-                {selectedEntity.allocatedCapacity !== undefined && (
-                  <div><span className="text-gray-600">Allocated:</span> <span className="text-gray-900">{selectedEntity.allocatedCapacity}</span></div>
-                )}
-                {selectedEntity.capacity !== undefined && (
-                  <div><span className="text-gray-600">Capacity:</span> <span className="text-gray-900">{selectedEntity.capacity}</span></div>
-                )}
-              </div>
-            </div>
-
-            {/* Attributes */}
-            <div className="space-y-4">
-              {inherited.length > 0 && (
-                <div>
-                  <h4 className="font-semibold text-blue-700 mb-2 flex items-center gap-2">
-                    <Info className="w-4 h-4" /> Inherited Attributes
-                  </h4>
-                  <div className="space-y-1">
-                    {inherited.map((attr: any, i: number) => (
-                      <div key={i} className="bg-blue-50 border border-blue-200 rounded p-2 text-sm">
-                        <span className="font-medium text-gray-700">{attr.key}:</span>{' '}
-                        <span className="text-gray-900">{attr.value}</span>
-                        {attr.source && <span className="text-xs text-blue-600 ml-2">← {attr.source}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {own.length > 0 && (
-                <div>
-                  <h4 className="font-semibold text-green-700 mb-2 flex items-center gap-2">
-                    <Info className="w-4 h-4" /> Own Attributes
-                  </h4>
-                  <div className="space-y-1">
-                    {own.map((attr: any, i: number) => (
-                      <div key={i} className="bg-white border border-gray-300 rounded p-2 text-sm">
-                        <span className="font-medium text-gray-700">{attr.key}:</span>{' '}
-                        <span className="text-gray-900">{attr.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {overridden.length > 0 && (
-                <div>
-                  <h4 className="font-semibold text-yellow-700 mb-2 flex items-center gap-2">
-                    <Info className="w-4 h-4" /> Overridden Attributes
-                  </h4>
-                  <div className="space-y-1">
-                    {overridden.map((attr: any, i: number) => (
-                      <div key={i} className="bg-yellow-50 border border-yellow-300 rounded p-2 text-sm">
-                        <span className="font-medium text-gray-700">⚠️ {attr.key}:</span>{' '}
-                        <span className="text-gray-900">{attr.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {inherited.length === 0 && own.length === 0 && overridden.length === 0 && (
-                <p className="text-gray-500 text-center py-4">No attributes defined</p>
-              )}
-            </div>
-
-            <button
-              onClick={() => setShowAttributeModal(false)}
-              className="mt-6 w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <div
-          className="fixed bg-white rounded-lg shadow-2xl border border-gray-200 py-1 z-50"
-          style={{
-            left: `${contextMenu.x}px`,
-            top: `${contextMenu.y}px`,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.nodeId && (
-            <>
-              <button
-                onClick={handleViewAttributes}
-                className="w-full px-4 py-2 text-left hover:bg-blue-50 flex items-center gap-2 text-sm"
-              >
-                <Info className="w-4 h-4 text-blue-600" />
-                <span className='text-gray-600'>View Attributes</span>
-              </button>
-              <button
-                onClick={handleHighlightPath}
-                className="w-full px-4 py-2 text-left hover:bg-blue-50 flex items-center gap-2 text-sm"
-              >
-                <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span className='text-gray-600'>Highlight Path</span>
-              </button>
-              <div className="border-t border-gray-200 my-1"></div>
-            </>
-          )}
-          <button
-            onClick={handleClearHighlight}
-            className="w-full px-4 py-2 text-left hover:bg-blue-50 flex items-center gap-2 text-sm"
-          >
-            <X className="w-4 h-4 text-gray-600" />
-            <span className='text-gray-600'>Clear Highlight</span>
-          </button>
-        </div>
-      )}
-
-      {/* Top Controls */}
+      {/* Top Control Bar */}
       <div className="absolute top-4 right-4 z-10 flex gap-2">
         <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={`px-4 py-2 ${showFilters ? 'bg-blue-600' : 'bg-blue-500'} text-white rounded-lg hover:bg-blue-600 flex items-center gap-2`}
-        >
-          <Filter className="w-4 h-4" />
-          {showFilters ? 'Hide Filters' : 'Show Filters'}
-        </button>
-        <button
-          onClick={() => {
-            setHighlightedNodes(new Set());
-            setHighlightedEdges(new Set());
-            loadGraphData();
-          }}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+          onClick={loadGraphData}
+          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2 shadow-lg transition-all hover:scale-105"
         >
           <RefreshCw className="w-4 h-4" />
           Refresh
         </button>
+
+        {/* ADD THIS BUTTON: */}
+        {(highlightedNodes.size > 0 || highlightedEdges.size > 0) && (
+          <button
+            onClick={() => {
+              setHighlightedNodes(new Set());
+              setHighlightedEdges(new Set());
+              setFilterVersion(v => v + 1);
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+          >
+            <X className="w-4 h-4" />
+            Clear Highlight
+          </button>
+        )}        
+        
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`px-4 py-2 rounded-lg flex items-center gap-2 shadow-lg transition-all hover:scale-105 ${
+            showFilters 
+              ? 'bg-purple-600 text-white hover:bg-purple-700' 
+              : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+          }`}
+        >
+          <Filter className="w-4 h-4" />
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="ml-1 px-2 py-0.5 bg-white/20 rounded-full text-xs font-bold">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
         <button
           onClick={syncToNeo4j}
           disabled={syncing}
-          className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:bg-gray-400"
+          className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:bg-gray-400 shadow-lg transition-all hover:scale-105"
         >
           {syncing ? 'Syncing...' : 'Sync to Neo4j'}
         </button>
       </div>
 
-      {/* Filter Panel */}
-      {showFilters && (
-        <div className="absolute top-20 right-4 z-10 bg-white rounded-lg shadow-xl p-4 w-80 border-2 border-blue-200">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="font-semibold text-gray-800">Filter Graph</h3>
-            <button
-              onClick={() => setShowFilters(false)}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          
-          <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Venue</label>
-              <select
-                value={selectedVenue}
-                onChange={(e) => {
-                  setSelectedVenue(e.target.value);
-                  setHighlightedNodes(new Set());
-                  setHighlightedEdges(new Set());
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-sm text-gray-900"
-              >
-                <option value="all">All Venues</option>
-                {allData.venues.map((v: any) => (
-                  <option key={v._id} value={v._id}>
-                    {v.name} ({v.venueType})
-                  </option>
-                ))}
-              </select>
-            </div>
+      {/* Enhanced Filter Panel */}
+      <GraphFilterPanel
+        allData={allData}
+        currentFilters={activeFilters} 
+        onFilterChange={handleFilterChange}
+        onClose={() => setShowFilters(false)}
+        isOpen={showFilters}
+      />
 
-            {selectedVenue !== 'all' && (
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div
+          className="fixed z-50 bg-white rounded-lg shadow-2xl border border-gray-200 py-2 min-w-[180px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          {contextMenu.nodeId && (
+            <>
               <button
-                onClick={() => {
-                  setSelectedVenue('all');
-                  setHighlightedNodes(new Set());
-                  setHighlightedEdges(new Set());
-                }}
-                className="w-full px-3 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm"
+                onClick={handleViewAttributes}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2 text-sm text-gray-700"
               >
-                Reset Filter
+                <Edit2 className="w-4 h-4" />
+                Manage Attributes
               </button>
-            )}
+              <button
+                onClick={handleHighlightPath}
+                className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2 text-sm text-gray-700"
+              >
+                <Filter className="w-4 h-4" />
+                Highlight Path
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => setContextMenu({ visible: false, x: 0, y: 0 })}
+            className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2 text-sm text-gray-500 border-t border-gray-200"
+          >
+            <X className="w-4 h-4" />
+            Close
+          </button>
+        </div>
+      )}
+
+      {/* Attribute Modal */}
+      {showAttributeModal && selectedEntity && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6 text-white">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h2 className="text-2xl font-bold">{selectedEntity.name || selectedEntity.label}</h2>
+                  <p className="text-blue-100 text-sm mt-1 capitalize">{selectedEntityType}</p>
+                </div>
+                <button
+                  onClick={() => setShowAttributeModal(false)}
+                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
+              {/* Inherited Attributes */}
+              {inherited.length > 0 && (
+                <AttributeEditor
+                  attributes={inherited}
+                  type="inherited"
+                  canEdit={false}
+                />
+              )}
+
+              {/* Own Attributes - Editable */}
+              <AttributeEditor
+                attributes={own.length > 0 ? own : []}
+                type="own"
+                canEdit={true}
+                onSave={handleSaveAttributes}
+                onDelete={handleDeleteAttribute}
+              />
+
+              {/* Overridden Attributes */}
+              {overridden.length > 0 && (
+                <AttributeEditor
+                  attributes={overridden}
+                  type="overridden"
+                  canEdit={false}
+                />
+              )}
+
+              {/* Empty State */}
+              {inherited.length === 0 && own.length === 0 && overridden.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  <Info className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p className="mb-4">No attributes defined for this entity</p>
+                  <p className="text-sm text-gray-400">
+                    Click the button below to add your first attribute
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
 
+      {/* React Flow Graph */}
       <div style={{ height: '800px', width: '100%' }}>
         <ReactFlow
           nodes={nodes}
@@ -898,6 +889,7 @@ export default function GraphVisualization() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={handleNodeClick}
+          onNodeDragStop={handleNodeDragStop} 
           onNodeContextMenu={handleNodeContextMenu}
           onEdgeClick={handleEdgeClick}
           onEdgeContextMenu={handleEdgeContextMenu}
@@ -924,8 +916,9 @@ export default function GraphVisualization() {
         </ReactFlow>
       </div>
 
-      <div className="mt-4 bg-white rounded-lg p-4 border border-gray-200">
-        <h3 className="font-semibold text-gray-800 mb-2">Legend</h3>
+      {/* Legend */}
+      <div className="mt-4 bg-white rounded-lg p-4 border border-gray-200 shadow-lg">
+        <h3 className="font-semibold text-gray-800 mb-2">Legend & Controls</h3>
         <div className="grid grid-cols-4 gap-4">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-blue-200 border-2 border-blue-500 rounded"></div>
@@ -945,12 +938,10 @@ export default function GraphVisualization() {
           </div>
         </div>
         <div className="mt-3 text-sm text-gray-600 space-y-1">
-          <p>💡 <strong>Left-click node</strong> to highlight path</p>
-          <p>💡 <strong>Right-click node</strong> to open context menu (View Attributes, Highlight Path)</p>
+          <p>💡 <strong>Left-click node</strong> to highlight inheritance path</p>
+          <p>💡 <strong>Right-click node</strong> to view attributes or highlight path</p>
           <p>💡 <strong>Click empty space</strong> to clear highlighting</p>
-          <p>💡 <strong>Modal shows:</strong> Inherited (blue), Own (white), Overridden (yellow) attributes</p>
-          <p>💡 <strong>Filter by Venue:</strong> Click "Show Filters" to filter graph by specific venue</p>
-          <p>💡 <strong>Improved spacing:</strong> 350px horizontal, 160px vertical for clearer visualization</p>
+          <p>💡 <strong>Use Filters</strong> to focus on specific entities in the hierarchy</p>
         </div>
       </div>
     </div>
