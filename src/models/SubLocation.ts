@@ -1,63 +1,81 @@
-import { ObjectId } from 'mongodb';
+import { Db, ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
-import { SubLocation } from './types';
+
+export interface SubLocation {
+  _id?: ObjectId;
+  locationId: ObjectId;
+  label: string;
+  description?: string;
+  allocatedCapacity?: number;
+  attributes?: Array<{ key: string; value: string }>;
+  
+  // Pricing-specific properties
+  pricingEnabled: boolean;
+  isActive: boolean;
+  defaultHourlyRate?: number; // Fallback rate if no ratesheet applies
+  
+  createdAt?: Date;
+  updatedAt?: Date;
+}
 
 export class SubLocationRepository {
-  private static COLLECTION = 'sublocations';
-
-  static async create(subLocation: Omit<SubLocation, '_id' | 'createdAt' | 'updatedAt'>): Promise<SubLocation> {
+  static async getCollection() {
     const db = await getDb();
-    const now = new Date();
-    
-    const newSubLocation: Omit<SubLocation, '_id'> = {
-      ...subLocation,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const result = await db.collection<SubLocation>(this.COLLECTION).insertOne(newSubLocation as SubLocation);
-    return { ...newSubLocation, _id: result.insertedId };
-  }
-
-  static async findById(id: string | ObjectId): Promise<SubLocation | null> {
-    const db = await getDb();
-    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
-    return db.collection<SubLocation>(this.COLLECTION).findOne({ _id: objectId });
-  }
-
-  static async findByLocationId(locationId: string | ObjectId): Promise<SubLocation[]> {
-    const db = await getDb();
-    const objectId = typeof locationId === 'string' ? new ObjectId(locationId) : locationId;
-    return db.collection<SubLocation>(this.COLLECTION).find({ locationId: objectId }).toArray();
+    return db.collection<SubLocation>('sublocations');
   }
 
   static async findAll(): Promise<SubLocation[]> {
-    const db = await getDb();
-    return db.collection<SubLocation>(this.COLLECTION).find({}).toArray();
+    const collection = await this.getCollection();
+    return collection.find({}).toArray();
   }
 
-  static async update(id: string | ObjectId, updates: Partial<SubLocation>): Promise<SubLocation | null> {
-    const db = await getDb();
-    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
-    
-    const result = await db.collection<SubLocation>(this.COLLECTION).findOneAndUpdate(
-      { _id: objectId },
+  static async findById(id: ObjectId): Promise<SubLocation | null> {
+    const collection = await this.getCollection();
+    return collection.findOne({ _id: id });
+  }
+
+  static async findByLocationId(locationId: ObjectId): Promise<SubLocation[]> {
+    const collection = await this.getCollection();
+    return collection.find({ locationId }).toArray();
+  }
+
+  static async create(subLocation: Omit<SubLocation, '_id' | 'createdAt' | 'updatedAt'>): Promise<ObjectId> {
+    const collection = await this.getCollection();
+    const now = new Date();
+    const result = await collection.insertOne({
+      ...subLocation,
+      createdAt: now,
+      updatedAt: now,
+    } as SubLocation);
+    return result.insertedId;
+  }
+
+  static async update(id: ObjectId, updates: Partial<SubLocation>): Promise<boolean> {
+    const collection = await this.getCollection();
+    const result = await collection.updateOne(
+      { _id: id },
       { 
         $set: { 
           ...updates, 
           updatedAt: new Date() 
         } 
-      },
-      { returnDocument: 'after' }
+      }
     );
-
-    return result;
+    return result.modifiedCount > 0;
   }
 
-  static async delete(id: string | ObjectId): Promise<boolean> {
-    const db = await getDb();
-    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
-    const result = await db.collection<SubLocation>(this.COLLECTION).deleteOne({ _id: objectId });
+  static async delete(id: ObjectId): Promise<boolean> {
+    const collection = await this.getCollection();
+    const result = await collection.deleteOne({ _id: id });
     return result.deletedCount > 0;
+  }
+
+  // Find active, pricing-enabled sublocations
+  static async findActiveWithPricing(): Promise<SubLocation[]> {
+    const collection = await this.getCollection();
+    return collection.find({ 
+      isActive: true, 
+      pricingEnabled: true 
+    }).toArray();
   }
 }

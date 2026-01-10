@@ -3,22 +3,23 @@ import { SubLocationVenueRepository } from '@/models/SubLocationVenue';
 
 export async function GET() {
   try {
-    const db = await import('@/lib/mongodb').then(m => m.getDb());
-    const relationships = await db.collection('sublocation_venues').find({}).toArray();
+    const relationships = await SubLocationVenueRepository.findAll();
     
-    // Convert ObjectIds to strings for JSON serialization
-    const serializedRelationships = relationships.map(rel => ({
-      ...rel,
-      _id: rel._id.toString(),
-      subLocationId: rel.subLocationId.toString(),
-      venueId: rel.venueId.toString(),
-    }));
-    
-    return NextResponse.json(serializedRelationships);
+    // Filter out any relationships with null IDs and safely convert to string
+    const formattedRelationships = relationships
+      .filter(r => r._id && r.subLocationId && r.venueId) // Filter out null values
+      .map(r => ({
+        _id: r._id!.toString(),
+        subLocationId: r.subLocationId!.toString(),
+        venueId: r.venueId!.toString(),
+        createdAt: r.createdAt,
+      }));
+
+    return NextResponse.json(formattedRelationships);
   } catch (error) {
     console.error('Error fetching relationships:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch relationships' },
+      { error: 'Failed to fetch sublocation-venue relationships' },
       { status: 500 }
     );
   }
@@ -26,24 +27,28 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { subLocationId, venueId } = body;
+    const { subLocationId, venueId } = await request.json();
 
-    // Check if relationship already exists
-    const exists = await SubLocationVenueRepository.exists(subLocationId, venueId);
-    if (exists) {
+    if (!subLocationId || !venueId) {
       return NextResponse.json(
-        { error: 'Relationship already exists' },
+        { error: 'Missing subLocationId or venueId' },
         { status: 400 }
       );
     }
 
-    const relationship = await SubLocationVenueRepository.create(subLocationId, venueId);
-    return NextResponse.json(relationship, { status: 201 });
+    const id = await SubLocationVenueRepository.create(
+      subLocationId,
+      venueId
+    );
+
+    return NextResponse.json({ 
+      success: true, 
+      id: id.toString() 
+    }, { status: 201 });
   } catch (error) {
     console.error('Error creating relationship:', error);
     return NextResponse.json(
-      { error: 'Failed to create relationship' },
+      { error: 'Failed to create sublocation-venue relationship' },
       { status: 500 }
     );
   }
@@ -51,21 +56,30 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const body = await request.json();
-    const { subLocationId, venueId } = body;
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
 
-    const deleted = await SubLocationVenueRepository.delete(subLocationId, venueId);
-    if (!deleted) {
+    if (!id) {
+      return NextResponse.json(
+        { error: 'Missing relationship ID' },
+        { status: 400 }
+      );
+    }
+
+    const success = await SubLocationVenueRepository.deleteById(id);
+
+    if (!success) {
       return NextResponse.json(
         { error: 'Relationship not found' },
         { status: 404 }
       );
     }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting relationship:', error);
     return NextResponse.json(
-      { error: 'Failed to delete relationship' },
+      { error: 'Failed to delete sublocation-venue relationship' },
       { status: 500 }
     );
   }

@@ -15,12 +15,13 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
 
   const navItems = [
     { href: '/', icon: Home, label: 'Home', color: 'gray' },
-    { href: '/hierarchy', icon: Network, label: 'Hierarchy', color: 'indigo' },
+    { href: '/hierarchy', icon: Network, label: 'Hierarchy', color: 'red' },
     { href: '/customers', icon: Building2, label: 'Customers', color: 'blue' },
     { href: '/locations', icon: MapPin, label: 'Locations', color: 'green' },
     { href: '/venues', icon: Users, label: 'Venues', color: 'purple' },
-    { href: '/relationships', icon: Layers, label: 'Assignments', color: 'pink' },
-    { href: '/graph', icon: BarChart3, label: 'Graph', color: 'cyan' },
+    { href: '/relationships', icon: Layers, label: 'Assignments', color: 'yellow' },
+    { href: '/graph', icon: BarChart3, label: 'Graph', color: 'orange' },
+    { href: '/admin/pricing', icon: BarChart3, label: 'Pricing', color: 'blue' },
   ];
 
   return (
@@ -33,7 +34,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       >
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="absolute -right-3 top-4 bg-white border border-gray-300 rounded-full p-1 hover:bg-gray-100"
+          className="absolute -right-3 top-4 bg-gray-700 border border-gray-300 rounded-full p-1 hover:bg-gray-100"
         >
           {sidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
         </button>
@@ -55,7 +56,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
                 title={item.label}
               >
                 <Icon className="w-5 h-5 flex-shrink-0" />
-                {sidebarOpen && <span className="text-sm font-medium">{item.label}</span>}
+                {sidebarOpen && <span className="text-sm font-medium text-gray-600">{item.label}</span>}
               </Link>
             );
           })}

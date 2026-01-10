@@ -18,6 +18,8 @@ interface SubLocation {
   locationId: string;
   label: string;
   allocatedCapacity?: number;
+  pricingEnabled?: boolean;
+  isActive?: boolean;
 }
 
 interface Venue {
@@ -108,7 +110,16 @@ export default function RelationshipManager() {
       fetch(`/api/sublocations?locationId=${selectedLocation}`)
         .then(res => res.json())
         .then(data => {
-          setSublocations(data);
+          console.log('Fetched sublocations:', data); // Debug log
+          
+          // FIX: Filter to show all active sublocations, regardless of pricingEnabled status
+          const activeSublocations = data.filter((sl: SubLocation) => 
+            sl.isActive !== false // Show all unless explicitly inactive
+          );
+          
+          console.log('Filtered sublocations:', activeSublocations); // Debug log
+          
+          setSublocations(activeSublocations);
           setSelectedSubLocation('');
           setAssignedVenues(new Set());
         })

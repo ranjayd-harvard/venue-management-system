@@ -1,6 +1,6 @@
 {
   "name": "venue-management-system",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3031",
@@ -8,19 +8,26 @@
     "start": "next start -p 3031",
     "lint": "next lint",
     "seed": "tsx scripts/seed.ts",
-    "seed:dynamic": "tsx scripts/seed-dynamic.ts"
+    "seed:dynamic": "tsx scripts/seed-dynamic.ts",
+    "seed:pricing": "tsx scripts/seed-pricing.ts",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:build": "docker-compose build",
+    "migrate:sublocations": "tsx scripts/migrate-sublocations.ts",
+    "diagnose:sublocations": "tsx scripts/diagnose-sublocations.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
     "@dnd-kit/sortable": "^8.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "lucide-react": "^0.303.0",
     "mongodb": "^6.3.0",
     "neo4j-driver": "^5.15.0",
     "next": "^14.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.49.3",
-    "lucide-react": "^0.303.0",
     "reactflow": "^11.10.4"
   },
   "devDependencies": {
