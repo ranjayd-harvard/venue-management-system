@@ -108,38 +108,77 @@ export class RatesheetRepository {
   }
 
   // Find all ratesheets applicable to a SubLocation (including inherited from Location)
+  // Now accepts start AND end date to find all overlapping ratesheets
   static async findApplicableRatesheets(
     subLocationId: ObjectId,
     locationId: ObjectId,
-    dateTime: Date
+    startDateTime: Date,
+    endDateTime?: Date
   ): Promise<Ratesheet[]> {
     const collection = await this.getCollection();
     
-    return collection.find({
+    // If no endDateTime provided, use startDateTime for backwards compatibility
+    const effectiveEnd = endDateTime || startDateTime;
+    
+    console.log('[findApplicableRatesheets] Input:', {
+      subLocationId: subLocationId.toString(),
+      locationId: locationId.toString(),
+      startDateTime,
+      endDateTime: effectiveEnd
+    });
+    
+    const query = {
       $and: [
         // Must be active and approved
         { isActive: true },
         { approvalStatus: 'APPROVED' },
         
         // Must apply to this SubLocation or its parent Location
+        // Support both old and new data structures
         {
           $or: [
+            // Old structure: appliesTo.level/entityId
             { 'appliesTo.level': 'SUBLOCATION', 'appliesTo.entityId': subLocationId },
-            { 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': locationId }
+            { 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': locationId },
+            // New structure: layer/entityId
+            { layer: 'SUBLOCATION', entityId: subLocationId },
+            { layer: 'LOCATION', entityId: locationId }
           ]
         },
         
-        // Must be within effective date range
-        { effectiveFrom: { $lte: dateTime } },
+        // Must overlap with booking period
+        // Ratesheet overlaps if: ratesheet.start <= booking.end AND ratesheet.end >= booking.start
         {
           $or: [
-            { effectiveTo: { $exists: false } },
-            { effectiveTo: null },
-            { effectiveTo: { $gte: dateTime } }
+            // Case 1: Ratesheet has no end date (indefinite)
+            {
+              effectiveFrom: { $lte: effectiveEnd },
+              effectiveTo: { $exists: false }
+            },
+            {
+              effectiveFrom: { $lte: effectiveEnd },
+              effectiveTo: null
+            },
+            // Case 2: Ratesheet has end date - check for overlap
+            {
+              effectiveFrom: { $lte: effectiveEnd },
+              effectiveTo: { $gte: startDateTime }
+            }
           ]
         }
       ]
-    }).sort({ priority: -1 }).toArray();
+    };
+    
+    console.log('[findApplicableRatesheets] Query:', JSON.stringify(query, null, 2));
+    
+    const results = await collection.find(query).sort({ priority: -1 }).toArray();
+    
+    console.log(`[findApplicableRatesheets] Found ${results.length} ratesheets`);
+    results.forEach(rs => {
+      console.log(`  - ${rs.name}: effectiveFrom=${rs.effectiveFrom}, effectiveTo=${rs.effectiveTo}, priority=${rs.priority}`);
+    });
+    
+    return results;
   }
 
   static async findByEntityId(entityId: ObjectId): Promise<Ratesheet[]> {

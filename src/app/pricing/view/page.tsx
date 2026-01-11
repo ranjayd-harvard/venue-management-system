@@ -1,29 +1,129 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { PricingResult } from '@/models/Ratesheet';
+import { useState, useEffect } from 'react';
+import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 
-export default function ViewPricingPage() {
+interface SubLocation {
+  _id: string;
+  locationId: string;
+  label: string;
+  description?: string;
+  allocatedCapacity?: number;
+  pricingEnabled: boolean;
+  isActive: boolean;
+  defaultHourlyRate?: number;
+}
+
+interface Location {
+  _id: string;
+  name: string;
+  city: string;
+}
+
+interface PricingBreakdown {
+  startDateTime: string;
+  endDateTime: string;
+  pricePerHour: number;
+  hours: number;
+  subtotal: number;
+  ratesheetId: string;
+  ratesheetName: string;
+  appliedRule: string;
+}
+
+interface PricingResult {
+  totalPrice: number;
+  breakdown: PricingBreakdown[];
+  currency: string;
+  decisionLog?: any[];           // ← Add this
+  ratesheetsSummary?: any;       // ← Add this  
+}
+
+// Helper to get default dates
+const getDefaultDates = () => {
+  const now = new Date();
+  
+  // Start: Tomorrow at 9:00 AM
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() + 1);
+  startDate.setHours(9, 0, 0, 0);
+  
+  // End: Tomorrow at 5:00 PM (8 hours later)
+  const endDate = new Date(startDate);
+  endDate.setHours(17, 0, 0, 0);
+  
+  // Format for datetime-local input: YYYY-MM-DDTHH:mm
+  const formatDateTime = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+  
+  return {
+    start: formatDateTime(startDate),
+    end: formatDateTime(endDate)
+  };
+};
+
+export default function PricingViewPage() {
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState('');
   const [subLocationId, setSubLocationId] = useState('');
-  const [startDateTime, setStartDateTime] = useState('');
-  const [endDateTime, setEndDateTime] = useState('');
-  const [pricingResult, setPricingResult] = useState<PricingResult | null>(null);
+  
+  // Initialize with default dates
+  const defaultDates = getDefaultDates();
+  const [startDateTime, setStartDateTime] = useState(defaultDates.start);
+  const [endDateTime, setEndDateTime] = useState(defaultDates.end);
+  
+  const [result, setResult] = useState<PricingResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [dataLoading, setDataLoading] = useState(true);
 
-  // Set default times (today 9 AM to 5 PM)
+  // Fetch locations on mount
   useEffect(() => {
-    const now = new Date();
-    const start = new Date(now);
-    start.setHours(9, 0, 0, 0);
-    const end = new Date(now);
-    end.setHours(17, 0, 0, 0);
-
-    setStartDateTime(start.toISOString().slice(0, 16));
-    setEndDateTime(end.toISOString().slice(0, 16));
+    fetch('/api/locations')
+      .then(res => res.json())
+      .then(data => {
+        setLocations(data);
+        setDataLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to load locations:', err);
+        setDataLoading(false);
+      });
   }, []);
 
-  const calculatePricing = async () => {
+  // Fetch sublocations when location changes
+  useEffect(() => {
+    if (selectedLocation) {
+      setDataLoading(true);
+      fetch(`/api/sublocations?locationId=${selectedLocation}`)
+        .then(res => res.json())
+        .then(data => {
+          // Filter to show only pricing-enabled sublocations
+          const pricingEnabledSublocations = data.filter(
+            (sl: SubLocation) => sl.pricingEnabled && sl.isActive
+          );
+          setSublocations(pricingEnabledSublocations);
+          setSubLocationId('');
+          setDataLoading(false);
+        })
+        .catch(err => {
+          console.error('Failed to load sublocations:', err);
+          setDataLoading(false);
+        });
+    } else {
+      setSublocations([]);
+      setSubLocationId('');
+    }
+  }, [selectedLocation]);
+
+  const handleCalculate = async () => {
     if (!subLocationId || !startDateTime || !endDateTime) {
       setError('Please fill in all fields');
       return;
@@ -31,17 +131,21 @@ export default function ViewPricingPage() {
 
     setLoading(true);
     setError('');
-    setPricingResult(null);
+    setResult(null);
 
     try {
+
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
       const response = await fetch('/api/pricing/calculate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subLocationId,
-          startDateTime,
-          endDateTime
-        })
+          startDateTime: new Date(startDateTime).toISOString(),
+          endDateTime: new Date(endDateTime).toISOString(),
+          timezone: userTimezone
+        }),
       });
 
       if (!response.ok) {
@@ -50,253 +154,361 @@ export default function ViewPricingPage() {
       }
 
       const data = await response.json();
-      setPricingResult(data);
+      setResult(data);
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to calculate pricing');
     } finally {
       setLoading(false);
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount);
+  // Calculate duration in hours
+  const calculateDuration = () => {
+    if (!startDateTime || !endDateTime) return 0;
+    const start = new Date(startDateTime);
+    const end = new Date(endDateTime);
+    const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+    return Math.max(0, hours);
   };
 
-  const formatDateTime = (date: Date) => {
-    return new Date(date).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  };
+  const duration = calculateDuration();
+  const selectedSubLocation = sublocations.find(sl => sl._id === subLocationId);
+  const selectedLocationObj = locations.find(l => l._id === selectedLocation);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
-      {/* Header */}
-      <div className="bg-white border-b shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 py-6">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            Pricing Calculator
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Calculate pricing for your selected location and time period
-          </p>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg shadow-lg p-8 mb-8">
+          <h1 className="text-3xl font-bold mb-2">Pricing Calculator</h1>
+          <p className="text-blue-100">Calculate pricing for your venue booking</p>
         </div>
-      </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-8 text-gray-900">
-        {/* Input Form */}
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4 text-gray-900">Calculate Your Price</h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {/* Main Form */}
+        <div className="bg-white rounded-lg shadow-lg p-8 mb-8">
+          <div className="space-y-6">
+            {/* Location Selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sub-Location ID
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Select Location
               </label>
-              <input
-                type="text"
-                value={subLocationId}
-                onChange={(e) => setSubLocationId(e.target.value)}
-                placeholder="Enter sub-location ID"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Example: 507f1f77bcf86cd799439011
-              </p>
+              <select
+                value={selectedLocation}
+                onChange={(e) => setSelectedLocation(e.target.value)}
+                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+                disabled={dataLoading}
+              >
+                <option value="">Choose a location...</option>
+                {locations.map((location) => (
+                  <option key={location._id} value={location._id}>
+                    {location.name} - {location.city}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div className="h-divider"></div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="datetime-local"
-                  value={startDateTime}
-                  onChange={(e) => setStartDateTime(e.target.value)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <span className="text-gray-500">to</span>
-                <input
-                  type="datetime-local"
-                  value={endDateTime}
-                  onChange={(e) => setEndDateTime(e.target.value)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+
+            {/* SubLocation Selection */}
+            {selectedLocation && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Sub-Location
+                  {selectedLocationObj && (
+                    <span className="text-xs font-normal text-gray-500 ml-2">
+                      (Pricing-enabled spaces only)
+                    </span>
+                  )}
+                </label>
+                {dataLoading ? (
+                  <div className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-gray-500">
+                    Loading sub-locations...
+                  </div>
+                ) : sublocations.length === 0 ? (
+                  <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+                    No pricing-enabled sub-locations available for this location.
+                  </div>
+                ) : (
+                  <select
+                    value={subLocationId}
+                    onChange={(e) => setSubLocationId(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                  >
+                    <option value="">Choose a sub-location...</option>
+                    {sublocations.map((sublocation) => (
+                      <option key={sublocation._id} value={sublocation._id}>
+                        {sublocation.label}
+                        {sublocation.description && ` - ${sublocation.description}`}
+                        {sublocation.defaultHourlyRate && 
+                          ` (Base rate: $${sublocation.defaultHourlyRate}/hr)`
+                        }
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
-            </div>
-          </div>
-
-          <button
-            onClick={calculatePricing}
-            disabled={loading}
-            className={`
-              w-full py-3 rounded-lg font-medium text-white
-              transition-all duration-200 shadow-md hover:shadow-lg
-              ${loading 
-                ? 'bg-gray-400 cursor-not-allowed' 
-                : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
-              }
-            `}
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                Calculating...
-              </span>
-            ) : (
-              '💰 Calculate Pricing'
             )}
-          </button>
 
-          {error && (
-            <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">⚠️</span>
-                <span>{error}</span>
-              </div>
-            </div>
-          )}
+            {/* Date/Time Inputs */}
+            {subLocationId && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-red-700">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Start Date & Time
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={startDateTime}
+                      onChange={(e) => setStartDateTime(e.target.value)}
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: Tomorrow at 9:00 AM
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      End Date & Time
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={endDateTime}
+                      onChange={(e) => setEndDateTime(e.target.value)}
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: Tomorrow at 5:00 PM
+                    </p>
+                  </div>
+                </div>
+
+                {/* Duration Display */}
+                {duration > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-700">Booking Duration:</span>
+                      <span className="text-lg font-bold text-blue-700">
+                        {duration.toFixed(1)} hours
+                        {duration >= 24 && ` (${Math.floor(duration / 24)} days)`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Selected SubLocation Info */}
+                {selectedSubLocation && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <h3 className="font-semibold text-gray-800 mb-2">Selected Space</h3>
+                    <div className="text-sm space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-gray-700">Location:</span>
+                        <span className="font-medium text-gray-900">
+                          {selectedLocationObj?.name}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-700">Sub-Location:</span>
+                        <span className="font-medium text-gray-900">
+                          {selectedSubLocation.label}
+                        </span>
+                      </div>
+                      {selectedSubLocation.allocatedCapacity && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-700">Capacity:</span>
+                          <span className="font-medium text-gray-900">
+                            {selectedSubLocation.allocatedCapacity} people
+                          </span>
+                        </div>
+                      )}
+                      {selectedSubLocation.defaultHourlyRate && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-700">Base Hourly Rate:</span>
+                          <span className="font-medium text-gray-900">
+                            ${selectedSubLocation.defaultHourlyRate}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Calculate Button */}
+                <button
+                  onClick={handleCalculate}
+                  disabled={loading || !subLocationId || !startDateTime || !endDateTime}
+                  className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-4 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-purple-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                >
+                  {loading ? (
+                    <span className="flex items-center justify-center">
+                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Calculating...
+                    </span>
+                  ) : (
+                    'Calculate Pricing'
+                  )}
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Pricing Results */}
-        {pricingResult && (
+        {/* Error Display */}
+        {error && (
+          <div className="bg-red-50 border-2 border-red-200 text-red-800 px-6 py-4 rounded-lg mb-8">
+            <p className="font-semibold">Error</p>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {/* Results Display */}
+        {result && (
           <div className="space-y-6">
             {/* Total Price Card */}
-            <div className="bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl shadow-xl p-8 text-white">
-              <div className="text-center">
-                <div className="text-sm font-medium opacity-90 mb-2">Total Price</div>
-                <div className="text-5xl font-bold mb-4">
-                  {formatCurrency(pricingResult.totalPrice)}
-                </div>
-                <div className="text-sm opacity-75">
-                  for {pricingResult.breakdown.reduce((sum, b) => sum + b.hours, 0).toFixed(1)} hours
-                </div>
-              </div>
+            <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg shadow-lg p-8">
+              <p className="text-green-100 text-sm uppercase tracking-wide mb-2">Total Price</p>
+              <p className="text-5xl font-bold mb-2">
+                ${result.totalPrice.toFixed(2)}
+              </p>
+              <p className="text-green-100">{result.currency}</p>
+            </div>
 
-              {/* Quick Info */}
-              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/20">
-                <div className="text-center">
-                  <div className="text-2xl font-bold">
-                    {pricingResult.breakdown.length}
-                  </div>
-                  <div className="text-xs opacity-75">Rate Changes</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold">
-                    {formatCurrency(
-                      pricingResult.totalPrice / 
-                      pricingResult.breakdown.reduce((sum, b) => sum + b.hours, 0)
-                    )}
-                  </div>
-                  <div className="text-xs opacity-75">Avg per Hour</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold">
-                    {new Set(pricingResult.breakdown.map(b => b.ratesheetId.toString())).size}
-                  </div>
-                  <div className="text-xs opacity-75">Ratesheets Used</div>
-                </div>
+            {/* Quick Stats */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-white rounded-lg shadow p-4 text-center">
+                <p className="text-gray-600 text-sm mb-1">Rate Changes</p>
+                <p className="text-2xl font-bold text-gray-900">{result.breakdown.length}</p>
+              </div>
+              <div className="bg-white rounded-lg shadow p-4 text-center">
+                <p className="text-gray-600 text-sm mb-1">Avg per Hour</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  ${(result.totalPrice / result.breakdown.reduce((sum, b) => sum + b.hours, 0)).toFixed(2)}
+                </p>
+              </div>
+              <div className="bg-white rounded-lg shadow p-4 text-center">
+                <p className="text-gray-600 text-sm mb-1">Ratesheets Used</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {new Set(result.breakdown.map(b => b.ratesheetId)).size}
+                </p>
               </div>
             </div>
 
             {/* Detailed Breakdown */}
-            <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-              <div className="bg-gradient-to-r from-gray-700 to-gray-900 text-white px-6 py-4">
-                <h3 className="text-lg font-semibold">Pricing Breakdown</h3>
-                <p className="text-sm opacity-75">Hour-by-hour pricing details</p>
+            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+              <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-4">
+                <h2 className="text-xl font-bold">Pricing Breakdown</h2>
               </div>
-
-              <div className="divide-y">
-                {pricingResult.breakdown.map((item, index) => (
-                  <div key={index} className="p-6 hover:bg-gray-50 transition-colors">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-1">
-                          <span className="text-2xl">🕐</span>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b-2 border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Time Period
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Hours
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Rate
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Subtotal
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Ratesheet
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {result.breakdown.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 text-sm text-gray-900">
                           <div>
-                            <div className="font-semibold text-gray-900">
-                              {formatDateTime(item.startDateTime)} - {formatDateTime(item.endDateTime)}
-                            </div>
-                            <div className="text-sm text-gray-600">
-                              {item.hours} hour{item.hours !== 1 ? 's' : ''}
-                            </div>
+                            {new Date(item.startDateTime).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
                           </div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-gray-900">
-                          {formatCurrency(item.subtotal)}
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {formatCurrency(item.pricePerHour)}/hr
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-medium">
-                        {item.ratesheetName}
-                      </span>
-                      <span className="text-gray-500">•</span>
-                      <span className="text-gray-600">{item.appliedRule}</span>
-                    </div>
-                  </div>
-                ))}
+                          <div className="text-gray-500 text-xs">
+                            to {new Date(item.endDateTime).toLocaleTimeString('en-US', {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-900">
+                          {item.hours.toFixed(2)}
+                        </td>
+                        <td className="px-6 py-4 text-sm font-semibold text-gray-900">
+                          ${item.pricePerHour}/hr
+                        </td>
+                        <td className="px-6 py-4 text-sm font-bold text-green-600">
+                          ${item.subtotal.toFixed(2)}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-medium text-gray-900">
+                            {item.ratesheetName}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {item.appliedRule}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                    <tr>
+                      <td colSpan={3} className="px-6 py-4 text-right text-sm font-bold text-gray-900">
+                        Total:
+                      </td>
+                      <td className="px-6 py-4 text-sm font-bold text-green-600">
+                        ${result.totalPrice.toFixed(2)}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             </div>
 
-            {/* Summary Footer */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-gray-600 mb-1">Currency</div>
-                  <div className="font-semibold text-gray-900">{pricingResult.currency}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm text-gray-600 mb-1">Generated</div>
-                  <div className="font-semibold text-gray-900">
-                    {new Date().toLocaleString()}
-                  </div>
-                </div>
-              </div>
-            </div>
+           {/* NEW: Decision Audit Panel */}
+          {result.decisionLog && result.ratesheetsSummary && (
+            <DecisionAuditPanel
+              decisionLog={result.decisionLog}
+              ratesheetsSummary={result.ratesheetsSummary}
+            />
+          )}           
+
+
           </div>
         )}
 
         {/* Help Section */}
-        {!pricingResult && !loading && (
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900">How it works</h3>
-            <div className="space-y-3 text-sm text-gray-600">
-              <div className="flex gap-3">
-                <span className="text-2xl">1️⃣</span>
-                <div>
-                  <div className="font-medium text-gray-900">Enter Location</div>
-                  <div>Select your sub-location by entering its ID</div>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="text-2xl">2️⃣</span>
-                <div>
-                  <div className="font-medium text-gray-900">Choose Time Period</div>
-                  <div>Select your start and end date/time</div>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <span className="text-2xl">3️⃣</span>
-                <div>
-                  <div className="font-medium text-gray-900">Get Instant Quote</div>
-                  <div>See detailed pricing with hour-by-hour breakdown</div>
-                </div>
-              </div>
-            </div>
+        {!result && !error && (
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="font-semibold text-gray-800 mb-3">💡 Quick Tips</h3>
+            <ul className="space-y-2 text-gray-700 text-sm">
+              <li className="flex items-start">
+                <span className="text-blue-500 mr-2">•</span>
+                <span><strong>Default times:</strong> Tomorrow 9 AM - 5 PM (8 hours)</span>
+              </li>
+              <li className="flex items-start">
+                <span className="text-blue-500 mr-2">•</span>
+                <span><strong>Select time:</strong> Click the clock icon in date inputs</span>
+              </li>
+              <li className="flex items-start">
+                <span className="text-blue-500 mr-2">•</span>
+                <span><strong>Only pricing-enabled spaces:</strong> Shown in dropdown</span>
+              </li>
+              <li className="flex items-start">
+                <span className="text-blue-500 mr-2">•</span>
+                <span><strong>Pricing rules:</strong> Ratesheets apply automatically based on time/date</span>
+              </li>
+            </ul>
           </div>
         )}
       </div>
