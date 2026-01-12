@@ -10,7 +10,9 @@ import {
   ChevronUp,
   Zap,
   Award,
-  Info
+  Info,
+  Building2,
+  MapPin
 } from 'lucide-react';
 
 interface TimeWindow {
@@ -34,6 +36,7 @@ interface Ratesheet {
 interface Location {
   _id: string;
   name: string;
+  defaultHourlyRate?: number;
 }
 
 interface SubLocation {
@@ -41,6 +44,25 @@ interface SubLocation {
   label: string;
   locationId: string;
   defaultHourlyRate?: number;
+}
+
+interface Customer {
+  _id: string;
+  name: string;
+  defaultHourlyRate?: number;
+}
+
+interface PricingItem {
+  id: string;
+  name: string;
+  type: 'RATESHEET' | 'SUBLOCATION_DEFAULT' | 'LOCATION_DEFAULT' | 'CUSTOMER_DEFAULT';
+  priority: number;
+  rate?: number;
+  effectiveFrom?: string;
+  effectiveTo?: string | null;
+  timeWindows?: TimeWindow[];
+  layer?: string;
+  icon: React.ReactNode;
 }
 
 interface TimeSlot {
@@ -55,6 +77,7 @@ interface TimeSlot {
   winningRatesheet?: Ratesheet;
   winningPrice?: number;
   isDefaultRate?: boolean;
+  defaultType?: 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER';
 }
 
 export default function TimelineViewPage() {
@@ -73,11 +96,17 @@ export default function TimelineViewPage() {
   const [viewStart, setViewStart] = useState<Date>(new Date());
   const [viewEnd, setViewEnd] = useState<Date>(new Date(Date.now() + 24 * 60 * 60 * 1000));
   
-  const [expandedRatesheet, setExpandedRatesheet] = useState<string | null>(null);
-  const [selectedRatesheets, setSelectedRatesheets] = useState<Set<string>>(new Set());
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
-  const [defaultRate, setDefaultRate] = useState<number>(0);
+  const [subLocationRate, setSubLocationRate] = useState<number>(0);
+  const [locationRate, setLocationRate] = useState<number>(0);
+  const [customerRate, setCustomerRate] = useState<number>(0);
+
+  // Drag state for better handle control
+  const [isDraggingStart, setIsDraggingStart] = useState(false);
+  const [isDraggingEnd, setIsDraggingEnd] = useState(false);
 
   // Unique colors per ratesheet
   const ratesheetColors = useRef(new Map<string, string>()).current;
@@ -116,11 +145,14 @@ export default function TimelineViewPage() {
   useEffect(() => {
     if (selectedLocation) {
       fetchSubLocations(selectedLocation);
+      const loc = locations.find(l => l._id === selectedLocation);
+      setLocationRate(loc?.defaultHourlyRate || 0);
     } else {
       setSublocations([]);
       setSelectedSubLocation('');
+      setLocationRate(0);
     }
-  }, [selectedLocation]);
+  }, [selectedLocation, locations]);
 
   useEffect(() => {
     if (selectedSubLocation) {
@@ -130,14 +162,15 @@ export default function TimelineViewPage() {
       fetchSubLocationDetails(selectedSubLocation);
     } else {
       setRatesheets([]);
+      setSubLocationRate(0);
     }
   }, [selectedSubLocation, rangeStart, rangeEnd]);
 
   useEffect(() => {
-    if (ratesheets.length > 0 || defaultRate > 0) {
+    if (ratesheets.length > 0 || subLocationRate > 0 || locationRate > 0 || customerRate > 0) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, defaultRate]);
+  }, [ratesheets, viewStart, viewEnd, subLocationRate, locationRate, customerRate]);
 
   const fetchLocations = async () => {
     try {
@@ -163,11 +196,11 @@ export default function TimelineViewPage() {
     try {
       const subloc = sublocations.find(s => s._id === subLocationId);
       if (subloc?.defaultHourlyRate) {
-        setDefaultRate(subloc.defaultHourlyRate);
+        setSubLocationRate(subloc.defaultHourlyRate);
       } else {
         const response = await fetch(`/api/sublocations/${subLocationId}`);
         const data = await response.json();
-        setDefaultRate(data.defaultHourlyRate || 0);
+        setSubLocationRate(data.defaultHourlyRate || 0);
       }
     } catch (error) {
       console.error('Failed to fetch sublocation details:', error);
@@ -234,10 +267,23 @@ export default function TimelineViewPage() {
       
       let winningPrice = winner?.price;
       let isDefaultRate = false;
+      let defaultType: 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER' | undefined;
       
-      if (!winner && defaultRate > 0) {
-        winningPrice = defaultRate;
-        isDefaultRate = true;
+      // Priority order: Ratesheet > SubLocation Default > Location Default > Customer Default
+      if (!winner) {
+        if (subLocationRate > 0) {
+          winningPrice = subLocationRate;
+          isDefaultRate = true;
+          defaultType = 'SUBLOCATION';
+        } else if (locationRate > 0) {
+          winningPrice = locationRate;
+          isDefaultRate = true;
+          defaultType = 'LOCATION';
+        } else if (customerRate > 0) {
+          winningPrice = customerRate;
+          isDefaultRate = true;
+          defaultType = 'CUSTOMER';
+        }
       }
 
       slots.push({
@@ -247,13 +293,82 @@ export default function TimelineViewPage() {
         ratesheets: candidateRatesheets,
         winningRatesheet: winner?.ratesheet,
         winningPrice,
-        isDefaultRate
+        isDefaultRate,
+        defaultType
       });
 
       currentTime.setHours(currentTime.getHours() + 1);
     }
 
     setTimeSlots(slots);
+  };
+
+  const getPricingItems = (): PricingItem[] => {
+    const items: PricingItem[] = [];
+
+    // Add ratesheets
+    ratesheets.forEach((rs, index) => {
+      items.push({
+        id: rs._id,
+        name: rs.name,
+        type: 'RATESHEET',
+        priority: rs.priority,
+        effectiveFrom: rs.effectiveFrom,
+        effectiveTo: rs.effectiveTo,
+        timeWindows: rs.timeWindows,
+        layer: rs.layer,
+        icon: <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${getRatesheetColor(rs._id)} flex items-center justify-center text-white font-bold text-sm shadow-md`}>
+          #{index + 1}
+        </div>
+      });
+    });
+
+    // Add sublocation default (priority 5)
+    if (subLocationRate > 0) {
+      const subloc = sublocations.find(s => s._id === selectedSubLocation);
+      items.push({
+        id: 'sublocation-default',
+        name: `${subloc?.label || 'SubLocation'} Default Rate`,
+        type: 'SUBLOCATION_DEFAULT',
+        priority: 5,
+        rate: subLocationRate,
+        icon: <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-400 to-blue-500 flex items-center justify-center text-white shadow-md">
+          <MapPin className="w-5 h-5" />
+        </div>
+      });
+    }
+
+    // Add location default (priority 3)
+    if (locationRate > 0) {
+      const loc = locations.find(l => l._id === selectedLocation);
+      items.push({
+        id: 'location-default',
+        name: `${loc?.name || 'Location'} Default Rate`,
+        type: 'LOCATION_DEFAULT',
+        priority: 3,
+        rate: locationRate,
+        icon: <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-emerald-500 flex items-center justify-center text-white shadow-md">
+          <Building2 className="w-5 h-5" />
+        </div>
+      });
+    }
+
+    // Add customer default (priority 1)
+    if (customerRate > 0) {
+      items.push({
+        id: 'customer-default',
+        name: 'Customer Default Rate',
+        type: 'CUSTOMER_DEFAULT',
+        priority: 1,
+        rate: customerRate,
+        icon: <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white shadow-md">
+          <DollarSign className="w-5 h-5" />
+        </div>
+      });
+    }
+
+    // Sort by priority (highest first)
+    return items.sort((a, b) => b.priority - a.priority);
   };
 
   const timeInWindow = (time: string, start: string, end: string): boolean => {
@@ -308,30 +423,43 @@ export default function TimelineViewPage() {
     };
   };
 
-  const handleRangeSliderChange = (position: number, isStart: boolean) => {
+  const handleStartDrag = (position: number) => {
     const totalMs = rangeEnd.getTime() - rangeStart.getTime();
     const newMs = rangeStart.getTime() + (position / 100) * totalMs;
     const newDate = new Date(newMs);
     
-    if (isStart) {
-      if (newDate < viewEnd) {
-        setViewStart(newDate);
-      }
-    } else {
-      if (newDate > viewStart) {
-        setViewEnd(newDate);
-      }
+    if (newDate < viewEnd) {
+      setViewStart(newDate);
     }
   };
 
-  const toggleRatesheetSelection = (ratesheetId: string) => {
-    const newSelection = new Set(selectedRatesheets);
-    if (newSelection.has(ratesheetId)) {
-      newSelection.delete(ratesheetId);
-    } else {
-      newSelection.add(ratesheetId);
+  const handleEndDrag = (position: number) => {
+    const totalMs = rangeEnd.getTime() - rangeStart.getTime();
+    const newMs = rangeStart.getTime() + (position / 100) * totalMs;
+    const newDate = new Date(newMs);
+    
+    if (newDate > viewStart) {
+      setViewEnd(newDate);
     }
-    setSelectedRatesheets(newSelection);
+  };
+
+  const toggleItemSelection = (itemId: string) => {
+    const newSelection = new Set(selectedItems);
+    if (newSelection.has(itemId)) {
+      newSelection.delete(itemId);
+    } else {
+      newSelection.add(itemId);
+    }
+    setSelectedItems(newSelection);
+  };
+
+  const getDefaultTypeLabel = (type?: 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER'): string => {
+    switch (type) {
+      case 'SUBLOCATION': return 'SubLocation Default';
+      case 'LOCATION': return 'Location Default';
+      case 'CUSTOMER': return 'Customer Default';
+      default: return 'Default';
+    }
   };
 
   return (
@@ -423,7 +551,7 @@ export default function TimelineViewPage() {
 
         {!loading && selectedSubLocation && (
           <>
-            {/* Interactive Date-Time Range Slider - MOVED UP */}
+            {/* Interactive Date-Time Range Slider */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-bold text-gray-900">Timeline Range</h2>
@@ -433,15 +561,15 @@ export default function TimelineViewPage() {
               </div>
 
               <div className="mb-6">
-                <div className="text-xs text-gray-500 mb-2 flex justify-between">
+                <div className="text-xs text-gray-500 mb-3 flex justify-between">
                   <span>Viewing: {formatDateTime(viewStart)}</span>
                   <span>to {formatDateTime(viewEnd)}</span>
                 </div>
                 
-                <div className="relative h-16 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 rounded-lg px-4 py-4">
+                <div className="relative h-20 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 rounded-lg px-4 py-6">
                   {/* Background track */}
                   <div className="absolute inset-x-4 top-1/2 transform -translate-y-1/2">
-                    <div className="relative w-full h-2 bg-gray-200 rounded-full">
+                    <div className="relative w-full h-3 bg-gray-200 rounded-full">
                       {/* Selected view window */}
                       <div
                         className="absolute h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full"
@@ -452,31 +580,49 @@ export default function TimelineViewPage() {
                       />
                     </div>
 
-                    {/* Start handle */}
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={getViewWindowPosition().left}
-                      onChange={(e) => handleRangeSliderChange(parseFloat(e.target.value), true)}
-                      className="absolute w-full top-0 left-0 h-2 bg-transparent appearance-none pointer-events-auto cursor-pointer"
-                      style={{ zIndex: 3 }}
-                      title={`Start: ${formatDateTime(viewStart)}`}
-                    />
+                    {/* Start handle - separate track for better control */}
+                    <div 
+                      className="absolute top-0 w-full h-3"
+                      style={{ pointerEvents: isDraggingEnd ? 'none' : 'auto' }}
+                    >
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={getViewWindowPosition().left}
+                        onChange={(e) => handleStartDrag(parseFloat(e.target.value))}
+                        onMouseDown={() => setIsDraggingStart(true)}
+                        onMouseUp={() => setIsDraggingStart(false)}
+                        onTouchStart={() => setIsDraggingStart(true)}
+                        onTouchEnd={() => setIsDraggingStart(false)}
+                        className="absolute w-full h-3 bg-transparent appearance-none cursor-pointer start-handle"
+                        style={{ zIndex: isDraggingStart ? 10 : 4 }}
+                        title={`Start: ${formatDateTime(viewStart)}`}
+                      />
+                    </div>
                     
-                    {/* End handle */}
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={getViewWindowPosition().left + getViewWindowPosition().width}
-                      onChange={(e) => handleRangeSliderChange(parseFloat(e.target.value), false)}
-                      className="absolute w-full top-0 left-0 h-2 bg-transparent appearance-none pointer-events-auto cursor-pointer"
-                      style={{ zIndex: 3 }}
-                      title={`End: ${formatDateTime(viewEnd)}`}
-                    />
+                    {/* End handle - separate track */}
+                    <div 
+                      className="absolute top-0 w-full h-3"
+                      style={{ pointerEvents: isDraggingStart ? 'none' : 'auto' }}
+                    >
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={getViewWindowPosition().left + getViewWindowPosition().width}
+                        onChange={(e) => handleEndDrag(parseFloat(e.target.value))}
+                        onMouseDown={() => setIsDraggingEnd(true)}
+                        onMouseUp={() => setIsDraggingEnd(false)}
+                        onTouchStart={() => setIsDraggingEnd(true)}
+                        onTouchEnd={() => setIsDraggingEnd(false)}
+                        className="absolute w-full h-3 bg-transparent appearance-none cursor-pointer end-handle"
+                        style={{ zIndex: isDraggingEnd ? 10 : 4 }}
+                        title={`End: ${formatDateTime(viewEnd)}`}
+                      />
+                    </div>
                   </div>
 
                   {/* Time markers */}
@@ -485,6 +631,10 @@ export default function TimelineViewPage() {
                     <span>{formatDateShort(new Date((rangeStart.getTime() + rangeEnd.getTime()) / 2))}</span>
                     <span>{formatDateShort(rangeEnd)}</span>
                   </div>
+                </div>
+
+                <div className="text-xs text-gray-500 mt-2 text-center">
+                  💡 Tip: Drag the blue handles to adjust viewing window
                 </div>
               </div>
 
@@ -499,7 +649,11 @@ export default function TimelineViewPage() {
                       className={`h-24 rounded-lg border-2 transition-all ${
                         slot.winningRatesheet
                           ? `bg-gradient-to-br ${getRatesheetColor(slot.winningRatesheet._id)} border-white shadow-md`
-                          : slot.isDefaultRate
+                          : slot.isDefaultRate && slot.defaultType === 'SUBLOCATION'
+                          ? 'bg-gradient-to-br from-blue-400 to-blue-500 border-white shadow-sm'
+                          : slot.isDefaultRate && slot.defaultType === 'LOCATION'
+                          ? 'bg-gradient-to-br from-emerald-400 to-emerald-500 border-white shadow-sm'
+                          : slot.isDefaultRate && slot.defaultType === 'CUSTOMER'
                           ? 'bg-gradient-to-br from-gray-400 to-gray-500 border-white shadow-sm'
                           : 'bg-gray-100 border-gray-200'
                       }`}
@@ -509,7 +663,9 @@ export default function TimelineViewPage() {
                           <span className="text-xs font-bold">${slot.winningPrice}</span>
                           <span className="text-[10px] opacity-90">/ hr</span>
                           {slot.isDefaultRate && (
-                            <span className="text-[9px] opacity-75 mt-0.5">Default</span>
+                            <span className="text-[8px] opacity-75 mt-0.5">
+                              {slot.defaultType === 'SUBLOCATION' ? 'Sub' : slot.defaultType === 'LOCATION' ? 'Loc' : 'Cust'}
+                            </span>
                           )}
                         </div>
                       )}
@@ -537,7 +693,8 @@ export default function TimelineViewPage() {
                             </>
                           ) : (
                             <>
-                              <div className="font-semibold">Default Rate</div>
+                              <div className="font-semibold">{getDefaultTypeLabel(slot.defaultType)}</div>
+                              <div className="text-gray-300">Priority: {slot.defaultType === 'SUBLOCATION' ? 5 : slot.defaultType === 'LOCATION' ? 3 : 1}</div>
                               <div className="text-green-400">${slot.winningPrice}/hr</div>
                             </>
                           )}
@@ -549,8 +706,8 @@ export default function TimelineViewPage() {
               </div>
             </div>
 
-            {/* Stats Overview - MOVED BELOW TIMELINE */}
-            {(ratesheets.length > 0 || defaultRate > 0) && (
+            {/* Stats Overview */}
+            {(ratesheets.length > 0 || subLocationRate > 0 || locationRate > 0 || customerRate > 0) && (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                   <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
@@ -594,7 +751,7 @@ export default function TimelineViewPage() {
                         <p className="text-2xl font-bold text-gray-900 mt-1">
                           ${ratesheets.length > 0 ? Math.max(...ratesheets.flatMap(rs => 
                             rs.timeWindows?.map(tw => tw.pricePerHour) || [0]
-                          )) : defaultRate}
+                          )) : Math.max(subLocationRate, locationRate, customerRate)}
                         </p>
                       </div>
                       <DollarSign className="w-8 h-8 text-pink-500" />
@@ -602,122 +759,123 @@ export default function TimelineViewPage() {
                   </div>
                 </div>
 
-                {/* Default Rate Info */}
-                {defaultRate > 0 && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center text-white font-bold shadow-sm">
-                      <DollarSign className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-sm font-semibold text-gray-900">Default Hourly Rate</div>
-                      <div className="text-xs text-gray-600">
-                        Applied when no ratesheet matches: <span className="font-bold text-gray-900">${defaultRate}/hr</span>
-                      </div>
-                    </div>
+                {/* Pricing Items (Ratesheets + Default Rates) */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-bold text-gray-900">Pricing Rules (Priority Order)</h2>
+                    {selectedItems.size > 0 && (
+                      <span className="text-sm text-gray-600">
+                        {selectedItems.size} selected
+                      </span>
+                    )}
                   </div>
-                )}
+                  
+                  {getPricingItems().map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
+                    >
+                      <div className="p-6">
+                        <div className="flex items-center gap-4">
+                          {/* Checkbox */}
+                          <input
+                            type="checkbox"
+                            checked={selectedItems.has(item.id)}
+                            onChange={() => toggleItemSelection(item.id)}
+                            className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                          />
 
-                {/* Ratesheet Cards with Checkboxes */}
-                {ratesheets.length > 0 && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h2 className="text-lg font-bold text-gray-900">Active Ratesheets (Priority Order)</h2>
-                      {selectedRatesheets.size > 0 && (
-                        <span className="text-sm text-gray-600">
-                          {selectedRatesheets.size} selected
-                        </span>
-                      )}
-                    </div>
-                    
-                    {ratesheets.map((ratesheet, index) => (
-                      <div
-                        key={ratesheet._id}
-                        className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
-                      >
-                        <div className="p-6">
-                          <div className="flex items-center gap-4">
-                            {/* Checkbox */}
-                            <input
-                              type="checkbox"
-                              checked={selectedRatesheets.has(ratesheet._id)}
-                              onChange={() => toggleRatesheetSelection(ratesheet._id)}
-                              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
-                            />
-
-                            {/* Color Badge */}
-                            <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${getRatesheetColor(ratesheet._id)} flex items-center justify-center text-white font-bold text-lg shadow-md`}>
-                              #{index + 1}
-                            </div>
-                            
-                            {/* Content */}
-                            <div 
-                              className="flex-1 cursor-pointer"
-                              onClick={() => setExpandedRatesheet(expandedRatesheet === ratesheet._id ? null : ratesheet._id)}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <h3 className="text-lg font-bold text-gray-900">{ratesheet.name}</h3>
-                                  <div className="flex items-center gap-3 mt-1">
-                                    <span className={`text-xs px-2 py-1 rounded-full border font-semibold ${getPriorityBadgeColor(ratesheet.priority)}`}>
-                                      Priority: {ratesheet.priority}
-                                    </span>
+                          {/* Icon */}
+                          {item.icon}
+                          
+                          {/* Content */}
+                          <div 
+                            className="flex-1 cursor-pointer"
+                            onClick={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h3 className="text-lg font-bold text-gray-900">{item.name}</h3>
+                                <div className="flex items-center gap-3 mt-1">
+                                  <span className={`text-xs px-2 py-1 rounded-full border font-semibold ${getPriorityBadgeColor(item.priority)}`}>
+                                    Priority: {item.priority}
+                                  </span>
+                                  {item.type === 'RATESHEET' && (
                                     <span className="text-xs text-gray-500">
-                                      {new Date(ratesheet.effectiveFrom).toLocaleDateString()} - {' '}
-                                      {ratesheet.effectiveTo ? new Date(ratesheet.effectiveTo).toLocaleDateString() : 'Ongoing'}
+                                      {new Date(item.effectiveFrom!).toLocaleDateString()} - {' '}
+                                      {item.effectiveTo ? new Date(item.effectiveTo).toLocaleDateString() : 'Ongoing'}
                                     </span>
-                                  </div>
+                                  )}
+                                  {item.type !== 'RATESHEET' && (
+                                    <span className="text-xs text-gray-500">
+                                      Always Active
+                                    </span>
+                                  )}
                                 </div>
+                              </div>
 
-                                <div className="flex items-center gap-4">
-                                  <div className="text-right">
-                                    <div className="text-sm text-gray-500">Time Windows</div>
-                                    <div className="text-lg font-bold text-gray-900">
-                                      {ratesheet.timeWindows?.length || 0}
-                                    </div>
-                                  </div>
-                                  
-                                  {expandedRatesheet === ratesheet._id ? (
+                              <div className="flex items-center gap-4">
+                                <div className="text-right">
+                                  {item.type === 'RATESHEET' ? (
+                                    <>
+                                      <div className="text-sm text-gray-500">Time Windows</div>
+                                      <div className="text-lg font-bold text-gray-900">
+                                        {item.timeWindows?.length || 0}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div className="text-sm text-gray-500">Default Rate</div>
+                                      <div className="text-lg font-bold text-green-600">
+                                        ${item.rate}/hr
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                                
+                                {item.type === 'RATESHEET' && (
+                                  expandedItem === item.id ? (
                                     <ChevronUp className="w-5 h-5 text-gray-400" />
                                   ) : (
                                     <ChevronDown className="w-5 h-5 text-gray-400" />
-                                  )}
-                                </div>
+                                  )
+                                )}
                               </div>
                             </div>
                           </div>
                         </div>
-
-                        {expandedRatesheet === ratesheet._id && ratesheet.timeWindows && (
-                          <div className="border-t border-gray-200 bg-gray-50 p-6">
-                            <h4 className="text-sm font-semibold text-gray-700 mb-3">Time Windows & Rates</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {ratesheet.timeWindows.map((tw, idx) => (
-                                <div
-                                  key={idx}
-                                  className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm"
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <Clock className="w-4 h-4 text-gray-400" />
-                                    <span className={`text-xs px-2 py-0.5 rounded-full ${getPriorityBadgeColor(ratesheet.priority)}`}>
-                                      Window {idx + 1}
-                                    </span>
-                                  </div>
-                                  <div className="text-sm font-semibold text-gray-900 mb-1">
-                                    {tw.startTime} - {tw.endTime}
-                                  </div>
-                                  <div className="text-2xl font-bold text-green-600">
-                                    ${tw.pricePerHour}
-                                    <span className="text-sm text-gray-500 font-normal">/hr</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
-                    ))}
-                  </div>
-                )}
+
+                      {expandedItem === item.id && item.type === 'RATESHEET' && item.timeWindows && (
+                        <div className="border-t border-gray-200 bg-gray-50 p-6">
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3">Time Windows & Rates</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {item.timeWindows.map((tw, idx) => (
+                              <div
+                                key={idx}
+                                className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm"
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <Clock className="w-4 h-4 text-gray-400" />
+                                  <span className={`text-xs px-2 py-0.5 rounded-full ${getPriorityBadgeColor(item.priority)}`}>
+                                    Window {idx + 1}
+                                  </span>
+                                </div>
+                                <div className="text-sm font-semibold text-gray-900 mb-1">
+                                  {tw.startTime} - {tw.endTime}
+                                </div>
+                                <div className="text-2xl font-bold text-green-600">
+                                  ${tw.pricePerHour}
+                                  <span className="text-sm text-gray-500 font-normal">/hr</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </>
             )}
           </>
@@ -725,25 +883,60 @@ export default function TimelineViewPage() {
       </div>
 
       <style jsx global>{`
-        input[type="range"]::-webkit-slider-thumb {
+        input[type="range"].start-handle::-webkit-slider-thumb {
           appearance: none;
-          width: 20px;
-          height: 20px;
+          width: 24px;
+          height: 24px;
           border-radius: 50%;
-          background: #3B82F6;
-          cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+          background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+          cursor: grab;
+          border: 3px solid white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          position: relative;
+          z-index: 10;
+        }
+
+        input[type="range"].start-handle:active::-webkit-slider-thumb {
+          cursor: grabbing;
+          transform: scale(1.1);
+        }
+
+        input[type="range"].end-handle::-webkit-slider-thumb {
+          appearance: none;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+          cursor: grab;
+          border: 3px solid white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          position: relative;
+          z-index: 10;
+        }
+
+        input[type="range"].end-handle:active::-webkit-slider-thumb {
+          cursor: grabbing;
+          transform: scale(1.1);
         }
         
-        input[type="range"]::-moz-range-thumb {
-          width: 20px;
-          height: 20px;
+        input[type="range"].start-handle::-moz-range-thumb {
+          width: 24px;
+          height: 24px;
           border-radius: 50%;
-          background: #3B82F6;
-          cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+          background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+          cursor: grab;
+          border: 3px solid white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        input[type="range"].end-handle::-moz-range-thumb {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+          cursor: grab;
+          border: 3px solid white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
 
         input[type="range"] {
