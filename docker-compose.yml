@@ -1,6 +1,28 @@
 version: '3.8'
 
 services:
+  # MongoDB Database (PORT 27018 to avoid conflict with existing MongoDB)
+  mongodb:
+    image: mongo:7.0
+    container_name: venue-mongodb
+    ports:
+      - "27018:27017"  # HOST:CONTAINER - Maps container's 27017 to host's 27018
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: venue_management
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - venue-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Neo4j Graph Database (MERGED from your existing config)
   neo4j:
     image: neo4j:5.15.0
     container_name: venue-neo4j
@@ -16,9 +38,103 @@ services:
       - neo4j_logs:/logs
       - neo4j_import:/var/lib/neo4j/import
       - neo4j_plugins:/plugins
+    networks:
+      - venue-network
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p password 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Main Application (for Docker deployment, optional)
+  # Uncomment this section if you want to run the app in Docker
+  # Otherwise, run the app locally with: npm run dev
+  #
+  # IMPORTANT: If running in Docker, the MongoDB URI inside the container
+  # should use 'mongodb:27017' (internal Docker network)
+  # NOT 'localhost:27018' (that's for local development)
+  #
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: venue-app
+  #   ports:
+  #     - "3031:3031"
+  #   environment:
+  #     NODE_ENV: production
+  #     # Use internal Docker network - container talks to container
+  #     MONGODB_URI: mongodb://admin:password123@mongodb:27017/venue_management?authSource=admin
+  #     NEO4J_URI: bolt://neo4j:7687
+  #     NEO4J_USER: neo4j
+  #     NEO4J_PASSWORD: password
+  #   depends_on:
+  #     mongodb:
+  #       condition: service_healthy
+  #     neo4j:
+  #       condition: service_healthy
+  #   networks:
+  #     - venue-network
+  #   volumes:
+  #     - ./src:/app/src
+  #     - /app/node_modules
+  #   restart: unless-stopped
+
+  # Future: Pricing Microservice (currently commented out)
+  # pricing-service:
+  #   build:
+  #     context: ./services/pricing
+  #     dockerfile: Dockerfile
+  #   container_name: pricing-service
+  #   ports:
+  #     - "3001:3001"
+  #   environment:
+  #     NODE_ENV: production
+  #     MONGODB_URI: mongodb://admin:password123@mongodb:27017/venue_management?authSource=admin
+  #     SERVICE_NAME: pricing-service
+  #   depends_on:
+  #     mongodb:
+  #       condition: service_healthy
+  #   networks:
+  #     - venue-network
+  #   restart: unless-stopped
+
+  # Future: Customer/Hierarchy Microservice (currently commented out)
+  # hierarchy-service:
+  #   build:
+  #     context: ./services/hierarchy
+  #     dockerfile: Dockerfile
+  #   container_name: hierarchy-service
+  #   ports:
+  #     - "3002:3002"
+  #   environment:
+  #     NODE_ENV: production
+  #     MONGODB_URI: mongodb://admin:password123@mongodb:27017/venue_management?authSource=admin
+  #     NEO4J_URI: bolt://neo4j:7687
+  #     NEO4J_USER: neo4j
+  #     NEO4J_PASSWORD: password
+  #     SERVICE_NAME: hierarchy-service
+  #   depends_on:
+  #     mongodb:
+  #       condition: service_healthy
+  #     neo4j:
+  #       condition: service_healthy
+  #   networks:
+  #     - venue-network
+  #   restart: unless-stopped
+
+networks:
+  venue-network:
+    driver: bridge
 
 volumes:
+  mongodb_data:
+    driver: local
   neo4j_data:
+    driver: local
   neo4j_logs:
+    driver: local
   neo4j_import:
+    driver: local
   neo4j_plugins:
+    driver: local
