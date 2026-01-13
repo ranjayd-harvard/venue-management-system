@@ -3,7 +3,7 @@ import RelationshipManager from '@/components/RelationshipManager';
 
 export default function RelationshipsPage() {
   return (
-    <main className="min-h-screen p-8">
+    <main className="min-h-screen p-8 bg-white">
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-4xl font-bold text-gray-800">Manage Relationships</h1>
