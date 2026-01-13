@@ -483,6 +483,7 @@ export class PricingEngine {
 
   /**
    * Calculate default price
+   * ✅ FIXED: Now uses actual hours from each slot instead of slot count
    */
   private static calculateDefaultPrice(
     query: PricingQuery,
@@ -490,21 +491,29 @@ export class PricingEngine {
     timezone: string
   ): EnhancedPricingResult {
     const slots = this.generateHourlyTimeSlots(query.startDateTime, query.endDateTime, timezone);
-    const totalPrice = slots.length * defaultRate;
+    
+    // ✅ FIX: Calculate total price by summing (rate * actual hours) for each slot
+    let totalPrice = 0;
+    const breakdown = slots.map(slot => {
+      const subtotal = defaultRate * slot.hours; // ← Use slot.hours (may be fractional)
+      totalPrice += subtotal;
+      
+      return {
+        startDateTime: slot.start,
+        endDateTime: slot.end,
+        pricePerHour: defaultRate,
+        hours: slot.hours, // ← May be fractional (e.g., 0.5 for 30 minutes)
+        subtotal,
+        ratesheetId: new ObjectId(),
+        ratesheetName: 'Default Rate',
+        appliedRule: 'Default hourly rate'
+      };
+    });
 
     return {
       subLocationId: query.subLocationId,
       totalPrice,
-      breakdown: slots.map(slot => ({
-        startDateTime: slot.start,
-        endDateTime: slot.end,
-        pricePerHour: defaultRate,
-        hours: 1.0,
-        subtotal: defaultRate,
-        ratesheetId: new ObjectId(),
-        ratesheetName: 'Default Rate',
-        appliedRule: 'Default hourly rate'
-      })),
+      breakdown,
       currency: 'USD',
       decisionLog: slots.map(slot => ({
         timeSlot: slot,
