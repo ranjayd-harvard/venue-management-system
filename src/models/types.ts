@@ -12,6 +12,7 @@ export interface Customer {
   phone?: string;
   address?: string;
   attributes?: Attribute[];
+  defaultHourlyRate?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,6 +28,7 @@ export interface Location {
   country: string;
   totalCapacity?: number; // Total capacity of the location
   attributes?: Attribute[];
+  defaultHourlyRate?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +40,7 @@ export interface SubLocation {
   description?: string;
   allocatedCapacity?: number; // Capacity allocated to this sub-location
   attributes?: Attribute[];
+  defaultHourlyRate?: number;
   createdAt: Date;
   updatedAt: Date;
 }

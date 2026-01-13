@@ -34,12 +34,12 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
 
   const navItems = [
     { href: '/', icon: Home, label: 'Home', color: 'gray' },
-    { href: '/hierarchy', icon: Network, label: 'Hierarchy', color: 'indigo' },
+    { href: '/hierarchy', icon: Network, label: 'Hierarchy', color: 'red' },
     { href: '/customers', icon: Building2, label: 'Customers', color: 'blue' },
     { href: '/locations', icon: MapPin, label: 'Locations', color: 'green' },
     { href: '/venues', icon: Users, label: 'Venues', color: 'purple' },
-    { href: '/relationships', icon: Layers, label: 'Assignments', color: 'pink' },
-    { href: '/graph', icon: BarChart3, label: 'Graph', color: 'cyan' },
+    { href: '/relationships', icon: Layers, label: 'Assignments', color: 'oragne' },
+    { href: '/graph', icon: BarChart3, label: 'Graph', color: 'gray' },
   ];
 
   const pricingSubItems = [
@@ -59,7 +59,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       href: '/admin/pricing-settings', 
       icon: Settings, 
       label: 'Pricing Settings',
-      description: 'Enable/disable pricing'
+      description: 'Default Pricing Setup'
     },
     { 
       href: '/admin/pricing', 
@@ -86,7 +86,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
           {sidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
         </button>
 
-        <nav className="p-4 space-y-2">
+        <nav className="p-4 space-y-2 text-red-400">
           {/* Regular Nav Items */}
           {navItems.map((item) => {
             const Icon = item.icon;
