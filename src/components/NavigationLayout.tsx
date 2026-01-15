@@ -54,7 +54,13 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       icon: Timer, 
       label: 'Pricing Timeline',
       description: 'See Pricing Timeline'
-    },    
+    }, 
+    {   
+      href: '/pricing/timeline-all-sublocations', 
+      icon: Timer, 
+      label: 'Pricing Sublocations',
+      description: 'All Sublocations Pricing'
+    },        
     { 
       href: '/admin/pricing-settings', 
       icon: Settings, 

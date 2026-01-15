@@ -1,17 +1,35 @@
 'use client';
 
-import { useState } from 'react';
-import { X, Calendar, Clock, DollarSign, Layers, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Plus, Trash2, Clock, Calendar, Globe } from 'lucide-react';
+import TimezoneSelector from './TimezoneSelector';
 
-interface SubLocation {
+interface PriorityConfig {
   _id: string;
-  label: string;
-  description?: string;
+  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  minPriority: number;
+  maxPriority: number;
+  color: string;
+  description: string;
+}
+
+interface Customer {
+  _id: string;
+  name: string;
 }
 
 interface Location {
   _id: string;
+  customerId: string;
   name: string;
+  city: string;
+}
+
+interface SubLocation {
+  _id: string;
+  locationId: string;
+  label: string;
+  pricingEnabled: boolean;
 }
 
 interface TimeWindow {
@@ -23,130 +41,164 @@ interface TimeWindow {
 interface DurationRule {
   durationHours: number;
   totalPrice: number;
-  description?: string;
+  description: string;
 }
 
-interface CreateRatesheetModalProps {
+interface CreateRateSheetModalProps {
   isOpen: boolean;
   onClose: () => void;
-  locations: Location[];
-  sublocations: SubLocation[];
   onSuccess: () => void;
 }
 
-type RatesheetType = 'TIMING_BASED' | 'DURATION_BASED';
-type RecurrencePattern = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
-type ConflictResolution = 'PRIORITY' | 'HIGHEST_PRICE' | 'LOWEST_PRICE';
-
-const DAYS_OF_WEEK = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
-
-export default function CreateRatesheetModal({
-  isOpen,
-  onClose,
-  locations,
-  sublocations,
-  onSuccess
-}: CreateRatesheetModalProps) {
+export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: CreateRateSheetModalProps) {
   const [step, setStep] = useState(1);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
+  const [priorityConfigs, setPriorityConfigs] = useState<PriorityConfig[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
+  
   // Form state
+  const [applyTo, setApplyTo] = useState<'CUSTOMER' | 'LOCATION' | 'SUBLOCATION'>('SUBLOCATION');
+  const [selectedCustomer, setSelectedCustomer] = useState('');
+  const [selectedLocation, setSelectedLocation] = useState('');
+  const [selectedSubLocation, setSelectedSubLocation] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [type, setType] = useState<RatesheetType>('TIMING_BASED');
-  const [layer, setLayer] = useState<'CUSTOMER' | 'LOCATION' | 'SUBLOCATION'>('SUBLOCATION');
-  const [entityId, setEntityId] = useState('');
-  const [priority, setPriority] = useState(50);
-  const [conflictResolution, setConflictResolution] = useState<ConflictResolution>('PRIORITY');
+  const [ratesheetType, setRatesheetType] = useState<'TIMING_BASED' | 'DURATION_BASED'>('TIMING_BASED');
+  const [priority, setPriority] = useState('');
+  const [conflictResolution, setConflictResolution] = useState('PRIORITY');
+  const [timezone, setTimezone] = useState('');
   
-  // Date range
+  // Schedule state - NOW WITH TIME
   const [effectiveFrom, setEffectiveFrom] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
   
-  // Recurrence
-  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>('NONE');
-  const [daysOfWeek, setDaysOfWeek] = useState<string[]>([]);
-  const [dayOfMonth, setDayOfMonth] = useState<number | undefined>();
-  
-  // Timing-based
+  // Pricing state
   const [timeWindows, setTimeWindows] = useState<TimeWindow[]>([
     { startTime: '09:00', endTime: '17:00', pricePerHour: 100 }
   ]);
-  
-  // Duration-based
   const [durationRules, setDurationRules] = useState<DurationRule[]>([
-    { durationHours: 4, totalPrice: 350, description: '4-hour package' }
+    { durationHours: 4, totalPrice: 300, description: '4-hour package' },
+    { durationHours: 8, totalPrice: 500, description: '8-hour package' }
   ]);
+  
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const resetForm = () => {
-    setStep(1);
-    setName('');
-    setDescription('');
-    setType('TIMING_BASED');
-    setLayer('SUBLOCATION');
-    setEntityId('');
-    setPriority(50);
-    setConflictResolution('PRIORITY');
-    setEffectiveFrom('');
-    setEffectiveTo('');
-    setRecurrencePattern('NONE');
-    setDaysOfWeek([]);
-    setDayOfMonth(undefined);
-    setTimeWindows([{ startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
-    setDurationRules([{ durationHours: 4, totalPrice: 350, description: '4-hour package' }]);
-    setError('');
+  // Helper to format date for datetime-local input
+  const formatDateTimeLocal = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
   };
 
-  const handleClose = () => {
-    resetForm();
-    onClose();
-  };
+  // Load data on mount
+  useEffect(() => {
+    if (isOpen) {
+      loadInitialData();
+      
+      // Set default effectiveFrom to now
+      setEffectiveFrom(formatDateTimeLocal(new Date()));
+      
+      fetch('/api/customers')
+        .then(res => res.json())
+        .then(data => {
+          console.log('Customers loaded:', data);
+          setCustomers(data);
+        })
+        .catch(err => console.error('Error loading customers:', err));
+      
+      fetch('/api/pricing/config')
+        .then(res => res.json())
+        .then(data => {
+          console.log('Priority configs loaded:', data);
+          setPriorityConfigs(data);
+        })
+        .catch(err => console.error('Error loading priority configs:', err));
+    }
+  }, [isOpen]);
 
-  const handleSubmit = async () => {
+  useEffect(() => {
+    if (selectedCustomer) {
+      loadLocations(selectedCustomer);
+    } else {
+      setLocations([]);
+      setSublocations([]);
+    }
+  }, [selectedCustomer]);
+
+  useEffect(() => {
+    if (selectedLocation) {
+      loadSublocations(selectedLocation);
+    } else {
+      setSublocations([]);
+    }
+  }, [selectedLocation]);
+
+  const loadInitialData = async () => {
     try {
-      setSaving(true);
-      setError('');
+      console.log('Loading initial data...');
+      
+      const [configsRes, customersRes] = await Promise.all([
+        fetch('/api/pricing/config'),
+        fetch('/api/customers')
+      ]);
 
-      // Build request body
-      const ratesheetData = {
-        name,
-        description,
-        type,
-        layer,
-        entityId,
-        priority,
-        conflictResolution,
-        effectiveFrom: new Date(effectiveFrom).toISOString(),
-        effectiveTo: effectiveTo ? new Date(effectiveTo).toISOString() : undefined,
-        recurrence: recurrencePattern !== 'NONE' ? {
-          pattern: recurrencePattern,
-          daysOfWeek: recurrencePattern === 'WEEKLY' ? daysOfWeek : undefined,
-          dayOfMonth: recurrencePattern === 'MONTHLY' ? dayOfMonth : undefined
-        } : undefined,
-        timeWindows: type === 'TIMING_BASED' ? timeWindows : undefined,
-        durationRules: type === 'DURATION_BASED' ? durationRules : undefined,
-        status: 'DRAFT'
-      };
+      console.log('Configs response status:', configsRes.status);
+      console.log('Customers response status:', customersRes.status);
 
-      const response = await fetch('/api/ratesheets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ratesheetData)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create ratesheet');
+      if (!configsRes.ok) {
+        console.error('Failed to load pricing configs:', configsRes.status);
+      }
+      
+      if (!customersRes.ok) {
+        console.error('Failed to load customers:', customersRes.status);
+        setError('Failed to load customers. Please refresh the page.');
       }
 
-      onSuccess();
-      handleClose();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
+      const configs = await configsRes.json();
+      const customersData = await customersRes.json();
+
+      console.log('Loaded configs:', configs);
+      console.log('Loaded customers:', customersData);
+
+      setPriorityConfigs(configs);
+      setCustomers(customersData);
+      
+      if (customersData.length === 0) {
+        setError('No customers found. Please create a customer first.');
+      }
+    } catch (err) {
+      console.error('Failed to load initial data:', err);
+      setError('Failed to load initial data. Please check your connection and try again.');
     }
+  };
+
+  const loadLocations = async (customerId: string) => {
+    try {
+      const res = await fetch(`/api/locations?customerId=${customerId}`);
+      const data = await res.json();
+      setLocations(data);
+    } catch (err) {
+      console.error('Failed to load locations:', err);
+    }
+  };
+
+  const loadSublocations = async (locationId: string) => {
+    try {
+      const res = await fetch(`/api/sublocations?locationId=${locationId}`);
+      const data = await res.json();
+      setSublocations(data);
+    } catch (err) {
+      console.error('Failed to load sublocations:', err);
+    }
+  };
+
+  const getCurrentPriorityConfig = () => {
+    return priorityConfigs.find(c => c.type === applyTo);
   };
 
   const addTimeWindow = () => {
@@ -154,7 +206,9 @@ export default function CreateRatesheetModal({
   };
 
   const removeTimeWindow = (index: number) => {
-    setTimeWindows(timeWindows.filter((_, i) => i !== index));
+    if (timeWindows.length > 1) {
+      setTimeWindows(timeWindows.filter((_, i) => i !== index));
+    }
   };
 
   const updateTimeWindow = (index: number, field: keyof TimeWindow, value: any) => {
@@ -164,11 +218,13 @@ export default function CreateRatesheetModal({
   };
 
   const addDurationRule = () => {
-    setDurationRules([...durationRules, { durationHours: 4, totalPrice: 350, description: '' }]);
+    setDurationRules([...durationRules, { durationHours: 4, totalPrice: 300, description: '' }]);
   };
 
   const removeDurationRule = (index: number) => {
-    setDurationRules(durationRules.filter((_, i) => i !== index));
+    if (durationRules.length > 1) {
+      setDurationRules(durationRules.filter((_, i) => i !== index));
+    }
   };
 
   const updateDurationRule = (index: number, field: keyof DurationRule, value: any) => {
@@ -177,77 +233,207 @@ export default function CreateRatesheetModal({
     setDurationRules(updated);
   };
 
-  const toggleDayOfWeek = (day: string) => {
-    if (daysOfWeek.includes(day)) {
-      setDaysOfWeek(daysOfWeek.filter(d => d !== day));
+  const validateStep1 = () => {
+    if (!name.trim()) return 'Name is required';
+    if (!selectedCustomer) return 'Customer is required';
+    if (applyTo === 'LOCATION' && !selectedLocation) return 'Location is required';
+    if (applyTo === 'SUBLOCATION' && !selectedSubLocation) return 'SubLocation is required';
+    if (!priority) return 'Priority is required';
+    if (!timezone) return 'Timezone is required';
+    
+    const config = getCurrentPriorityConfig();
+    const priorityNum = parseInt(priority);
+    if (config && (priorityNum < config.minPriority || priorityNum > config.maxPriority)) {
+      return `Priority must be between ${config.minPriority} and ${config.maxPriority}`;
+    }
+    
+    return null;
+  };
+
+  const validateStep2 = () => {
+    if (!effectiveFrom) return 'Start date/time is required';
+    
+    // NEW: Validate datetime format and that effectiveTo is after effectiveFrom
+    if (effectiveTo) {
+      const fromDate = new Date(effectiveFrom);
+      const toDate = new Date(effectiveTo);
+      
+      if (toDate <= fromDate) {
+        return 'End date/time must be after start date/time';
+      }
+    }
+    
+    return null;
+  };
+
+  const validateStep3 = () => {
+    if (ratesheetType === 'TIMING_BASED') {
+      if (timeWindows.length === 0) return 'At least one time window is required';
+      
+      for (let i = 0; i < timeWindows.length; i++) {
+        const tw = timeWindows[i];
+        if (!tw.startTime || !tw.endTime) return `Time window ${i + 1}: Start and end times are required`;
+        if (tw.startTime >= tw.endTime) return `Time window ${i + 1}: Start time must be before end time`;
+        if (tw.pricePerHour <= 0) return `Time window ${i + 1}: Price must be greater than 0`;
+      }
     } else {
-      setDaysOfWeek([...daysOfWeek, day]);
+      if (durationRules.length === 0) return 'At least one duration package is required';
+      
+      for (let i = 0; i < durationRules.length; i++) {
+        const dr = durationRules[i];
+        if (dr.durationHours <= 0) return `Package ${i + 1}: Duration must be greater than 0`;
+        if (dr.totalPrice <= 0) return `Package ${i + 1}: Price must be greater than 0`;
+      }
+    }
+    
+    return null;
+  };
+
+  const handleNext = () => {
+    let validationError = null;
+    
+    if (step === 1) validationError = validateStep1();
+    if (step === 2) validationError = validateStep2();
+    if (step === 3) validationError = validateStep3();
+    
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    
+    setError('');
+    setStep(step + 1);
+  };
+
+  const handleSubmit = async () => {
+    const validationError = validateStep3();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload: any = {
+        name,
+        description,
+        type: ratesheetType,
+        priority: parseInt(priority),
+        conflictResolution,
+        effectiveFrom: new Date(effectiveFrom).toISOString(), // Convert to ISO
+        effectiveTo: effectiveTo ? new Date(effectiveTo).toISOString() : null, // Convert to ISO
+        isActive: true,
+        timezone,
+      };
+
+      if (applyTo === 'CUSTOMER') {
+        payload.customerId = selectedCustomer;
+      } else if (applyTo === 'LOCATION') {
+        payload.locationId = selectedLocation;
+      } else {
+        payload.subLocationId = selectedSubLocation;
+      }
+
+      if (ratesheetType === 'TIMING_BASED') {
+        payload.timeWindows = timeWindows;
+      } else {
+        payload.packages = durationRules;
+      }
+
+      const response = await fetch('/api/ratesheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to create ratesheet');
+      }
+
+      onSuccess();
+      handleClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create ratesheet');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const canProceed = () => {
-    switch (step) {
-      case 1:
-        return name.trim() && type && layer && entityId;
-      case 2:
-        return effectiveFrom;
-      case 3:
-        if (type === 'TIMING_BASED') {
-          return timeWindows.length > 0 && timeWindows.every(tw => 
-            tw.startTime && tw.endTime && tw.pricePerHour > 0
-          );
-        } else {
-          return durationRules.length > 0 && durationRules.every(dr => 
-            dr.durationHours > 0 && dr.totalPrice > 0
-          );
-        }
-      default:
-        return true;
-    }
+  const handleClose = () => {
+    setStep(1);
+    setError('');
+    setName('');
+    setDescription('');
+    setPriority('');
+    setSelectedCustomer('');
+    setSelectedLocation('');
+    setSelectedSubLocation('');
+    setEffectiveFrom('');
+    setEffectiveTo('');
+    setTimezone('');
+    setTimeWindows([{ startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
+    setDurationRules([
+      { durationHours: 4, totalPrice: 300, description: '4-hour package' },
+      { durationHours: 8, totalPrice: 500, description: '8-hour package' }
+    ]);
+    onClose();
   };
 
   if (!isOpen) return null;
 
-  const totalSteps = 4;
+  const config = getCurrentPriorityConfig();
+
+  const getEntityIdForTimezone = () => {
+    if (applyTo === 'SUBLOCATION') return selectedSubLocation;
+    if (applyTo === 'LOCATION') return selectedLocation;
+    return selectedCustomer;
+  };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-6">
-          <div className="flex items-center justify-between mb-4">
+        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 rounded-t-2xl flex justify-between items-center">
+          <div>
             <h2 className="text-2xl font-bold">Create New Ratesheet</h2>
-            <button
-              onClick={handleClose}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
+            <p className="text-blue-100 text-sm mt-1">
+              Step {step} of 4: {
+                step === 1 ? 'Basic Information' :
+                step === 2 ? 'Schedule' :
+                step === 3 ? 'Pricing Configuration' :
+                'Review & Confirm'
+              }
+            </p>
           </div>
-          
-          {/* Progress Steps */}
+          <button
+            onClick={handleClose}
+            className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 transition-colors"
+          >
+            <X size={24} />
+          </button>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="px-6 py-4 bg-gray-50">
           <div className="flex items-center justify-between">
             {[1, 2, 3, 4].map((s) => (
               <div key={s} className="flex items-center flex-1">
-                <div className="flex items-center">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${
-                    s < step ? 'bg-green-500' :
-                    s === step ? 'bg-white text-indigo-600' :
-                    'bg-white/30'
-                  }`}>
-                    {s < step ? <CheckCircle2 className="w-5 h-5" /> : s}
-                  </div>
-                  <div className="ml-2 text-sm font-medium">
-                    {s === 1 && 'Basic Info'}
-                    {s === 2 && 'Schedule'}
-                    {s === 3 && 'Pricing'}
-                    {s === 4 && 'Review'}
-                  </div>
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                    s <= step ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'
+                  }`}
+                >
+                  {s}
                 </div>
-                {s < totalSteps && (
-                  <div className={`flex-1 h-1 mx-2 ${
-                    s < step ? 'bg-green-500' : 'bg-white/30'
-                  }`} />
+                {s < 4 && (
+                  <div
+                    className={`flex-1 h-1 mx-2 ${
+                      s < step ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  />
                 )}
               </div>
             ))}
@@ -255,8 +441,14 @@ export default function CreateRatesheetModal({
         </div>
 
         {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-220px)]">
-          {/* Step 1: Basic Information */}
+        <div className="p-6 space-y-6">
+          {error && (
+            <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4 text-red-800">
+              {error}
+            </div>
+          )}
+
+          {/* STEP 1: Basic Information */}
           {step === 1 && (
             <div className="space-y-6">
               <div>
@@ -267,8 +459,8 @@ export default function CreateRatesheetModal({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 placeholder-gray-400 bg-white"
                   placeholder="e.g., Weekend Premium Rates"
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
                 />
               </div>
 
@@ -279,473 +471,501 @@ export default function CreateRatesheetModal({
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Optional description of this ratesheet..."
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 placeholder-gray-400 bg-white"
                   rows={3}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
+                  placeholder="Optional description..."
                 />
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Ratesheet Type *
-                </label>
-                <div className="grid grid-cols-2 gap-4">
-                  <button
-                    onClick={() => setType('TIMING_BASED')}
-                    className={`p-4 border-2 rounded-lg text-left transition-all ${
-                      type === 'TIMING_BASED'
-                        ? 'border-indigo-500 bg-indigo-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                  >
-                    <Clock className="w-8 h-8 text-indigo-600 mb-2" />
-                    <div className="font-semibold">Timing-Based</div>
-                    <div className="text-sm text-gray-600">Different rates for different times of day</div>
-                  </button>
-                  <button
-                    onClick={() => setType('DURATION_BASED')}
-                    className={`p-4 border-2 rounded-lg text-left transition-all ${
-                      type === 'DURATION_BASED'
-                        ? 'border-indigo-500 bg-indigo-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                  >
-                    <Calendar className="w-8 h-8 text-indigo-600 mb-2" />
-                    <div className="font-semibold">Duration-Based</div>
-                    <div className="text-sm text-gray-600">Package pricing based on booking length</div>
-                  </button>
-                </div>
               </div>
 
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Apply To *
                 </label>
-                <select
-                  value={layer}
-                  onChange={(e) => {
-                    setLayer(e.target.value as any);
-                    setEntityId('');
-                  }}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                >
-                  <option value="SUBLOCATION">Specific Sub-Location</option>
-                  <option value="LOCATION">Entire Location</option>
-                  <option value="CUSTOMER">Customer-wide</option>
-                </select>
-              </div>
-
-              {layer === 'SUBLOCATION' && (
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Select Sub-Location *
-                  </label>
-                  <select
-                    value={entityId}
-                    onChange={(e) => setEntityId(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  >
-                    <option value="">Choose a sub-location...</option>
-                    {sublocations.map((sl) => (
-                      <option key={sl._id} value={sl._id}>
-                        {sl.label} {sl.description && `- ${sl.description}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {layer === 'LOCATION' && (
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Select Location *
-                  </label>
-                  <select
-                    value={entityId}
-                    onChange={(e) => setEntityId(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  >
-                    <option value="">Choose a location...</option>
-                    {locations.map((loc) => (
-                      <option key={loc._id} value={loc._id}>
-                        {loc.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Priority (0-100)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={priority}
-                    onChange={(e) => setPriority(parseInt(e.target.value))}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Higher priority ratesheets apply first</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Conflict Resolution
-                  </label>
-                  <select
-                    value={conflictResolution}
-                    onChange={(e) => setConflictResolution(e.target.value as ConflictResolution)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  >
-                    <option value="PRIORITY">By Priority</option>
-                    <option value="HIGHEST_PRICE">Highest Price</option>
-                    <option value="LOWEST_PRICE">Lowest Price</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 2: Schedule */}
-          {step === 2 && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Effective From *
-                  </label>
-                  <input
-                    type="date"
-                    value={effectiveFrom}
-                    onChange={(e) => setEffectiveFrom(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Effective To (Optional)
-                  </label>
-                  <input
-                    type="date"
-                    value={effectiveTo}
-                    onChange={(e) => setEffectiveTo(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Leave empty for no end date</p>
+                <div className="grid grid-cols-3 gap-3">
+                  {(['CUSTOMER', 'LOCATION', 'SUBLOCATION'] as const).map((type) => {
+                    const config = priorityConfigs.find(c => c.type === type);
+                    const isSelected = applyTo === type;
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setApplyTo(type);
+                          setPriority('');
+                        }}
+                        className={`p-4 rounded-lg border-2 transition-all ${
+                          isSelected
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-300 hover:border-gray-400 bg-white'
+                        }`}
+                      >
+                        <div className="font-semibold text-gray-900">{type}</div>
+                        {config && (
+                          <div className="text-xs text-gray-600 mt-1">
+                            Priority: {config.minPriority}-{config.maxPriority}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Recurrence Pattern
+                  Customer *
                 </label>
                 <select
-                  value={recurrencePattern}
-                  onChange={(e) => setRecurrencePattern(e.target.value as RecurrencePattern)}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
+                  value={selectedCustomer}
+                  onChange={(e) => {
+                    console.log('Customer selected:', e.target.value);
+                    setSelectedCustomer(e.target.value);
+                    setSelectedLocation('');
+                    setSelectedSubLocation('');
+                  }}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
                 >
-                  <option value="NONE">No Recurrence (One-time or always active)</option>
-                  <option value="DAILY">Daily</option>
-                  <option value="WEEKLY">Weekly</option>
-                  <option value="MONTHLY">Monthly</option>
-                  <option value="YEARLY">Yearly</option>
+                  <option value="" className="text-gray-500">Select customer...</option>
+                  {customers.length === 0 && (
+                    <option value="" disabled className="text-gray-400">Loading customers...</option>
+                  )}
+                  {customers.map((c) => (
+                    <option key={c._id} value={c._id} className="text-gray-900">
+                      {c.name}
+                    </option>
+                  ))}
                 </select>
+                {customers.length === 0 && (
+                  <p className="text-xs text-red-500 mt-1">
+                    No customers found. Please create a customer first.
+                  </p>
+                )}
               </div>
 
-              {recurrencePattern === 'WEEKLY' && (
+              {applyTo !== 'CUSTOMER' && selectedCustomer && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Select Days of Week
+                    Location {applyTo === 'LOCATION' && '*'}
                   </label>
-                  <div className="grid grid-cols-7 gap-2">
-                    {DAYS_OF_WEEK.map((day) => (
-                      <button
-                        key={day}
-                        onClick={() => toggleDayOfWeek(day)}
-                        className={`py-2 px-1 text-xs font-medium rounded-lg transition-all ${
-                          daysOfWeek.includes(day)
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >
-                        {day.slice(0, 3)}
-                      </button>
+                  <select
+                    value={selectedLocation}
+                    onChange={(e) => {
+                      console.log('Location selected:', e.target.value);
+                      setSelectedLocation(e.target.value);
+                      setSelectedSubLocation('');
+                    }}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
+                  >
+                    <option value="" className="text-gray-500">Select location...</option>
+                    {locations.length === 0 && (
+                      <option value="" disabled className="text-gray-400">Loading locations...</option>
+                    )}
+                    {locations.map((l) => (
+                      <option key={l._id} value={l._id} className="text-gray-900">
+                        {l.name} ({l.city})
+                      </option>
                     ))}
-                  </div>
+                  </select>
+                  {locations.length === 0 && (
+                    <p className="text-xs text-yellow-600 mt-1">
+                      No locations found for this customer.
+                    </p>
+                  )}
                 </div>
               )}
 
-              {recurrencePattern === 'MONTHLY' && (
+              {applyTo === 'SUBLOCATION' && selectedLocation && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Day of Month
+                    SubLocation *
+                  </label>
+                  <select
+                    value={selectedSubLocation}
+                    onChange={(e) => {
+                      console.log('SubLocation selected:', e.target.value);
+                      setSelectedSubLocation(e.target.value);
+                    }}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
+                  >
+                    <option value="" className="text-gray-500">Select sublocation...</option>
+                    {sublocations.filter(s => s.pricingEnabled).length === 0 && (
+                      <option value="" disabled className="text-gray-400">No pricing-enabled sublocations...</option>
+                    )}
+                    {sublocations.filter(s => s.pricingEnabled).map((s) => (
+                      <option key={s._id} value={s._id} className="text-gray-900">
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                  {sublocations.filter(s => s.pricingEnabled).length === 0 && (
+                    <p className="text-xs text-yellow-600 mt-1">
+                      No pricing-enabled sublocations for this location.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Type
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setRatesheetType('TIMING_BASED')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      ratesheetType === 'TIMING_BASED'
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-300 hover:border-gray-400 bg-white'
+                    }`}
+                  >
+                    <Clock className="mx-auto mb-2 text-gray-700" size={24} />
+                    <div className="font-semibold text-gray-900">Time-Based</div>
+                    <div className="text-xs text-gray-600">Different rates by time</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRatesheetType('DURATION_BASED')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      ratesheetType === 'DURATION_BASED'
+                        ? 'border-purple-500 bg-purple-50'
+                        : 'border-gray-300 hover:border-gray-400 bg-white'
+                    }`}
+                  >
+                    <Calendar className="mx-auto mb-2 text-gray-700" size={24} />
+                    <div className="font-semibold text-gray-900">Package-Based</div>
+                    <div className="text-xs text-gray-600">Fixed packages</div>
+                  </button>
+                </div>
+              </div>
+
+              {config && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Priority * ({config.minPriority} - {config.maxPriority})
                   </label>
                   <input
                     type="number"
-                    min="1"
-                    max="31"
-                    value={dayOfMonth || ''}
-                    onChange={(e) => setDayOfMonth(parseInt(e.target.value))}
-                    placeholder="1-31"
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900"
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                    min={config.minPriority}
+                    max={config.maxPriority}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 text-gray-900 placeholder-gray-400 bg-white"
+                    placeholder={`Enter priority (${config.minPriority}-${config.maxPriority})`}
                   />
+                  <p className="text-sm text-gray-600 mt-2">{config.description}</p>
+                </div>
+              )}
+
+              <TimezoneSelector
+                value={timezone}
+                onChange={setTimezone}
+                entityType={applyTo}
+                entityId={getEntityIdForTimezone()}
+                label="Timezone *"
+                showInheritedFrom={true}
+              />
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Conflict Resolution
+                </label>
+                <select
+                  value={conflictResolution}
+                  onChange={(e) => setConflictResolution(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 text-gray-900 bg-white"
+                >
+                  <option value="PRIORITY">Use Priority</option>
+                  <option value="HIGHEST_PRICE">Highest Price</option>
+                  <option value="LOWEST_PRICE">Lowest Price</option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: Schedule - NOW WITH DATETIME-LOCAL */}
+          {step === 2 && (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Effective From * (Date & Time in {timezone || 'selected timezone'})
+                </label>
+                <input
+                  type="datetime-local"
+                  value={effectiveFrom}
+                  onChange={(e) => setEffectiveFrom(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 text-gray-900 bg-white"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  📅 Select both date and time when this ratesheet becomes active
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Effective To (Optional - Date & Time)
+                </label>
+                <input
+                  type="datetime-local"
+                  value={effectiveTo}
+                  onChange={(e) => setEffectiveTo(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 text-gray-900 bg-white"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  📅 Leave blank for indefinite duration. If same day as start, pick a later time.
+                </p>
+              </div>
+
+              {/* Show validation hint */}
+              {effectiveFrom && effectiveTo && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-800">
+                    ✓ Duration: {new Date(effectiveFrom).toLocaleString()} to {new Date(effectiveTo).toLocaleString()}
+                    {new Date(effectiveTo) <= new Date(effectiveFrom) && (
+                      <span className="block text-red-600 font-semibold mt-1">
+                        ⚠️ End time must be after start time!
+                      </span>
+                    )}
+                  </p>
                 </div>
               )}
             </div>
           )}
 
-          {/* Step 3: Pricing Rules */}
-          {step === 3 && type === 'TIMING_BASED' && (
+          {/* STEP 3: Pricing Configuration */}
+          {step === 3 && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Time Windows</h3>
-                <button
-                  onClick={addTimeWindow}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                >
-                  + Add Time Window
-                </button>
-              </div>
-
-              {timeWindows.map((tw, index) => (
-                <div key={index} className="p-4 border-2 border-gray-200 rounded-lg">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="font-medium text-gray-700">Time Window {index + 1}</span>
-                    {timeWindows.length > 1 && (
-                      <button
-                        onClick={() => removeTimeWindow(index)}
-                        className="text-red-600 hover:text-red-700 text-sm font-medium"
-                      >
-                        Remove
-                      </button>
-                    )}
+              {ratesheetType === 'TIMING_BASED' ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-gray-900">Time Windows</h3>
+                    <button
+                      onClick={addTimeWindow}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      <Plus size={18} />
+                      Add Window
+                    </button>
                   </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
-                      <input
-                        type="time"
-                        value={tw.startTime}
-                        onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
-                      <input
-                        type="time"
-                        value={tw.endTime}
-                        onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Price per Hour</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="10"
-                          value={tw.pricePerHour}
-                          onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
-                          className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                        />
+
+                  {timeWindows.map((tw, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold text-gray-900">Window {index + 1}</h4>
+                        {timeWindows.length > 1 && (
+                          <button
+                            onClick={() => removeTimeWindow(index)}
+                            className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Start Time
+                          </label>
+                          <input
+                            type="time"
+                            value={tw.startTime}
+                            onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            End Time
+                          </label>
+                          <input
+                            type="time"
+                            value={tw.endTime}
+                            onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Price/Hour ($)
+                          </label>
+                          <input
+                            type="number"
+                            value={tw.pricePerHour}
+                            onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
                       </div>
                     </div>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-gray-900">Duration Packages</h3>
+                    <button
+                      onClick={addDurationRule}
+                      className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                    >
+                      <Plus size={18} />
+                      Add Package
+                    </button>
                   </div>
-                </div>
-              ))}
+
+                  {durationRules.map((dr, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-semibold text-gray-900">Package {index + 1}</h4>
+                        {durationRules.length > 1 && (
+                          <button
+                            onClick={() => removeDurationRule(index)}
+                            className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Duration (Hours)
+                          </label>
+                          <input
+                            type="number"
+                            value={dr.durationHours}
+                            onChange={(e) => updateDurationRule(index, 'durationHours', parseFloat(e.target.value))}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                            min="0"
+                            step="0.5"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Total Price ($)
+                          </label>
+                          <input
+                            type="number"
+                            value={dr.totalPrice}
+                            onChange={(e) => updateDurationRule(index, 'totalPrice', parseFloat(e.target.value))}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Description
+                          </label>
+                          <input
+                            type="text"
+                            value={dr.description}
+                            onChange={(e) => updateDurationRule(index, 'description', e.target.value)}
+                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 placeholder-gray-400 bg-white"
+                            placeholder="e.g., Half-day"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
 
-          {step === 3 && type === 'DURATION_BASED' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Duration Rules</h3>
-                <button
-                  onClick={addDurationRule}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                >
-                  + Add Duration Rule
-                </button>
-              </div>
-
-              {durationRules.map((dr, index) => (
-                <div key={index} className="p-4 border-2 border-gray-200 rounded-lg">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="font-medium text-gray-700">Package {index + 1}</span>
-                    {durationRules.length > 1 && (
-                      <button
-                        onClick={() => removeDurationRule(index)}
-                        className="text-red-600 hover:text-red-700 text-sm font-medium"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 mb-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Duration (Hours)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="0.5"
-                        value={dr.durationHours}
-                        onChange={(e) => updateDurationRule(index, 'durationHours', parseFloat(e.target.value))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Total Price</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="50"
-                          value={dr.totalPrice}
-                          onChange={(e) => updateDurationRule(index, 'totalPrice', parseFloat(e.target.value))}
-                          className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Description (Optional)</label>
-                    <input
-                      type="text"
-                      value={dr.description || ''}
-                      onChange={(e) => updateDurationRule(index, 'description', e.target.value)}
-                      placeholder="e.g., 4-hour morning package"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900"
-                    />
-                  </div>
-                  {dr.durationHours > 0 && dr.totalPrice > 0 && (
-                    <div className="mt-2 text-sm text-gray-600">
-                      Effective rate: ${(dr.totalPrice / dr.durationHours).toFixed(2)}/hour
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Step 4: Review */}
+          {/* STEP 4: Review */}
           {step === 4 && (
-            <div className="space-y-6">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h3 className="font-semibold text-blue-900 mb-3">Review Your Ratesheet</h3>
-                <dl className="space-y-2 text-sm">
+            <div className="space-y-4">
+              <div className="bg-blue-50 rounded-lg p-6 border-2 border-blue-200">
+                <h3 className="text-lg font-semibold text-blue-900 mb-4">Review Your Ratesheet</h3>
+                
+                <div className="space-y-3 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Name:</dt>
-                    <dd className="font-medium">{name}</dd>
+                    <span className="text-gray-600">Name:</span>
+                    <span className="font-semibold text-gray-900">{name}</span>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Type:</dt>
-                    <dd className="font-medium">{type === 'TIMING_BASED' ? 'Timing-Based' : 'Duration-Based'}</dd>
+                    <span className="text-gray-600">Type:</span>
+                    <span className="font-semibold text-gray-900">{ratesheetType}</span>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Layer:</dt>
-                    <dd className="font-medium">{layer}</dd>
+                    <span className="text-gray-600">Apply To:</span>
+                    <span className="font-semibold text-gray-900">{applyTo}</span>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Effective From:</dt>
-                    <dd className="font-medium">{new Date(effectiveFrom).toLocaleDateString()}</dd>
+                    <span className="text-gray-600">Priority:</span>
+                    <span className="font-semibold text-gray-900">{priority}</span>
                   </div>
-                  {effectiveTo && (
-                    <div className="flex justify-between">
-                      <dt className="text-gray-600">Effective To:</dt>
-                      <dd className="font-medium">{new Date(effectiveTo).toLocaleDateString()}</dd>
-                    </div>
-                  )}
                   <div className="flex justify-between">
-                    <dt className="text-gray-600">Priority:</dt>
-                    <dd className="font-medium">{priority}</dd>
+                    <span className="text-gray-600">Timezone:</span>
+                    <span className="font-semibold text-gray-900">{timezone}</span>
                   </div>
-                  {type === 'TIMING_BASED' && (
-                    <div className="flex justify-between">
-                      <dt className="text-gray-600">Time Windows:</dt>
-                      <dd className="font-medium">{timeWindows.length}</dd>
-                    </div>
-                  )}
-                  {type === 'DURATION_BASED' && (
-                    <div className="flex justify-between">
-                      <dt className="text-gray-600">Duration Rules:</dt>
-                      <dd className="font-medium">{durationRules.length}</dd>
-                    </div>
-                  )}
-                </dl>
-              </div>
-
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start">
-                <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5 mr-3 flex-shrink-0" />
-                <div className="text-sm text-yellow-800">
-                  <p className="font-medium mb-1">Ratesheet will be created as DRAFT</p>
-                  <p>You'll need to submit it for approval before it becomes active.</p>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-gray-600">Effective Period:</span>
+                    <span className="font-semibold text-gray-900">
+                      📅 {new Date(effectiveFrom).toLocaleString()}
+                    </span>
+                    {effectiveTo && (
+                      <span className="font-semibold text-gray-900">
+                        to 📅 {new Date(effectiveTo).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">
+                      {ratesheetType === 'TIMING_BASED' ? 'Time Windows:' : 'Packages:'}
+                    </span>
+                    <span className="font-semibold text-gray-900">
+                      {ratesheetType === 'TIMING_BASED' ? timeWindows.length : durationRules.length}
+                    </span>
+                  </div>
                 </div>
               </div>
-
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
-                  {error}
-                </div>
-              )}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 p-6 bg-gray-50 flex items-center justify-between">
-          <button
-            onClick={() => setStep(Math.max(1, step - 1))}
-            disabled={step === 1 || saving}
-            className="px-6 py-2 text-gray-600 hover:text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Back
-          </button>
-          
-          <div className="flex gap-3">
+        <div className="sticky bottom-0 bg-gray-50 px-6 py-4 rounded-b-2xl border-t-2 border-gray-200 flex justify-between">
+          {step > 1 ? (
+            <button
+              onClick={() => setStep(step - 1)}
+              className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold"
+            >
+              Back
+            </button>
+          ) : (
             <button
               onClick={handleClose}
-              className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
-              disabled={saving}
+              className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold"
             >
               Cancel
             </button>
-            
-            {step < totalSteps ? (
-              <button
-                onClick={() => setStep(step + 1)}
-                disabled={!canProceed()}
-                className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Next
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmit}
-                disabled={saving}
-                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
-              >
-                {saving ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Creating...
-                  </>
-                ) : (
-                  'Create Ratesheet'
-                )}
-              </button>
-            )}
-          </div>
+          )}
+
+          {step < 4 ? (
+            <button
+              onClick={handleNext}
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"
+            >
+              Next
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={loading}
+              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold disabled:opacity-50"
+            >
+              {loading ? 'Creating...' : 'Create Ratesheet'}
+            </button>
+          )}
         </div>
       </div>
     </div>
