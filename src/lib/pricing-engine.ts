@@ -1,538 +1,431 @@
-import { ObjectId } from 'mongodb';
-import { 
-  Ratesheet, 
-  RatesheetRepository, 
-  PricingQuery, 
-  PricingResult,
-} from '@/models/Ratesheet';
-import { SubLocationRepository } from '@/models/SubLocation';
+// src/lib/pricing-engine.ts
+// 🔧 FIXED VERSION: Ratesheets ALWAYS override default rates
 
-interface DecisionLog {
-  timeSlot: {
-    start: Date;
-    end: Date;
-    localTime: string;
-  };
-  candidateRatesheets: Array<{
-    id: string;
-    name: string;
-    priority: number;
-    conflictResolution: string;
-    price: number;
-    reason: string;
-    matchedTimeWindow?: string;
-  }>;
-  winner: {
-    id: string;
-    name: string;
-    price: number;
-    reason: string;
-    matchedTimeWindow?: string;
-  };
-  rejectedRatesheets: Array<{
-    id: string;
-    name: string;
-    price: number;
-    reason: string;
-  }>;
+import { ObjectId } from 'mongodb';
+
+interface TimeWindow {
+  startTime: string;
+  endTime: string;
+  pricePerHour: number;
 }
 
-interface EnhancedPricingResult extends PricingResult {
-  decisionLog: DecisionLog[];
+interface DurationRule {
+  durationHours: number;
+  totalPrice: number;
+  description: string;
+}
+
+interface Ratesheet {
+  _id: ObjectId | string;
+  subLocationId?: ObjectId | string;
+  locationId?: ObjectId | string;
+  customerId?: ObjectId | string;
+  name: string;
+  description?: string;
+  type: 'TIMING_BASED' | 'DURATION_BASED';
+  priority: number;
+  conflictResolution: 'PRIORITY' | 'HIGHEST_PRICE' | 'LOWEST_PRICE';
+  isActive: boolean;
+  effectiveFrom: Date | string;
+  effectiveTo?: Date | string;
+  timeWindows?: TimeWindow[];
+  durationRules?: DurationRule[];
+}
+
+interface DefaultRate {
+  level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  hourlyRate: number;
+  entityId: string;
+}
+
+interface PricingContext {
+  customerId: string;
+  locationId: string;
+  subLocationId: string;
+  startDateTime: Date;
+  endDateTime: Date;
+}
+
+interface DecisionLogEntry {
+  timestamp: string;
+  step: string;
+  action: string;
+  details: any;
+  result?: any;
+}
+
+interface PricingBreakdown {
+  startDateTime: string;
+  endDateTime: string;
+  pricePerHour: number;
+  hours: number;
+  subtotal: number;
+  ratesheetId: string;
+  ratesheetName: string;
+  appliedRule: string;
+}
+
+interface PricingResult {
+  totalPrice: number;
+  breakdown: PricingBreakdown[];
+  currency: string;
+  decisionLog: DecisionLogEntry[];
   ratesheetsSummary: {
-    totalConsidered: number;
-    totalApplied: number;
-    ratesheets: Array<{
-      id: string;
-      name: string;
-      timesApplied: number;
-      totalRevenue: number;
-      priority: number;
-    }>;
+    total: number;
+    evaluated: number;
+    applicable: number;
+    selected: number;
   };
 }
 
 /**
- * Main pricing calculation function - exported for API routes
+ * 🔧 CRITICAL FIX: Ratesheets now ALWAYS override default rates
+ * 
+ * PRIORITY ORDER (FIXED):
+ * 1. ANY active ratesheet (Customer/Location/SubLocation) - by hierarchy and priority
+ * 2. Default rates (ONLY if NO ratesheets found) - by hierarchy
+ * 
+ * BUG FIX: Default rates at SubLocation level were overriding Customer-level ratesheets
+ * NEW: Ratesheets ALWAYS win, defaults are true fallback
  */
-export async function calculatePricing(
-  subLocationId: ObjectId,
-  startDateTime: Date,
-  endDateTime: Date,
-  timezone?: string
-): Promise<EnhancedPricingResult> {
-  return PricingEngine.calculatePrice({
-    subLocationId,
-    startDateTime,
-    endDateTime
-  }, timezone);
-}
-
 export class PricingEngine {
+  private decisionLog: DecisionLogEntry[] = [];
+
+  private log(step: string, action: string, details: any, result?: any) {
+    this.decisionLog.push({
+      timestamp: new Date().toISOString(),
+      step,
+      action,
+      details,
+      result,
+    });
+  }
+
   /**
-   * Calculate price for a given sublocation and time range with decision audit
+   * Main calculation method
    */
-  static async calculatePrice(
-    query: PricingQuery,
-    timezone: string = 'America/New_York'
-  ): Promise<EnhancedPricingResult> {
-    const { subLocationId, startDateTime, endDateTime } = query;
+  async calculatePrice(
+    context: PricingContext,
+    ratesheets: Ratesheet[],
+    defaultRates: DefaultRate[]
+  ): Promise<PricingResult> {
+    this.decisionLog = [];
+    this.log('START', 'Begin pricing calculation', {
+      context,
+      availableRatesheets: ratesheets.length,
+      availableDefaultRates: defaultRates.length,
+    });
 
-    console.log('[PricingEngine] Calculating with timezone:', timezone);
-    console.log('[PricingEngine] Start:', startDateTime);
-    console.log('[PricingEngine] End:', endDateTime);
+    // Step 1: Filter active ratesheets
+    const activeRatesheets = ratesheets.filter(rs => rs.isActive);
+    this.log('FILTER', 'Filter active ratesheets', {
+      total: ratesheets.length,
+      active: activeRatesheets.length,
+      inactive: ratesheets.length - activeRatesheets.length,
+    });
 
-    // Fetch sublocation
-    const sublocation = await SubLocationRepository.findById(subLocationId);
-    if (!sublocation) {
-      throw new Error('SubLocation not found');
-    }
-
-    if (sublocation.pricingEnabled === false) {
-      throw new Error('Pricing is not enabled for this SubLocation');
-    }
-
-    if (sublocation.isActive === false) {
-      throw new Error('This SubLocation is not active');
-    }
-
-    // Get ALL ratesheets for this sublocation (we'll filter by time window later)
-    const allRatesheets = await RatesheetRepository.findApplicableRatesheets(
-      subLocationId,
-      sublocation.locationId,
-      startDateTime,
-      endDateTime
+    // Step 2: Find applicable ratesheets (by date range and entity)
+    const applicableRatesheets = this.filterApplicableRatesheets(
+      activeRatesheets,
+      context
     );
 
-    console.log(`[PricingEngine] Found ${allRatesheets.length} ratesheets in date range`);
-    allRatesheets.forEach(rs => {
-      console.log(`  - ${rs.name}: priority=${rs.priority}, windows=${rs.timeWindows?.length || 0}`);
+    this.log('APPLICABLE', 'Found applicable ratesheets', {
+      count: applicableRatesheets.length,
+      ratesheets: applicableRatesheets.map(rs => ({
+        name: rs.name,
+        type: this.getRatesheetLevel(rs),
+        priority: rs.priority,
+      })),
     });
 
-    if (allRatesheets.length === 0) {
-      if (sublocation.defaultHourlyRate) {
-        console.log(`[PricingEngine] Using default rate: $${sublocation.defaultHourlyRate}/hr`);
-        return this.calculateDefaultPrice(query, sublocation.defaultHourlyRate, timezone);
-      }
-      throw new Error('No applicable ratesheets found and no default rate set');
+    // Step 3: 🔥 KEY FIX - Try ratesheets FIRST
+    if (applicableRatesheets.length > 0) {
+      this.log('DECISION', 'Ratesheets found - using ratesheet pricing', {
+        message: 'Ignoring default rates (ratesheets take precedence)',
+        count: applicableRatesheets.length,
+      });
+      
+      return this.calculateWithRatesheets(context, applicableRatesheets);
     }
 
-    // Generate hourly time slots
-    const timeSlots = this.generateHourlyTimeSlots(startDateTime, endDateTime, timezone);
-    console.log(`[PricingEngine] Generated ${timeSlots.length} hourly time slots`);
+    // Step 4: 🔥 FALLBACK - Only use default rates if NO ratesheets
+    this.log('DECISION', 'No ratesheets found - falling back to default rates', {
+      message: 'Using default rate hierarchy',
+    });
 
-    // Calculate price for each hourly slot
-    const breakdown: PricingResult['breakdown'] = [];
-    const decisionLog: DecisionLog[] = [];
-    const ratesheetUsage = new Map<string, { name: string; count: number; revenue: number; priority: number }>();
-    let totalPrice = 0;
-
-    for (const slot of timeSlots) {
-      // For each slot, find ratesheets that:
-      // 1. Cover this DATE (effectiveFrom/To)
-      // 2. Have a time window that covers this HOUR
-      const candidateRatesheets = this.findRatesheetsForTimeSlot(
-        allRatesheets,
-        slot.start,
-        slot.localTime
-      );
-
-      console.log(`[PricingEngine] Slot ${slot.localTime} (${slot.hours.toFixed(2)}h): ${candidateRatesheets.length} candidates`);
-
-      if (candidateRatesheets.length === 0) {
-        // No matching ratesheet for this time, use default
-        if (sublocation.defaultHourlyRate) {
-          const subtotal = sublocation.defaultHourlyRate * slot.hours; // ← Use actual hours
-          totalPrice += subtotal;
-
-          breakdown.push({
-            startDateTime: slot.start,
-            endDateTime: slot.end,
-            pricePerHour: sublocation.defaultHourlyRate,
-            hours: slot.hours, // ← May be fractional
-            subtotal,
-            ratesheetId: new ObjectId(),
-            ratesheetName: 'Default Rate',
-            appliedRule: 'No matching time window'
-          });
-
-          decisionLog.push({
-            timeSlot: slot,
-            candidateRatesheets: [],
-            winner: {
-              id: 'default',
-              name: 'Default Rate',
-              price: sublocation.defaultHourlyRate,
-              reason: 'No ratesheets match this time slot'
-            },
-            rejectedRatesheets: []
-          });
-        }
-        continue;
-      }
-
-      // Resolve conflict and pick winner
-      const { winner, candidates, rejected } = this.resolveConflictWithLog(
-        candidateRatesheets,
-        slot.start,
-        slot.localTime
-      );
-
-      const pricePerHour = winner.price;
-      const subtotal = pricePerHour * slot.hours; // ← Use actual hours (prorated!)
-
-      totalPrice += subtotal;
-      breakdown.push({
-        startDateTime: slot.start,
-        endDateTime: slot.end,
-        pricePerHour,
-        hours: slot.hours, // ← May be fractional
-        subtotal,
-        ratesheetId: winner.ratesheet._id!,
-        ratesheetName: winner.ratesheet.name,
-        appliedRule: winner.matchedWindow || 'Default rule'
-      });
-
-      // Track usage
-      const ratesheetId = winner.ratesheet._id!.toString();
-      if (ratesheetUsage.has(ratesheetId)) {
-        const usage = ratesheetUsage.get(ratesheetId)!;
-        usage.count++;
-        usage.revenue += subtotal;
-      } else {
-        ratesheetUsage.set(ratesheetId, {
-          name: winner.ratesheet.name,
-          count: 1,
-          revenue: subtotal,
-          priority: winner.ratesheet.priority
-        });
-      }
-
-      // Log decision
-      decisionLog.push({
-        timeSlot: slot,
-        candidateRatesheets: candidates,
-        winner: {
-          id: ratesheetId,
-          name: winner.ratesheet.name,
-          price: pricePerHour,
-          reason: winner.reason,
-          matchedTimeWindow: winner.matchedWindow
-        },
-        rejectedRatesheets: rejected
-      });
-    }
-
-    console.log(`[PricingEngine] Total price: $${totalPrice}`);
-
-    // Build summary
-    const ratesheetsSummary = {
-      totalConsidered: allRatesheets.length,
-      totalApplied: ratesheetUsage.size,
-      ratesheets: Array.from(ratesheetUsage.entries()).map(([id, usage]) => ({
-        id,
-        name: usage.name,
-        timesApplied: usage.count,
-        totalRevenue: usage.revenue,
-        priority: usage.priority
-      })).sort((a, b) => b.totalRevenue - a.totalRevenue)
-    };
-
-    return {
-      subLocationId,
-      totalPrice,
-      breakdown,
-      currency: 'USD',
-      decisionLog,
-      ratesheetsSummary
-    };
+    return this.calculateWithDefaultRates(context, defaultRates);
   }
 
   /**
-   * Generate hourly time slots with local time tracking
-   * Handles partial hours at start/end of booking
+   * Filter ratesheets that apply to the booking
    */
-  private static generateHourlyTimeSlots(
-    start: Date,
-    end: Date,
-    timezone: string
-  ): Array<{ start: Date; end: Date; localTime: string; hours: number }> {
-    const slots: Array<{ start: Date; end: Date; localTime: string; hours: number }> = [];
-    let currentStart = new Date(start);
-
-    while (currentStart < end) {
-      const currentEnd = new Date(currentStart);
-      currentEnd.setHours(currentEnd.getHours() + 1);
-
-      if (currentEnd > end) {
-        currentEnd.setTime(end.getTime());
-      }
-
-      // Calculate actual hours for this slot (may be fractional)
-      const durationMs = currentEnd.getTime() - currentStart.getTime();
-      const hours = durationMs / (1000 * 60 * 60);
-
-      // Get local time in HH:mm format for matching time windows
-      const localTime = currentStart.toLocaleTimeString('en-US', {
-        timeZone: timezone,
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-
-      slots.push({
-        start: new Date(currentStart),
-        end: new Date(currentEnd),
-        localTime,
-        hours // ← Now includes fractional hours (e.g., 0.5 for 30 minutes)
-      });
-
-      currentStart = currentEnd;
-    }
-
-    return slots;
-  }
-
-  /**
-   * Find ratesheets that match a specific time slot
-   * Must match both DATE range AND TIME window
-   */
-  private static findRatesheetsForTimeSlot(
+  private filterApplicableRatesheets(
     ratesheets: Ratesheet[],
-    slotDateTime: Date,
-    slotLocalTime: string
-  ): Array<{ ratesheet: Ratesheet; price: number; matchedWindow: string }> {
-    const candidates: Array<{ ratesheet: Ratesheet; price: number; matchedWindow: string }> = [];
+    context: PricingContext
+  ): Ratesheet[] {
+    const applicable: Ratesheet[] = [];
 
     for (const rs of ratesheets) {
-      // Check if ratesheet covers this DATE
-      if (rs.effectiveFrom > slotDateTime) continue;
-      if (rs.effectiveTo && rs.effectiveTo < slotDateTime) continue;
-
-      // Check recurrence if applicable
-      if (rs.recurrence && !this.matchesRecurrence(rs.recurrence, slotDateTime)) {
+      // Check entity match
+      const entityMatch = this.checkEntityMatch(rs, context);
+      if (!entityMatch) {
+        this.log('FILTER', 'Ratesheet entity mismatch', {
+          ratesheet: rs.name,
+          reason: 'Does not apply to selected customer/location/sublocation',
+        });
         continue;
       }
 
-      // Check if any time window covers this HOUR
-      if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
-        for (const tw of rs.timeWindows) {
-          if (this.timeInWindow(slotLocalTime, tw.startTime, tw.endTime)) {
-            candidates.push({
-              ratesheet: rs,
-              price: tw.pricePerHour,
-              matchedWindow: `${tw.startTime} - ${tw.endTime} @ $${tw.pricePerHour}/hr`
-            });
-            break; // Only match one window per ratesheet per slot
-          }
-        }
-      } else if (rs.type === 'DURATION_BASED' && rs.durationRules && rs.durationRules.length > 0) {
-        // For duration-based, use the first rule's effective hourly rate
-        const rule = rs.durationRules[0];
-        const pricePerHour = rule.totalPrice / rule.durationHours;
-        candidates.push({
-          ratesheet: rs,
-          price: pricePerHour,
-          matchedWindow: rule.description || `${rule.durationHours}h package`
+      // Check date range
+      const effectiveFrom = new Date(rs.effectiveFrom);
+      const effectiveTo = rs.effectiveTo ? new Date(rs.effectiveTo) : null;
+
+      const bookingStart = context.startDateTime;
+      const bookingEnd = context.endDateTime;
+
+      // Check if booking overlaps with ratesheet validity period
+      const isValidFrom = bookingStart >= effectiveFrom || bookingEnd >= effectiveFrom;
+      const isValidTo = !effectiveTo || bookingStart <= effectiveTo;
+
+      if (!isValidFrom || !isValidTo) {
+        this.log('FILTER', 'Ratesheet date range mismatch', {
+          ratesheet: rs.name,
+          effectiveFrom: effectiveFrom.toISOString(),
+          effectiveTo: effectiveTo?.toISOString() || 'indefinite',
+          bookingStart: bookingStart.toISOString(),
+          bookingEnd: bookingEnd.toISOString(),
+          reason: 'Booking outside ratesheet validity period',
         });
+        continue;
       }
-    }
 
-    return candidates;
-  }
-
-  /**
-   * Check if time is within a window (HH:mm format)
-   */
-  private static timeInWindow(time: string, windowStart: string, windowEnd: string): boolean {
-    // All times in HH:mm format (e.g., "09:00", "17:00")
-    return time >= windowStart && time < windowEnd;
-  }
-
-  /**
-   * Check if date matches recurrence pattern
-   */
-  private static matchesRecurrence(
-    recurrence: Ratesheet['recurrence'],
-    date: Date
-  ): boolean {
-    if (!recurrence || recurrence.pattern === 'NONE') return true;
-
-    const dayOfWeek = date.toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
-    const dayOfMonth = date.getDate();
-
-    switch (recurrence.pattern) {
-      case 'DAILY':
-        return true;
-      case 'WEEKLY':
-        return recurrence.daysOfWeek?.includes(dayOfWeek as any) || false;
-      case 'MONTHLY':
-        return dayOfMonth === recurrence.dayOfMonth;
-      case 'YEARLY':
-        return true;
-      default:
-        return true;
-    }
-  }
-
-  /**
-   * Resolve conflict with detailed logging
-   */
-  private static resolveConflictWithLog(
-    candidates: Array<{ ratesheet: Ratesheet; price: number; matchedWindow: string }>,
-    slotDateTime: Date,
-    slotLocalTime: string
-  ): {
-    winner: { ratesheet: Ratesheet; price: number; reason: string; matchedWindow: string };
-    candidates: Array<{ id: string; name: string; priority: number; conflictResolution: string; price: number; reason: string; matchedTimeWindow: string }>;
-    rejected: Array<{ id: string; name: string; price: number; reason: string }>;
-  } {
-    if (candidates.length === 1) {
-      const c = candidates[0];
-      return {
-        winner: {
-          ratesheet: c.ratesheet,
-          price: c.price,
-          reason: 'Only ratesheet matching this time slot',
-          matchedWindow: c.matchedWindow
-        },
-        candidates: [{
-          id: c.ratesheet._id!.toString(),
-          name: c.ratesheet.name,
-          priority: c.ratesheet.priority,
-          conflictResolution: c.ratesheet.conflictResolution,
-          price: c.price,
-          reason: 'Only candidate',
-          matchedTimeWindow: c.matchedWindow
-        }],
-        rejected: []
-      };
-    }
-
-    // Log all candidates
-    const candidateLog = candidates.map(c => ({
-      id: c.ratesheet._id!.toString(),
-      name: c.ratesheet.name,
-      priority: c.ratesheet.priority,
-      conflictResolution: c.ratesheet.conflictResolution,
-      price: c.price,
-      reason: 'Candidate',
-      matchedTimeWindow: c.matchedWindow
-    }));
-
-    // Sort by priority (descending)
-    const sortedCandidates = [...candidates].sort((a, b) => b.ratesheet.priority - a.ratesheet.priority);
-
-    // Use conflict resolution strategy
-    const primaryStrategy = sortedCandidates[0].ratesheet.conflictResolution;
-    let winner: typeof candidates[0];
-    let winReason: string;
-
-    switch (primaryStrategy) {
-      case 'PRIORITY':
-        winner = sortedCandidates[0];
-        winReason = `Highest priority (${winner.ratesheet.priority})`;
-        break;
-
-      case 'HIGHEST_PRICE':
-        winner = candidates.reduce((max, curr) => curr.price > max.price ? curr : max);
-        winReason = `Highest price ($${winner.price}/hr)`;
-        break;
-
-      case 'LOWEST_PRICE':
-        winner = candidates.reduce((min, curr) => curr.price < min.price ? curr : min);
-        winReason = `Lowest price ($${winner.price}/hr)`;
-        break;
-
-      default:
-        winner = sortedCandidates[0];
-        winReason = 'Default to priority';
-    }
-
-    // Build rejected list
-    const rejected = candidates
-      .filter(c => c.ratesheet._id!.toString() !== winner.ratesheet._id!.toString())
-      .map(c => {
-        let reason = '';
-        if (primaryStrategy === 'PRIORITY') {
-          reason = `Lower priority (${c.ratesheet.priority} vs ${winner.ratesheet.priority})`;
-        } else if (primaryStrategy === 'HIGHEST_PRICE') {
-          reason = `Lower price ($${c.price}/hr vs $${winner.price}/hr)`;
-        } else if (primaryStrategy === 'LOWEST_PRICE') {
-          reason = `Higher price ($${c.price}/hr vs $${winner.price}/hr)`;
-        }
-        return {
-          id: c.ratesheet._id!.toString(),
-          name: c.ratesheet.name,
-          price: c.price,
-          reason
-        };
+      this.log('FILTER', 'Ratesheet applicable', {
+        ratesheet: rs.name,
+        level: this.getRatesheetLevel(rs),
+        priority: rs.priority,
       });
 
+      applicable.push(rs);
+    }
+
+    return applicable;
+  }
+
+  /**
+   * Check if ratesheet applies to the given entity hierarchy
+   */
+  private checkEntityMatch(rs: Ratesheet, context: PricingContext): boolean {
+    // SubLocation-specific ratesheet
+    if (rs.subLocationId) {
+      return rs.subLocationId.toString() === context.subLocationId;
+    }
+
+    // Location-specific ratesheet
+    if (rs.locationId) {
+      return rs.locationId.toString() === context.locationId;
+    }
+
+    // Customer-wide ratesheet
+    if (rs.customerId) {
+      return rs.customerId.toString() === context.customerId;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get ratesheet hierarchy level
+   */
+  private getRatesheetLevel(rs: Ratesheet): 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER' {
+    if (rs.subLocationId) return 'SUBLOCATION';
+    if (rs.locationId) return 'LOCATION';
+    return 'CUSTOMER';
+  }
+
+  /**
+   * Calculate pricing using ratesheets
+   */
+  private async calculateWithRatesheets(
+    context: PricingContext,
+    applicableRatesheets: Ratesheet[]
+  ): Promise<PricingResult> {
+    // Sort by hierarchy and priority
+    const sorted = this.sortRatesheetsByPriority(applicableRatesheets);
+
+    this.log('SORT', 'Sorted ratesheets by priority', {
+      order: sorted.map(rs => ({
+        name: rs.name,
+        level: this.getRatesheetLevel(rs),
+        priority: rs.priority,
+      })),
+    });
+
+    // Generate hourly breakdown
+    const breakdown: PricingBreakdown[] = [];
+    let currentTime = new Date(context.startDateTime);
+    const endTime = new Date(context.endDateTime);
+
+    while (currentTime < endTime) {
+      const nextHour = new Date(currentTime.getTime() + 60 * 60 * 1000);
+      const segmentEnd = nextHour > endTime ? endTime : nextHour;
+      
+      const hours = (segmentEnd.getTime() - currentTime.getTime()) / (1000 * 60 * 60);
+
+      // Select best ratesheet for this time segment
+      const { ratesheet, price } = this.selectRatesheetForTimeSegment(
+        sorted,
+        currentTime,
+        segmentEnd
+      );
+
+      breakdown.push({
+        startDateTime: currentTime.toISOString(),
+        endDateTime: segmentEnd.toISOString(),
+        pricePerHour: price,
+        hours: parseFloat(hours.toFixed(2)),
+        subtotal: parseFloat((price * hours).toFixed(2)),
+        ratesheetId: ratesheet._id.toString(),
+        ratesheetName: ratesheet.name,
+        appliedRule: `${this.getRatesheetLevel(ratesheet)} Priority ${ratesheet.priority}`,
+      });
+
+      currentTime = nextHour;
+    }
+
+    const totalPrice = breakdown.reduce((sum, b) => sum + b.subtotal, 0);
+
     return {
-      winner: {
-        ratesheet: winner.ratesheet,
-        price: winner.price,
-        reason: winReason,
-        matchedWindow: winner.matchedWindow
+      totalPrice: parseFloat(totalPrice.toFixed(2)),
+      breakdown,
+      currency: 'USD',
+      decisionLog: this.decisionLog,
+      ratesheetsSummary: {
+        total: applicableRatesheets.length,
+        evaluated: applicableRatesheets.length,
+        applicable: applicableRatesheets.length,
+        selected: breakdown.length,
       },
-      candidates: candidateLog,
-      rejected
     };
   }
 
   /**
-   * Calculate default price
-   * ✅ FIXED: Now uses actual hours from each slot instead of slot count
+   * Calculate pricing using default rates (fallback only)
    */
-  private static calculateDefaultPrice(
-    query: PricingQuery,
-    defaultRate: number,
-    timezone: string
-  ): EnhancedPricingResult {
-    const slots = this.generateHourlyTimeSlots(query.startDateTime, query.endDateTime, timezone);
-    
-    // ✅ FIX: Calculate total price by summing (rate * actual hours) for each slot
-    let totalPrice = 0;
-    const breakdown = slots.map(slot => {
-      const subtotal = defaultRate * slot.hours; // ← Use slot.hours (may be fractional)
-      totalPrice += subtotal;
-      
-      return {
-        startDateTime: slot.start,
-        endDateTime: slot.end,
-        pricePerHour: defaultRate,
-        hours: slot.hours, // ← May be fractional (e.g., 0.5 for 30 minutes)
-        subtotal,
-        ratesheetId: new ObjectId(),
-        ratesheetName: 'Default Rate',
-        appliedRule: 'Default hourly rate'
-      };
+  private async calculateWithDefaultRates(
+    context: PricingContext,
+    defaultRates: DefaultRate[]
+  ): Promise<PricingResult> {
+    // Find best default rate by hierarchy
+    let selectedRate = defaultRates.find(
+      r => r.level === 'SUBLOCATION' && r.entityId === context.subLocationId
+    );
+
+    if (!selectedRate) {
+      selectedRate = defaultRates.find(
+        r => r.level === 'LOCATION' && r.entityId === context.locationId
+      );
+    }
+
+    if (!selectedRate) {
+      selectedRate = defaultRates.find(
+        r => r.level === 'CUSTOMER' && r.entityId === context.customerId
+      );
+    }
+
+    if (!selectedRate) {
+      throw new Error('No default rates configured');
+    }
+
+    this.log('DEFAULT_RATE', 'Using default rate', {
+      level: selectedRate.level,
+      rate: selectedRate.hourlyRate,
+      reason: 'No applicable ratesheets found',
     });
 
+    const hours =
+      (context.endDateTime.getTime() - context.startDateTime.getTime()) / (1000 * 60 * 60);
+    const totalPrice = selectedRate.hourlyRate * hours;
+
     return {
-      subLocationId: query.subLocationId,
-      totalPrice,
-      breakdown,
-      currency: 'USD',
-      decisionLog: slots.map(slot => ({
-        timeSlot: slot,
-        candidateRatesheets: [],
-        winner: {
-          id: 'default',
-          name: 'Default Rate',
-          price: defaultRate,
-          reason: 'No approved ratesheets found'
+      totalPrice: parseFloat(totalPrice.toFixed(2)),
+      breakdown: [
+        {
+          startDateTime: context.startDateTime.toISOString(),
+          endDateTime: context.endDateTime.toISOString(),
+          pricePerHour: selectedRate.hourlyRate,
+          hours: parseFloat(hours.toFixed(2)),
+          subtotal: parseFloat(totalPrice.toFixed(2)),
+          ratesheetId: 'default',
+          ratesheetName: 'Default Rate',
+          appliedRule: `${selectedRate.level} Default`,
         },
-        rejectedRatesheets: []
-      })),
+      ],
+      currency: 'USD',
+      decisionLog: this.decisionLog,
       ratesheetsSummary: {
-        totalConsidered: 0,
-        totalApplied: 0,
-        ratesheets: []
-      }
+        total: 0,
+        evaluated: 0,
+        applicable: 0,
+        selected: 0,
+      },
     };
   }
-}
 
-export default PricingEngine;
+  /**
+   * Sort ratesheets by hierarchy and priority
+   */
+  private sortRatesheetsByPriority(ratesheets: Ratesheet[]): Ratesheet[] {
+    return [...ratesheets].sort((a, b) => {
+      // First, sort by hierarchy level (SubLocation > Location > Customer)
+      const levelA = this.getRatesheetLevel(a);
+      const levelB = this.getRatesheetLevel(b);
+
+      const levelPriority = { SUBLOCATION: 3, LOCATION: 2, CUSTOMER: 1 };
+      if (levelPriority[levelA] !== levelPriority[levelB]) {
+        return levelPriority[levelB] - levelPriority[levelA];
+      }
+
+      // Within same level, sort by priority (higher first)
+      return b.priority - a.priority;
+    });
+  }
+
+  /**
+   * Select best ratesheet for a specific time segment
+   */
+  private selectRatesheetForTimeSegment(
+    sortedRatesheets: Ratesheet[],
+    startTime: Date,
+    endTime: Date
+  ): { ratesheet: Ratesheet; price: number } {
+    for (const rs of sortedRatesheets) {
+      if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
+        const timeStr = startTime.toTimeString().substring(0, 5); // HH:mm
+
+        for (const tw of rs.timeWindows) {
+          if (timeStr >= tw.startTime && timeStr < tw.endTime) {
+            this.log('TIME_MATCH', 'Found matching time window', {
+              ratesheet: rs.name,
+              timeWindow: `${tw.startTime}-${tw.endTime}`,
+              price: tw.pricePerHour,
+            });
+
+            return { ratesheet: rs, price: tw.pricePerHour };
+          }
+        }
+      }
+    }
+
+    // Fallback to first ratesheet (shouldn't happen if data is correct)
+    const fallback = sortedRatesheets[0];
+    const fallbackPrice = fallback.timeWindows?.[0]?.pricePerHour || 0;
+
+    this.log('FALLBACK', 'No matching time window, using fallback', {
+      ratesheet: fallback.name,
+      price: fallbackPrice,
+    });
+
+    return { ratesheet: fallback, price: fallbackPrice };
+  }
+}

@@ -35,8 +35,10 @@ interface PricingResult {
   totalPrice: number;
   breakdown: PricingBreakdown[];
   currency: string;
-  decisionLog?: any[];           // ← Add this
-  ratesheetsSummary?: any;       // ← Add this  
+  decisionLog?: any[];
+  ratesheetsSummary?: any;
+  // NEW: Store full API response data
+  apiResponse?: any;
 }
 
 // Helper to get default dates
@@ -134,16 +136,16 @@ export default function PricingViewPage() {
     setResult(null);
 
     try {
-
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-      const response = await fetch('/api/pricing/calculate', {
+      // ✅ USE NEW HOURLY ENDPOINT
+      const response = await fetch('/api/pricing/calculate-hourly', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subLocationId,
-          startDateTime: new Date(startDateTime).toISOString(),
-          endDateTime: new Date(endDateTime).toISOString(),
+          startTime: new Date(startDateTime).toISOString(),
+          endTime: new Date(endDateTime).toISOString(),
           timezone: userTimezone
         }),
       });
@@ -154,7 +156,27 @@ export default function PricingViewPage() {
       }
 
       const data = await response.json();
-      setResult(data);
+      
+      // Transform hourly segments to old breakdown format for backward compatibility
+      const breakdown = data.segments?.map((seg: any) => ({
+        startDateTime: seg.startTime,
+        endDateTime: seg.endTime,
+        pricePerHour: seg.pricePerHour,
+        hours: seg.durationHours,
+        subtotal: seg.totalPrice,
+        ratesheetId: seg.ratesheet?.id || 'default',
+        ratesheetName: seg.ratesheet?.name || `Default Rate ($${seg.pricePerHour}/hr)`,
+        appliedRule: seg.source === 'RATESHEET' ? seg.ratesheet?.name : 'Default Rate'
+      })) || [];
+      
+      setResult({
+        totalPrice: data.totalPrice,
+        breakdown,
+        currency: 'USD',
+        decisionLog: data.decisionLog,
+        ratesheetsSummary: data.metadata?.ratesheetSummary,
+        apiResponse: data // Store full response for DecisionAuditPanel
+      });
     } catch (err: any) {
       setError(err.message || 'Failed to calculate pricing');
     } finally {
@@ -475,11 +497,16 @@ export default function PricingViewPage() {
               </div>
             </div>
 
-           {/* NEW: Decision Audit Panel */}
-          {result.decisionLog && result.ratesheetsSummary && (
+           {/* NEW: Decision Audit Panel with Hourly Segments */}
+          {result.apiResponse && (
             <DecisionAuditPanel
-              decisionLog={result.decisionLog}
-              ratesheetsSummary={result.ratesheetsSummary}
+              segments={result.apiResponse.segments}
+              decisionLog={result.apiResponse.decisionLog}
+              totalPrice={result.apiResponse.totalPrice}
+              totalHours={result.apiResponse.totalHours}
+              breakdown={result.apiResponse.breakdown}
+              timezone={result.apiResponse.timezone}
+              metadata={result.apiResponse.metadata}
             />
           )}           
 
