@@ -503,8 +503,11 @@ export default function TimelineViewPage() {
   const getPricingItems = (): PricingItem[] => {
     const items: PricingItem[] = [];
 
+    // Use only ratesheets active during the selected interval
+    const activeRatesheets = getActiveRatesheetsForInterval();
+
     // Add ratesheets (sorted by priority already)
-    ratesheets.forEach((rs, index) => {
+    activeRatesheets.forEach((rs, index) => {
       // Determine level info string
       let levelInfo = '';
       if (rs.applyTo === 'EVENT' && rs.event) {
@@ -669,27 +672,58 @@ export default function TimelineViewPage() {
     }
   };
 
+  /**
+   * Filter ratesheets to only those active during the selected viewing interval
+   */
+  const getActiveRatesheetsForInterval = (): typeof ratesheets => {
+    return ratesheets.filter(rs => {
+      // For EVENT ratesheets, check if the event overlaps with the selected interval
+      if (rs.applyTo === 'EVENT' && rs.eventId) {
+        const event = events.find(e => e._id === rs.eventId);
+        if (event) {
+          const eventStart = new Date(event.startDate);
+          const eventEnd = new Date(event.endDate);
+          // Event overlaps if: event ends after viewStart AND event starts before viewEnd
+          return eventEnd >= viewStart && eventStart <= viewEnd;
+        }
+        return false;
+      }
+
+      // For non-event ratesheets, check if the ratesheet's effective date range overlaps with selected interval
+      const rsStart = new Date(rs.effectiveFrom);
+      const rsEnd = rs.effectiveTo ? new Date(rs.effectiveTo) : new Date('2099-12-31');
+
+      // Ratesheet overlaps if: rs ends after viewStart AND rs starts before viewEnd
+      return rsEnd >= viewStart && rsStart <= viewEnd;
+    });
+  };
+
   const getPeakRate = (): number => {
-    const ratesheetRates = ratesheets.flatMap(rs => 
+    const activeRatesheets = getActiveRatesheetsForInterval();
+
+    // Get all rates from active ratesheets
+    const ratesheetRates = activeRatesheets.flatMap(rs =>
       rs.timeWindows?.map(tw => tw.pricePerHour) || []
     );
+
     const defaultRates = [
       currentSubLocation?.defaultHourlyRate || 0,
       currentLocation?.defaultHourlyRate || 0,
       currentCustomer?.defaultHourlyRate || 0
     ];
-    
+
     return Math.max(...ratesheetRates, ...defaultRates, 0);
   };
 
-  // Count ratesheets by level
+  // Count ratesheets by level (filtered to selected interval)
   const getRatesheetCounts = () => {
+    const activeRatesheets = getActiveRatesheetsForInterval();
     return {
-      event: ratesheets.filter(rs => rs.applyTo === 'EVENT').length,
-      customer: ratesheets.filter(rs => rs.applyTo === 'CUSTOMER').length,
-      location: ratesheets.filter(rs => rs.applyTo === 'LOCATION').length,
-      sublocation: ratesheets.filter(rs => rs.applyTo === 'SUBLOCATION').length,
-      total: ratesheets.length,
+      event: activeRatesheets.filter(rs => rs.applyTo === 'EVENT').length,
+      customer: activeRatesheets.filter(rs => rs.applyTo === 'CUSTOMER').length,
+      location: activeRatesheets.filter(rs => rs.applyTo === 'LOCATION').length,
+      sublocation: activeRatesheets.filter(rs => rs.applyTo === 'SUBLOCATION').length,
+      total: activeRatesheets.length,
     };
   };
 
@@ -1044,7 +1078,7 @@ export default function TimelineViewPage() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">Highest Priority</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {ratesheets.length > 0 ? Math.max(...ratesheets.map(rs => rs.priority)) : '-'}
+                      {getActiveRatesheetsForInterval().length > 0 ? Math.max(...getActiveRatesheetsForInterval().map(rs => rs.priority)) : '-'}
                     </p>
                   </div>
                   <Award className="w-8 h-8 text-purple-500" />
@@ -1056,7 +1090,7 @@ export default function TimelineViewPage() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">Time Windows</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {ratesheets.reduce((sum, rs) => sum + (rs.timeWindows?.length || 0), 0)}
+                      {getActiveRatesheetsForInterval().reduce((sum, rs) => sum + (rs.timeWindows?.length || 0), 0)}
                     </p>
                   </div>
                   <Clock className="w-8 h-8 text-emerald-500" />
