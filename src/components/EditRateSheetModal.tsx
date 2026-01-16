@@ -2,21 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-
-interface PriorityConfig {
-  _id: string;
-  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-  minPriority: number;
-  maxPriority: number;
-  color: string;
-  description: string;
-}
+import { PriorityConfig } from '@/models/types';
 
 interface Ratesheet {
   _id: string;
   subLocationId?: string;
   locationId?: string;
   customerId?: string;
+  eventId?: string;
   name: string;
   description?: string;
   type: 'TIMING_BASED' | 'DURATION_BASED';
@@ -25,7 +18,7 @@ interface Ratesheet {
   isActive: boolean;
   effectiveFrom: string;
   effectiveTo?: string;
-  ratesheetType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  ratesheetType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
 }
 
 interface EditRateSheetModalProps {
@@ -99,7 +92,7 @@ export default function EditRateSheetModal({ isOpen, ratesheet, onClose, onSucce
 
   const getPriorityConfig = () => {
     if (!ratesheet?.ratesheetType) return null;
-    return priorityConfigs.find(c => c.type === ratesheet.ratesheetType);
+    return priorityConfigs.find(c => c.level === ratesheet.ratesheetType);
   };
 
   const validateForm = () => {
@@ -275,7 +268,9 @@ export default function EditRateSheetModal({ isOpen, ratesheet, onClose, onSucce
               <p className="text-sm font-semibold text-gray-900 mb-1">
                 Priority Range: {priorityConfig.minPriority} - {priorityConfig.maxPriority}
               </p>
-              <p className="text-xs text-gray-600">{priorityConfig.description}</p>
+              <p className="text-xs text-gray-600 mt-1">
+                {priorityConfig.description}
+              </p>
             </div>
           )}
 

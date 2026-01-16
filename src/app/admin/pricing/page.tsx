@@ -4,15 +4,7 @@ import { useState, useEffect } from 'react';
 import { Power, Trash2, Edit, Plus, ChevronDown, ChevronUp, Clock, DollarSign } from 'lucide-react';
 import CreateRateSheetModal from '@/components/CreateRateSheetModal';
 import EditRateSheetModal from '@/components/EditRateSheetModal';
-
-interface PriorityConfig {
-  _id: string;
-  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-  minPriority: number;
-  maxPriority: number;
-  color: string;
-  description: string;
-}
+import { PriorityConfig } from '@/models/types';
 
 interface TimeWindow {
   startTime: string;
@@ -31,11 +23,12 @@ interface Ratesheet {
   subLocationId?: string;
   locationId?: string;
   customerId?: string;
+  eventId?: string;
   name: string;
   description?: string;
   type: 'TIMING_BASED' | 'DURATION_BASED';
   priority: number;
-  conflictResolution: string;
+  conflictResolution: 'PRIORITY' | 'HIGHEST_PRICE' | 'LOWEST_PRICE';
   isActive: boolean;
   effectiveFrom: string;
   effectiveTo?: string;
@@ -44,7 +37,8 @@ interface Ratesheet {
   customer?: { _id: string; name: string };
   location?: { _id: string; name: string; city: string };
   sublocation?: { _id: string; label: string };
-  ratesheetType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  event?: { _id: string; name: string; startDate: string; endDate: string };
+  ratesheetType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
 }
 
 export default function AdminPricingPage() {
@@ -56,7 +50,7 @@ export default function AdminPricingPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedRatesheet, setSelectedRatesheet] = useState<Ratesheet | null>(null);
-  const [activeFilter, setActiveFilter] = useState<'ALL' | 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION'>('ALL');
+  const [activeFilter, setActiveFilter] = useState<'ALL' | 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT'>('ALL');
 
   useEffect(() => {
     loadData();
@@ -141,7 +135,7 @@ export default function AdminPricingPage() {
   };
 
   const getTypeColor = (type?: string) => {
-    const config = priorityConfigs.find(c => c.type === type);
+    const config = priorityConfigs.find(c => c.level === type);
     return config?.color || '#6B7280';
   };
 
@@ -150,6 +144,7 @@ export default function AdminPricingPage() {
       CUSTOMER: 'bg-blue-100 text-blue-800 border-blue-300',
       LOCATION: 'bg-green-100 text-green-800 border-green-300',
       SUBLOCATION: 'bg-orange-100 text-orange-800 border-orange-300',
+      EVENT: 'bg-pink-100 text-pink-800 border-pink-300',
     };
     return colors[type as keyof typeof colors] || 'bg-gray-100 text-gray-800 border-gray-300';
   };
@@ -159,6 +154,7 @@ export default function AdminPricingPage() {
     customer: ratesheets.filter(r => r.ratesheetType === 'CUSTOMER').length,
     location: ratesheets.filter(r => r.ratesheetType === 'LOCATION').length,
     sublocation: ratesheets.filter(r => r.ratesheetType === 'SUBLOCATION').length,
+    event: ratesheets.filter(r => r.ratesheetType === 'EVENT').length,
   });
 
   const counts = getCounts();
@@ -199,15 +195,15 @@ export default function AdminPricingPage() {
         {/* Priority Ranges */}
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-4">Priority Ranges</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {priorityConfigs.map((config) => (
               <div
-                key={config._id}
+                key={config._id?.toString()}
                 className="bg-white rounded-xl p-6 shadow-lg border-l-4"
                 style={{ borderColor: config.color }}
               >
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-lg font-bold text-gray-900">{config.type}</h3>
+                  <h3 className="text-lg font-bold text-gray-900">{config.level}</h3>
                   <div
                     className="px-3 py-1 rounded-full text-sm font-semibold"
                     style={{ backgroundColor: `${config.color}20`, color: config.color }}
@@ -215,7 +211,12 @@ export default function AdminPricingPage() {
                     {config.minPriority}-{config.maxPriority}
                   </div>
                 </div>
-                <p className="text-sm text-gray-600">{config.description}</p>
+                <p className="text-sm text-gray-600">
+                  {config.description}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {config.enabled ? 'Enabled' : 'Disabled'}
+                </p>
               </div>
             ))}
           </div>
@@ -228,6 +229,7 @@ export default function AdminPricingPage() {
             { key: 'CUSTOMER', label: 'Customer', count: counts.customer },
             { key: 'LOCATION', label: 'Location', count: counts.location },
             { key: 'SUBLOCATION', label: 'Sub-Location', count: counts.sublocation },
+            { key: 'EVENT', label: 'Event', count: counts.event },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -307,6 +309,14 @@ export default function AdminPricingPage() {
                         <>
                           <span className="mx-2">→</span>
                           <span className="font-medium text-orange-600">{ratesheet.sublocation.label}</span>
+                        </>
+                      )}
+                      {ratesheet.event && (
+                        <>
+                          <span className="mx-2">→</span>
+                          <span className="font-medium text-pink-600">
+                            {ratesheet.event.name} ({new Date(ratesheet.event.startDate).toLocaleDateString()} - {new Date(ratesheet.event.endDate).toLocaleDateString()})
+                          </span>
                         </>
                       )}
                     </div>

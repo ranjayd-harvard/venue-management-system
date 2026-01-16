@@ -15,7 +15,7 @@ export interface HourlySegment {
     name: string;
     type: string;
     priority: number;
-    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   };
   source: 'RATESHEET' | 'DEFAULT_RATE';
   timeWindow?: {
@@ -48,22 +48,25 @@ export interface PricingContext {
   bookingStart: Date;
   bookingEnd: Date;
   timezone: string;
-  
+
   // Entity hierarchy
   customerId: string;
   locationId: string;
   subLocationId: string;
-  
+  eventId?: string;
+
   // Ratesheets (all levels)
   customerRatesheets: RateSheet[];
   locationRatesheets: RateSheet[];
   sublocationRatesheets: RateSheet[];
-  
+  eventRatesheets?: RateSheet[];
+
   // Default rates (fallback)
   customerDefaultRate?: number;
   locationDefaultRate?: number;
   sublocationDefaultRate?: number;
-  
+  eventDefaultRate?: number;
+
   // Pricing config
   pricingConfig: PricingConfig;
 }
@@ -213,18 +216,19 @@ export class HourlyPricingEngine {
   ): Array<{
     ratesheet: RateSheet;
     pricePerHour: number;
-    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
     timeWindow?: { start: string; end: string };
   }> {
     const applicable: Array<{
       ratesheet: RateSheet;
       pricePerHour: number;
-      level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+      level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
       timeWindow?: { start: string; end: string };
     }> = [];
-    
-    // Check all ratesheets
+
+    // Check all ratesheets (EVENT has highest priority)
     const allRatesheets = [
+      ...(context.eventRatesheets || []).map(rs => ({ rs, level: 'EVENT' as const })),
       ...context.sublocationRatesheets.map(rs => ({ rs, level: 'SUBLOCATION' as const })),
       ...context.locationRatesheets.map(rs => ({ rs, level: 'LOCATION' as const })),
       ...context.customerRatesheets.map(rs => ({ rs, level: 'CUSTOMER' as const })),
@@ -271,26 +275,27 @@ export class HourlyPricingEngine {
     
     // Sort by hierarchy then priority
     return applicable.sort((a, b) => {
-      // Level hierarchy: SUBLOCATION (3) > LOCATION (2) > CUSTOMER (1)
-      const levelA = a.level === 'SUBLOCATION' ? 3 : a.level === 'LOCATION' ? 2 : 1;
-      const levelB = b.level === 'SUBLOCATION' ? 3 : b.level === 'LOCATION' ? 2 : 1;
-      
+      // Level hierarchy: EVENT (4) > SUBLOCATION (3) > LOCATION (2) > CUSTOMER (1)
+      const levelA = a.level === 'EVENT' ? 4 : a.level === 'SUBLOCATION' ? 3 : a.level === 'LOCATION' ? 2 : 1;
+      const levelB = b.level === 'EVENT' ? 4 : b.level === 'SUBLOCATION' ? 3 : b.level === 'LOCATION' ? 2 : 1;
+
       if (levelA !== levelB) {
         return levelB - levelA; // Higher level first
       }
-      
+
       // Same level: higher priority first
       return b.ratesheet.priority - a.ratesheet.priority;
     });
   }
 
   /**
-   * Get default rate from hierarchy
+   * Get default rate from hierarchy (EVENT > SubLocation > Location > Customer)
    */
   private getDefaultRate(context: PricingContext): number {
-    return context.sublocationDefaultRate 
-      || context.locationDefaultRate 
-      || context.customerDefaultRate 
+    return context.eventDefaultRate
+      || context.sublocationDefaultRate
+      || context.locationDefaultRate
+      || context.customerDefaultRate
       || 0;
   }
 }

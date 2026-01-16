@@ -3,22 +3,23 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  Home, 
-  Building2, 
-  MapPin, 
-  Layers, 
-  Network, 
-  BarChart3, 
-  Users, 
-  Menu, 
-  ChevronLeft, 
+import {
+  Home,
+  Building2,
+  MapPin,
+  Layers,
+  Network,
+  BarChart3,
+  Users,
+  Menu,
+  ChevronLeft,
   DollarSign,
   ChevronDown,
   ChevronRight,
   Settings,
   Calculator,
-  Timer
+  Timer,
+  Calendar
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -38,38 +39,45 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
     { href: '/customers', icon: Building2, label: 'Customers', color: 'blue' },
     { href: '/locations', icon: MapPin, label: 'Locations', color: 'green' },
     { href: '/venues', icon: Users, label: 'Venues', color: 'purple' },
+    { href: '/admin/events', icon: Calendar, label: 'Events', color: 'pink' },
     { href: '/relationships', icon: Layers, label: 'Assignments', color: 'oragne' },
     { href: '/graph', icon: BarChart3, label: 'Graph', color: 'gray' },
   ];
 
   const pricingSubItems = [
-    { 
-      href: '/pricing/view', 
-      icon: Calculator, 
+    {
+      href: '/pricing/view',
+      icon: Calculator,
       label: 'Pricing Calculator',
       description: 'Calculate booking prices'
     },
-    { 
-      href: '/pricing/timeline-view', 
-      icon: Timer, 
+    {
+      href: '/pricing/timeline-view',
+      icon: Timer,
       label: 'Pricing Timeline',
       description: 'See Pricing Timeline'
-    }, 
-    {   
-      href: '/pricing/timeline-all-sublocations', 
-      icon: Timer, 
+    },
+    {
+      href: '/pricing/timeline-tiles',
+      icon: Timer,
+      label: 'Pricing Tiles',
+      description: 'Sublocations Pricing Tiles'
+    },    
+    {
+      href: '/pricing/timeline-all-sublocations',
+      icon: Timer,
       label: 'Pricing Sublocations',
       description: 'All Sublocations Pricing'
-    },        
-    { 
-      href: '/admin/pricing-settings', 
-      icon: Settings, 
+    },
+    {
+      href: '/admin/pricing-settings',
+      icon: Settings,
       label: 'Pricing Settings',
       description: 'Default Pricing Setup'
     },
-    { 
-      href: '/admin/pricing', 
-      icon: DollarSign, 
+    {
+      href: '/admin/pricing',
+      icon: DollarSign,
       label: 'Manage Ratesheets',
       description: 'Create pricing rules'
     },
@@ -233,10 +241,11 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
 
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-600">
-                {pathname === '/' ? 'Dashboard' : 
+                {pathname === '/' ? 'Dashboard' :
                  pathname === '/pricing/view' ? 'Pricing Calculator' :
                  pathname === '/admin/pricing-settings' ? 'Pricing Settings' :
                  pathname === '/admin/pricing' ? 'Manage Ratesheets' :
+                 pathname === '/admin/events' || pathname.startsWith('/admin/events/') ? 'Events' :
                  pathname.split('/')[1].charAt(0).toUpperCase() + pathname.split('/')[1].slice(1)}
               </span>
             </div>

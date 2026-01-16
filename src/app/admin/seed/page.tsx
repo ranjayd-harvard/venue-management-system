@@ -29,13 +29,19 @@ export default function AdminSeedPage() {
     const totalSubLocations = totalLocations * config.subLocationsPerLocation;
     const totalLocationVenueRelations = totalLocations * config.venuesPerLocation;
     const totalSubLocationVenueRelations = totalSubLocations * config.venuesPerSubLocation;
-    
+    const totalEvents = config.createEvents ? totalSubLocations * config.eventsPerSubLocation : 0;
+    const totalRatesheets = config.createRatesheets ? (totalLocations * 2 + totalSubLocations) : 0;
+    const totalEventRatesheets = (config.createEvents && config.createEventRatesheets) ? totalEvents : 0;
+
     return {
       totalLocations,
       totalSubLocations,
       totalLocationVenueRelations,
       totalSubLocationVenueRelations,
-      totalRecords: config.customers + totalLocations + totalSubLocations + config.venues + totalLocationVenueRelations + totalSubLocationVenueRelations,
+      totalEvents,
+      totalRatesheets,
+      totalEventRatesheets,
+      totalRecords: config.customers + totalLocations + totalSubLocations + config.venues + totalLocationVenueRelations + totalSubLocationVenueRelations + totalEvents + totalRatesheets + totalEventRatesheets,
     };
   };
 
@@ -179,6 +185,82 @@ export default function AdminSeedPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Events per Sub-Location
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={config.eventsPerSubLocation}
+                  onChange={(e) => handleInputChange('eventsPerSubLocation', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  disabled={!config.createEvents}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  {config.createEvents ? 'Number of sample events per sub-location' : 'Enable event creation below'}
+                </p>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-gray-200">
+                <h4 className="text-sm font-semibold text-gray-700">Event Date Range</h4>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Start (days from now)
+                  </label>
+                  <input
+                    type="number"
+                    min="-365"
+                    max="365"
+                    value={config.eventDateRangeStart}
+                    onChange={(e) => handleInputChange('eventDateRangeStart', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                    disabled={!config.createEvents}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Negative = past (e.g., -7 = 7 days ago)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    End (days from now)
+                  </label>
+                  <input
+                    type="number"
+                    min="-365"
+                    max="365"
+                    value={config.eventDateRangeEnd}
+                    onChange={(e) => handleInputChange('eventDateRangeEnd', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                    disabled={!config.createEvents}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Positive = future (e.g., 7 = 7 days from now)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    % Active Events
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={config.percentActiveEvents}
+                    onChange={(e) => handleInputChange('percentActiveEvents', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                    disabled={!config.createEvents}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Percentage of events currently happening (0-100)
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Naming Prefixes */}
@@ -241,7 +323,22 @@ export default function AdminSeedPage() {
                 <p className="text-xs text-gray-500 mt-1">Example: {config.venuePrefix}-1</p>
               </div>
 
-              <div className="pt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Event Prefix
+                </label>
+                <input
+                  type="text"
+                  value={config.eventPrefix}
+                  onChange={(e) => handlePrefixChange('eventPrefix', e.target.value)}
+                  placeholder="e.g., Event"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  disabled={!config.createEvents}
+                />
+                <p className="text-xs text-gray-500 mt-1">Example: {config.eventPrefix}-1</p>
+              </div>
+
+              <div className="pt-4 space-y-3">
                 <label className="flex items-center space-x-2">
                   <input
                     type="checkbox"
@@ -253,8 +350,54 @@ export default function AdminSeedPage() {
                     Use Real USPS Postal Locations with Geo-Coordinates
                   </span>
                 </label>
-                <p className="text-xs text-gray-500 mt-1 ml-6">
+                <p className="text-xs text-gray-500 ml-6">
                   When enabled, locations will use real USPS addresses and coordinates
+                </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createRatesheets}
+                    onChange={(e) => handleInputChange('createRatesheets', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Sample RateSheets
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Generate ratesheets with overlapping time windows and busy hour premiums
+                </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createEvents}
+                    onChange={(e) => handleInputChange('createEvents', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Sample Events
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Generate sample events distributed across sub-locations
+                </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createEventRatesheets}
+                    onChange={(e) => handleInputChange('createEventRatesheets', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    disabled={!config.createEvents}
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Event-Specific RateSheets
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Generate ratesheets covering each event&apos;s exact time window (highest priority)
                 </p>
               </div>
             </div>
@@ -264,7 +407,7 @@ export default function AdminSeedPage() {
         {/* Calculated Totals */}
         <div className="bg-blue-50 rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-2xl font-semibold mb-4 text-blue-800">Calculated Totals</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-gray-700">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-gray-700">
             <div className="bg-white p-4 rounded-lg">
               <p className="text-sm text-gray-600">Customers</p>
               <p className="text-2xl font-bold text-blue-600">{config.customers}</p>
@@ -289,7 +432,25 @@ export default function AdminSeedPage() {
               <p className="text-sm text-gray-600">SubLocation-Venue Relations</p>
               <p className="text-2xl font-bold text-pink-600">{totals.totalSubLocationVenueRelations}</p>
             </div>
-            <div className="bg-gradient-to-r from-blue-500 to-purple-500 p-4 rounded-lg md:col-span-3">
+            {config.createEvents && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Events</p>
+                <p className="text-2xl font-bold text-cyan-600">{totals.totalEvents}</p>
+              </div>
+            )}
+            {config.createRatesheets && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Rate Sheets</p>
+                <p className="text-2xl font-bold text-teal-600">{totals.totalRatesheets}</p>
+              </div>
+            )}
+            {config.createEvents && config.createEventRatesheets && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Event Rate Sheets</p>
+                <p className="text-2xl font-bold text-amber-600">{totals.totalEventRatesheets}</p>
+              </div>
+            )}
+            <div className="bg-gradient-to-r from-blue-500 to-purple-500 p-4 rounded-lg lg:col-span-4">
               <p className="text-sm text-white">Total Records</p>
               <p className="text-3xl font-bold text-white">{totals.totalRecords}</p>
             </div>

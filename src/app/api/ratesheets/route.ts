@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
     const subLocationId = searchParams.get('subLocationId');
     const locationId = searchParams.get('locationId');
     const customerId = searchParams.get('customerId');
+    const eventId = searchParams.get('eventId');
     const includeInactive = searchParams.get('includeInactive') === 'true';
     const resolveHierarchy = searchParams.get('resolveHierarchy') !== 'false'; // Default to true
     const startDate = searchParams.get('startDate');
@@ -70,14 +71,25 @@ export async function GET(request: NextRequest) {
         subLocationId: sublocation._id.toString(),
       };
 
-      // Query ratesheets at ALL levels of the hierarchy
-      query.$or = [
+      // Query ratesheets at ALL levels of the hierarchy (including EVENT if provided)
+      const orConditions: any[] = [
         { customerId: new ObjectId(location.customerId) },
         { locationId: new ObjectId(location._id) },
         { subLocationId: new ObjectId(subLocationId) },
       ];
+
+      // Add EVENT level if eventId is provided
+      if (eventId) {
+        orConditions.push({ eventId: new ObjectId(eventId) });
+        hierarchyInfo.eventId = eventId;
+      }
+
+      query.$or = orConditions;
     } else {
       // Direct query mode - filter by specific entity only
+      if (eventId) {
+        query.eventId = new ObjectId(eventId);
+      }
       if (subLocationId) {
         query.subLocationId = new ObjectId(subLocationId);
       }
@@ -139,14 +151,29 @@ export async function GET(request: NextRequest) {
     const customersCollection = db.collection('customers');
     const locationsCollection = db.collection('locations');
     const sublocationsCollection = db.collection('sublocations');
+    const eventsCollection = db.collection('events');
 
     // Process each ratesheet to enrich with entity info
     const enrichedRatesheets = await Promise.all(
       ratesheets.map(async (ratesheet) => {
         const enriched: any = { ...ratesheet };
 
-        // Determine the "applyTo" level based on which ID is set
-        if (ratesheet.subLocationId) {
+        // Determine the "applyTo" level based on which ID is set (check EVENT first as it has highest priority)
+        if (ratesheet.eventId) {
+          enriched.applyTo = 'EVENT';
+          enriched.ratesheetType = 'EVENT';
+
+          // Populate event
+          const event = await eventsCollection.findOne({
+            _id: new ObjectId(ratesheet.eventId),
+          });
+          if (event) {
+            enriched.event = {
+              _id: event._id.toString(),
+              name: event.name,
+            };
+          }
+        } else if (ratesheet.subLocationId) {
           enriched.applyTo = 'SUBLOCATION';
           enriched.ratesheetType = 'SUBLOCATION';
 
@@ -269,6 +296,7 @@ export async function POST(request: NextRequest) {
       subLocationId,
       locationId,
       customerId,
+      eventId,
       name,
       description,
       type,
@@ -290,9 +318,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Must have at least one ID
-    if (!subLocationId && !locationId && !customerId) {
+    if (!subLocationId && !locationId && !customerId && !eventId) {
       return NextResponse.json(
-        { error: 'Must specify subLocationId, locationId, or customerId' },
+        { error: 'Must specify eventId, subLocationId, locationId, or customerId' },
         { status: 400 }
       );
     }
@@ -301,8 +329,10 @@ export async function POST(request: NextRequest) {
     const db = await getDb();
     const configCollection = db.collection('priority_configs');
 
-    let ratesheetType: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-    if (subLocationId) {
+    let ratesheetType: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    if (eventId) {
+      ratesheetType = 'EVENT';
+    } else if (subLocationId) {
       ratesheetType = 'SUBLOCATION';
     } else if (locationId) {
       ratesheetType = 'LOCATION';
@@ -346,6 +376,7 @@ export async function POST(request: NextRequest) {
       subLocationId: subLocationId ? new ObjectId(subLocationId) : undefined,
       locationId: locationId ? new ObjectId(locationId) : undefined,
       customerId: customerId ? new ObjectId(customerId) : undefined,
+      eventId: eventId ? new ObjectId(eventId) : undefined,
       name,
       description: description || '',
       type,

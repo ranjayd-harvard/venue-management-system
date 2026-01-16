@@ -16,6 +16,29 @@ export async function GET() {
       .sort({ type: 1 })
       .toArray();
 
+    // Check if EVENT config exists, if not add it (for existing databases)
+    const hasEventConfig = configs.some(c => c.type === 'EVENT');
+    if (!hasEventConfig && configs.length > 0) {
+      const eventConfig = {
+        type: 'EVENT',
+        minPriority: 4000,
+        maxPriority: 4999,
+        color: 'pink',
+        description: 'Event-level ratesheets have highest priority and override all other levels',
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      await db.collection('priority_config').insertOne(eventConfig);
+      // Re-fetch configs to get the inserted document with _id
+      configs = await db
+        .collection('priority_config')
+        .find({})
+        .sort({ type: 1 })
+        .toArray();
+      console.log('✅ Added EVENT priority configuration to existing database');
+    }
+
     // If no configs exist, initialize them
     if (configs.length === 0) {
       const defaultConfigs = [
@@ -44,7 +67,17 @@ export async function GET() {
           minPriority: 3000,
           maxPriority: 3999,
           color: 'purple',
-          description: 'Sub-location-level ratesheets have highest priority',
+          description: 'Sub-location-level ratesheets have high priority',
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          type: 'EVENT',
+          minPriority: 4000,
+          maxPriority: 4999,
+          color: 'pink',
+          description: 'Event-level ratesheets have highest priority and override all other levels',
           isActive: true,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -60,12 +93,12 @@ export async function GET() {
     // Transform ObjectId to string for JSON serialization
     const serializedConfigs = configs.map((config) => ({
       _id: config._id?.toString(),
-      type: config.type,
+      level: config.type, // Map 'type' from DB to 'level' for frontend
       minPriority: config.minPriority,
       maxPriority: config.maxPriority,
       color: config.color,
       description: config.description,
-      isActive: config.isActive,
+      enabled: config.isActive, // Map 'isActive' to 'enabled' to match PriorityConfig interface
       createdAt: config.createdAt,
       updatedAt: config.updatedAt,
     }));

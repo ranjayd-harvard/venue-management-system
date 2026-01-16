@@ -8,7 +8,7 @@ import { COMMON_TIMEZONES } from '@/lib/timezone-utils';
 interface TimezoneSelectorProps {
   value: string;
   onChange: (timezone: string) => void;
-  entityType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  entityType?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   entityId?: string;
   label?: string;
   showInheritedFrom?: boolean;
