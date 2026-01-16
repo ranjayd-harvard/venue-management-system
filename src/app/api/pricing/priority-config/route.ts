@@ -2,40 +2,42 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 
-// Type definition
-interface PriorityConfig {
-  _id?: ObjectId;
-  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-  minPriority: number;
-  maxPriority: number;
-  color: string;
-  description: string;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
+// Import the canonical type definition
+import { PriorityConfig } from '@/models/types';
 
 // Default configurations
 const DEFAULT_CONFIGS: Omit<PriorityConfig, '_id' | 'createdAt' | 'updatedAt'>[] = [
   {
-    type: 'CUSTOMER',
+    level: 'CUSTOMER',
     minPriority: 1000,
     maxPriority: 1999,
     color: '#3B82F6', // Blue
-    description: 'Customer-level ratesheets have lowest priority and apply across all locations'
+    description: 'Customer-level ratesheets have lowest priority and apply across all locations',
+    enabled: true
   },
   {
-    type: 'LOCATION',
+    level: 'LOCATION',
     minPriority: 2000,
     maxPriority: 2999,
     color: '#10B981', // Green
-    description: 'Location-level ratesheets override customer rates for specific locations'
+    description: 'Location-level ratesheets override customer rates for specific locations',
+    enabled: true
   },
   {
-    type: 'SUBLOCATION',
+    level: 'SUBLOCATION',
     minPriority: 3000,
     maxPriority: 3999,
     color: '#F59E0B', // Orange
-    description: 'SubLocation-level ratesheets have highest priority for specific spaces'
+    description: 'SubLocation-level ratesheets have highest priority for specific spaces',
+    enabled: true
+  },
+  {
+    level: 'EVENT',
+    minPriority: 4000,
+    maxPriority: 4999,
+    color: '#EC4899', // Pink
+    description: 'Event-level ratesheets have highest priority and override all other rates for specific events',
+    enabled: true
   }
 ];
 
@@ -76,11 +78,11 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { _id, type, minPriority, maxPriority, color, description } = body;
+    const { _id, level, minPriority, maxPriority, color, description, enabled } = body;
 
-    if (!_id || !type || minPriority === undefined || maxPriority === undefined) {
+    if (!_id || !level || minPriority === undefined || maxPriority === undefined) {
       return NextResponse.json(
-        { error: 'Missing required fields: _id, type, minPriority, maxPriority' },
+        { error: 'Missing required fields: _id, level, minPriority, maxPriority' },
         { status: 400 }
       );
     }
@@ -109,8 +111,8 @@ export async function PUT(request: NextRequest) {
         (minPriority <= config.minPriority && maxPriority >= config.maxPriority)
       ) {
         return NextResponse.json(
-          { 
-            error: `Priority range overlaps with ${config.type} range (${config.minPriority}-${config.maxPriority})` 
+          {
+            error: `Priority range overlaps with ${config.level} range (${config.minPriority}-${config.maxPriority})`
           },
           { status: 400 }
         );
@@ -121,11 +123,12 @@ export async function PUT(request: NextRequest) {
       { _id: new ObjectId(_id) },
       {
         $set: {
-          type,
+          level,
           minPriority,
           maxPriority,
           color: color || '#6B7280',
           description: description || '',
+          enabled: enabled !== undefined ? enabled : true,
           updatedAt: new Date(),
         },
       }

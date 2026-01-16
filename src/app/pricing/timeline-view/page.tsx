@@ -30,14 +30,16 @@ interface Ratesheet {
   effectiveFrom: string;
   effectiveTo: string | null;
   timeWindows?: TimeWindow[];
-  applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   customerId?: string;
   locationId?: string;
   subLocationId?: string;
+  eventId?: string;
   // Enriched data from API
   customer?: { _id: string; name: string };
   location?: { _id: string; name: string };
   sublocation?: { _id: string; label: string };
+  event?: { _id: string; name: string };
 }
 
 interface Location {
@@ -60,10 +62,23 @@ interface Customer {
   defaultHourlyRate?: number;
 }
 
+interface Event {
+  _id: string;
+  name: string;
+  description?: string;
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  subLocationId?: string;
+  locationId?: string;
+  customerId?: string;
+}
+
 interface PricingConfig {
   customerPriorityRange: { min: number; max: number };
   locationPriorityRange: { min: number; max: number };
   sublocationPriorityRange: { min: number; max: number };
+  eventPriorityRange?: { min: number; max: number };
 }
 
 interface PricingItem {
@@ -101,33 +116,45 @@ export default function TimelineViewPage() {
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
+  const [events, setEvents] = useState<Event[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [ratesheets, setRatesheets] = useState<Ratesheet[]>([]);
   const [loading, setLoading] = useState(false);
-  
+
   // Pricing config for priority ranges
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
-  
+
   // Entity data
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
   
-  // Date-time range for the slider
-  const [rangeStart, setRangeStart] = useState<Date>(new Date());
-  const [rangeEnd, setRangeEnd] = useState<Date>(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-  
-  // Currently viewing window within the range
-  const [viewStart, setViewStart] = useState<Date>(new Date());
-  const [viewEnd, setViewEnd] = useState<Date>(new Date(Date.now() + 24 * 60 * 60 * 1000));
-  
+  // Date-time range for the slider (7 days past to 30 days future)
+  const [rangeStart, setRangeStart] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
+  });
+  const [rangeEnd, setRangeEnd] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now (total 37 day window)
+  });
+
+  // Currently viewing window within the range (default 12 hours)
+  const [viewStart, setViewStart] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getTime() - 6 * 60 * 60 * 1000); // 6 hours ago
+  });
+  const [viewEnd, setViewEnd] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6 hours from now (12 hour default view)
+  });
+
+  const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
+
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  
-  const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
 
-  // Drag state for better handle control
-  const [isDraggingStart, setIsDraggingStart] = useState(false);
-  const [isDraggingEnd, setIsDraggingEnd] = useState(false);
+  const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
 
   // Unique colors per ratesheet
   const ratesheetColors = useRef(new Map<string, string>()).current;
@@ -154,7 +181,10 @@ export default function TimelineViewPage() {
 
   const getPriorityBadgeColor = (priority: number, config: PricingConfig | null): string => {
     if (!config) return 'bg-gray-100 text-gray-700 border-gray-200';
-    
+
+    if (config.eventPriorityRange && priority >= config.eventPriorityRange.min && priority <= config.eventPriorityRange.max) {
+      return 'bg-pink-100 text-pink-700 border-pink-200';
+    }
     if (priority >= config.sublocationPriorityRange.min && priority <= config.sublocationPriorityRange.max) {
       return 'bg-purple-100 text-purple-700 border-purple-200';
     }
@@ -169,6 +199,7 @@ export default function TimelineViewPage() {
 
   const getApplyToColor = (applyTo: string): string => {
     switch (applyTo) {
+      case 'EVENT': return 'bg-pink-50 text-pink-700 border-pink-200';
       case 'SUBLOCATION': return 'bg-purple-50 text-purple-700 border-purple-200';
       case 'LOCATION': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
       case 'CUSTOMER': return 'bg-blue-50 text-blue-700 border-blue-200';
@@ -196,13 +227,34 @@ export default function TimelineViewPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      // Fetch ratesheets whenever sublocation or date range changes
+      // Load all active events (including upcoming ones)
+      fetch('/api/events')
+        .then(res => res.json())
+        .then(data => {
+          // Filter to only show events with isActive=true
+          const activeEvents = data.filter((e: Event) => e.isActive);
+          setEvents(activeEvents);
+        })
+        .catch(err => {
+          console.error('Failed to load events:', err);
+          setEvents([]);
+        });
+      // Fetch ratesheets whenever sublocation, event, or date range changes
       fetchRatesheets(selectedSubLocation);
     } else {
       setRatesheets([]);
       setCurrentSubLocation(null);
+      setEvents([]);
+      setSelectedEventId('');
     }
   }, [selectedSubLocation, rangeStart, rangeEnd]);
+
+  // Refetch ratesheets when event selection changes
+  useEffect(() => {
+    if (selectedSubLocation) {
+      fetchRatesheets(selectedSubLocation);
+    }
+  }, [selectedEventId]);
 
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
@@ -269,7 +321,10 @@ export default function TimelineViewPage() {
 
   /**
    * FIXED: Fetch ratesheets using the updated API that resolves the full hierarchy
-   * This now fetches ratesheets at Customer, Location, AND SubLocation levels
+   * This now fetches ratesheets at Customer, Location, SubLocation, AND Event levels
+   *
+   * AUTOMATIC EVENT DETECTION: Now automatically fetches ratesheets for ALL events
+   * that overlap with the timeline view date range, without requiring manual event selection
    */
   const fetchRatesheets = async (subLocationId: string) => {
     setLoading(true);
@@ -277,29 +332,84 @@ export default function TimelineViewPage() {
       // Format dates for the API
       const startStr = rangeStart.toISOString().split('T')[0];
       const endStr = rangeEnd.toISOString().split('T')[0];
-      
-      // NEW: Use resolveHierarchy=true (default) to get ratesheets from ALL levels
-      // The API now automatically looks up Customer → Location → SubLocation
+
+      // Step 1: Find all active events that overlap with the timeline date range
+      const eventsResponse = await fetch('/api/events');
+      const allEvents = await eventsResponse.json();
+      const activeEvents = allEvents.filter((e: Event) => e.isActive);
+
+      // Find events that overlap with timeline range
+      const overlappingEvents = activeEvents.filter((event: Event) => {
+        const eventStart = new Date(event.startDate);
+        const eventEnd = new Date(event.endDate);
+        // Event overlaps if: event ends after range starts AND event starts before range ends
+        return eventEnd >= rangeStart && eventStart <= rangeEnd;
+      });
+
+      console.log('[Timeline] Found overlapping events:', {
+        total: activeEvents.length,
+        overlapping: overlappingEvents.length,
+        events: overlappingEvents.map((e: Event) => ({
+          name: e.name,
+          start: e.startDate,
+          end: e.endDate
+        }))
+      });
+
+      // Step 2: Fetch ratesheets for the hierarchy
+      // Use resolveHierarchy=true to get Customer → Location → SubLocation ratesheets
       const url = new URL('/api/ratesheets', window.location.origin);
       url.searchParams.set('subLocationId', subLocationId);
       url.searchParams.set('startDate', startStr);
       url.searchParams.set('endDate', endStr);
       url.searchParams.set('resolveHierarchy', 'true');
-      
+
+      // Step 3: If manual event is selected, only include that event
+      // Otherwise, fetch ratesheets for ALL overlapping events
+      if (selectedEventId) {
+        // Manual selection mode - only fetch selected event
+        url.searchParams.set('eventId', selectedEventId);
+      } else if (overlappingEvents.length > 0) {
+        // Automatic mode - fetch ratesheets for all overlapping events
+        // Note: The API currently only supports one eventId at a time
+        // So we'll fetch ratesheets without eventId and then fetch event ratesheets separately
+      }
+
       const response = await fetch(url.toString());
-      const data = await response.json();
-      
+      let allRatesheets = await response.json();
+
+      // Step 4: If no manual event selected, fetch ratesheets for ALL overlapping events
+      if (!selectedEventId && overlappingEvents.length > 0) {
+        // Fetch event ratesheets separately for each overlapping event
+        const eventRatesheetPromises = overlappingEvents.map((event: Event) => {
+          const eventUrl = new URL('/api/ratesheets', window.location.origin);
+          eventUrl.searchParams.set('eventId', event._id);
+          eventUrl.searchParams.set('startDate', startStr);
+          eventUrl.searchParams.set('endDate', endStr);
+          return fetch(eventUrl.toString()).then(res => res.json());
+        });
+
+        const eventRatesheetsArrays = await Promise.all(eventRatesheetPromises);
+        const eventRatesheets = eventRatesheetsArrays.flat();
+
+        // Merge event ratesheets with hierarchy ratesheets (avoid duplicates)
+        const existingIds = new Set(allRatesheets.map((rs: any) => rs._id));
+        const newEventRatesheets = eventRatesheets.filter((rs: any) => !existingIds.has(rs._id));
+        allRatesheets = [...allRatesheets, ...newEventRatesheets];
+      }
+
       // Filter to only active ratesheets and sort by priority (highest first)
-      const activeRatesheets = data.filter((rs: any) => rs.isActive);
+      const activeRatesheets = allRatesheets.filter((rs: any) => rs.isActive);
       setRatesheets(activeRatesheets.sort((a: Ratesheet, b: Ratesheet) => b.priority - a.priority));
-      
+
       console.log('[Timeline] Loaded ratesheets:', {
-        total: data.length,
+        total: allRatesheets.length,
         active: activeRatesheets.length,
         byLevel: {
           customer: activeRatesheets.filter((rs: Ratesheet) => rs.applyTo === 'CUSTOMER').length,
           location: activeRatesheets.filter((rs: Ratesheet) => rs.applyTo === 'LOCATION').length,
           sublocation: activeRatesheets.filter((rs: Ratesheet) => rs.applyTo === 'SUBLOCATION').length,
+          event: activeRatesheets.filter((rs: Ratesheet) => rs.applyTo === 'EVENT').length,
         }
       });
     } catch (error) {
@@ -397,7 +507,9 @@ export default function TimelineViewPage() {
     ratesheets.forEach((rs, index) => {
       // Determine level info string
       let levelInfo = '';
-      if (rs.applyTo === 'CUSTOMER' && rs.customer) {
+      if (rs.applyTo === 'EVENT' && rs.event) {
+        levelInfo = `Event: ${rs.event.name}`;
+      } else if (rs.applyTo === 'CUSTOMER' && rs.customer) {
         levelInfo = `Customer: ${rs.customer.name}`;
       } else if (rs.applyTo === 'LOCATION' && rs.location) {
         levelInfo = `Location: ${rs.location.name}`;
@@ -424,13 +536,13 @@ export default function TimelineViewPage() {
     // Calculate priorities from config (use middle of range)
     const sublocPriority = pricingConfig 
       ? Math.floor((pricingConfig.sublocationPriorityRange.min + pricingConfig.sublocationPriorityRange.max) / 2)
-      : 3500;
+      : 300;
     const locPriority = pricingConfig
       ? Math.floor((pricingConfig.locationPriorityRange.min + pricingConfig.locationPriorityRange.max) / 2)
-      : 2500;
+      : 200;
     const custPriority = pricingConfig
       ? Math.floor((pricingConfig.customerPriorityRange.min + pricingConfig.customerPriorityRange.max) / 2)
-      : 1500;
+      : 100;
 
     // Add sublocation default
     if (currentSubLocation?.defaultHourlyRate && currentSubLocation.defaultHourlyRate > 0) {
@@ -506,48 +618,36 @@ export default function TimelineViewPage() {
     });
   };
 
-  const setQuickRange = (days: number) => {
-    const start = new Date();
-    const end = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
-    setRangeStart(start);
-    setRangeEnd(end);
-    setViewStart(start);
-    setViewEnd(new Date(start.getTime() + 24 * 60 * 60 * 1000));
+  const setQuickRange = (hours: number) => {
+    setSelectedDuration(hours);
+    // Keep current start time, just update the end based on new duration
+    const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
+    setViewEnd(newViewEnd);
   };
 
   const getTotalHours = (): number => {
-    return Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (1000 * 60 * 60));
+    return Math.ceil((viewEnd.getTime() - viewStart.getTime()) / (1000 * 60 * 60));
   };
 
   const getViewWindowPosition = (): { left: number; width: number } => {
     const totalMs = rangeEnd.getTime() - rangeStart.getTime();
     const viewStartMs = viewStart.getTime() - rangeStart.getTime();
-    const viewWidthMs = viewEnd.getTime() - viewStart.getTime();
-    
+    const durationMs = selectedDuration * 60 * 60 * 1000;
+
     return {
       left: (viewStartMs / totalMs) * 100,
-      width: (viewWidthMs / totalMs) * 100
+      width: (durationMs / totalMs) * 100
     };
   };
 
-  const handleStartDrag = (position: number) => {
+  const handleStartTimeChange = (position: number) => {
     const totalMs = rangeEnd.getTime() - rangeStart.getTime();
     const newMs = rangeStart.getTime() + (position / 100) * totalMs;
-    const newDate = new Date(newMs);
-    
-    if (newDate < viewEnd) {
-      setViewStart(newDate);
-    }
-  };
+    const newViewStart = new Date(newMs);
+    const newViewEnd = new Date(newViewStart.getTime() + selectedDuration * 60 * 60 * 1000);
 
-  const handleEndDrag = (position: number) => {
-    const totalMs = rangeEnd.getTime() - rangeStart.getTime();
-    const newMs = rangeStart.getTime() + (position / 100) * totalMs;
-    const newDate = new Date(newMs);
-    
-    if (newDate > viewStart) {
-      setViewEnd(newDate);
-    }
+    setViewStart(newViewStart);
+    setViewEnd(newViewEnd);
   };
 
   const toggleItemSelection = (itemId: string) => {
@@ -585,6 +685,7 @@ export default function TimelineViewPage() {
   // Count ratesheets by level
   const getRatesheetCounts = () => {
     return {
+      event: ratesheets.filter(rs => rs.applyTo === 'EVENT').length,
       customer: ratesheets.filter(rs => rs.applyTo === 'CUSTOMER').length,
       location: ratesheets.filter(rs => rs.applyTo === 'LOCATION').length,
       sublocation: ratesheets.filter(rs => rs.applyTo === 'SUBLOCATION').length,
@@ -609,7 +710,7 @@ export default function TimelineViewPage() {
 
         {/* Filters */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Location
@@ -649,26 +750,77 @@ export default function TimelineViewPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Quick Range
+                Event (Optional - Auto-detected)
+              </label>
+              <select
+                value={selectedEventId}
+                onChange={(e) => setSelectedEventId(e.target.value)}
+                disabled={!selectedSubLocation || events.length === 0}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
+              >
+                <option value="">Auto-detect overlapping events</option>
+                {events.map((event) => (
+                  <option key={event._id} value={event._id}>
+                    {event.name}
+                    {event.description && ` - ${event.description}`}
+                  </option>
+                ))}
+              </select>
+              {selectedEventId ? (
+                <p className="text-xs text-pink-600 mt-1 font-medium">
+                  📅 Manual: Showing only this event
+                </p>
+              ) : counts.event > 0 ? (
+                <p className="text-xs text-green-600 mt-1 font-medium">
+                  ✨ Auto: Detected {counts.event} event ratesheet{counts.event > 1 ? 's' : ''}
+                </p>
+              ) : null}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Duration
               </label>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setQuickRange(1)}
-                  className="flex-1 px-3 py-2 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium"
-                >
-                  Today
-                </button>
-                <button
                   onClick={() => setQuickRange(7)}
-                  className="flex-1 px-3 py-2 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium"
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
+                    selectedDuration === 7
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                  }`}
                 >
-                  Week
+                  7h
                 </button>
                 <button
-                  onClick={() => setQuickRange(30)}
-                  className="flex-1 px-3 py-2 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium"
+                  onClick={() => setQuickRange(12)}
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
+                    selectedDuration === 12
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                  }`}
                 >
-                  Month
+                  12h
+                </button>
+                <button
+                  onClick={() => setQuickRange(24)}
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
+                    selectedDuration === 24
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                  }`}
+                >
+                  24h
+                </button>
+                <button
+                  onClick={() => setQuickRange(48)}
+                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
+                    selectedDuration === 48
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                  }`}
+                >
+                  48h
                 </button>
               </div>
             </div>
@@ -683,90 +835,94 @@ export default function TimelineViewPage() {
 
         {!loading && selectedSubLocation && (
           <>
-            {/* Interactive Date-Time Range Slider */}
+            {/* Timeline Range Slider */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-gray-900">Timeline Range</h2>
-                <div className="text-sm text-gray-600">
-                  Total: {getTotalHours()} hours ({formatDateShort(rangeStart)} - {formatDateShort(rangeEnd)})
+                <h2 className="text-lg font-bold text-gray-900">Selected Interval</h2>
+                <div className="text-sm text-gray-600 font-medium">
+                   {formatDateTime(viewStart)} - {formatDateTime(viewEnd)} {' '}<span className="text-gray-500 font-light">({selectedDuration}h duration)</span>
                 </div>
               </div>
 
-              <div className="mb-6">
-                <div className="text-xs text-gray-500 mb-3 flex justify-between">
-                  <span>Viewing: {formatDateTime(viewStart)}</span>
-                  <span>to {formatDateTime(viewEnd)}</span>
-                </div>
-                
-                <div className="relative h-20 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 rounded-lg px-4 py-6">
-                  {/* Background track */}
-                  <div className="absolute inset-x-4 top-1/2 transform -translate-y-1/2">
-                    <div className="relative w-full h-3 bg-gray-200 rounded-full">
-                      {/* Selected view window */}
+              <div className="relative bg-white rounded-lg px-4 py-6 border border-gray-200">
+                {/* Timeline track container */}
+                <div className="relative h-16 mb-8">
+                  {/* Time tick marks */}
+                  <div className="absolute inset-x-0 top-0 flex justify-between">
+                    {Array.from({ length: 11 }).map((_, i) => {
+                      const tickMs = rangeStart.getTime() + (i / 10) * (rangeEnd.getTime() - rangeStart.getTime());
+                      const tickDate = new Date(tickMs);
+                      return (
+                        <div key={i} className="flex flex-col items-center">
+                          <div className="w-px h-2 bg-gray-400" />
+                          <div className="text-[9px] text-gray-500 mt-1 font-medium">
+                            {tickDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Main slider track */}
+                  <div className="absolute inset-x-0 top-8 h-10">
+                    <div className="relative w-full h-full bg-gray-100 rounded-sm border-t-2 border-b-2 border-gray-300">
+                      {/* Unselected area - hatched pattern */}
                       <div
-                        className="absolute h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full"
+                        className="absolute h-full bg-gray-200"
                         style={{
-                          left: `${getViewWindowPosition().left}%`,
-                          width: `${getViewWindowPosition().width}%`
+                          left: 0,
+                          width: '100%',
+                          backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0,0,0,0.04) 6px, rgba(0,0,0,0.04) 12px)'
                         }}
                       />
+
+                      {/* Selected interval - solid red block */}
+                      <div
+                        className="absolute h-full shadow-lg"
+                        style={{
+                          left: `${getViewWindowPosition().left}%`,
+                          width: `${getViewWindowPosition().width}%`,
+                          background: '#e616c6ff',
+                          border: '2px solid white',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        {/* Single combined label below the interval */}
+                        <div
+                          className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 whitespace-nowrap text-[11px] font-semibold text-gray-800 bg-white px-3 py-1 rounded border border-gray-400 shadow-md"
+                          style={{ zIndex: 20 }}
+                        >
+                          {viewStart.toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true
+                          })}
+                          {' – '}
+                          {viewEnd.toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true
+                          })}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Start handle - separate track */}
-                    <div 
-                      className="absolute top-0 w-full h-3"
-                      style={{ pointerEvents: isDraggingEnd ? 'none' : 'auto' }}
-                    >
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        value={getViewWindowPosition().left}
-                        onChange={(e) => handleStartDrag(parseFloat(e.target.value))}
-                        onMouseDown={() => setIsDraggingStart(true)}
-                        onMouseUp={() => setIsDraggingStart(false)}
-                        onTouchStart={() => setIsDraggingStart(true)}
-                        onTouchEnd={() => setIsDraggingStart(false)}
-                        className="absolute w-full h-3 bg-transparent appearance-none cursor-pointer start-handle"
-                        style={{ zIndex: isDraggingStart ? 10 : 4 }}
-                        title={`Start: ${formatDateTime(viewStart)}`}
-                      />
-                    </div>
-                    
-                    {/* End handle - separate track */}
-                    <div 
-                      className="absolute top-0 w-full h-3"
-                      style={{ pointerEvents: isDraggingStart ? 'none' : 'auto' }}
-                    >
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        value={getViewWindowPosition().left + getViewWindowPosition().width}
-                        onChange={(e) => handleEndDrag(parseFloat(e.target.value))}
-                        onMouseDown={() => setIsDraggingEnd(true)}
-                        onMouseUp={() => setIsDraggingEnd(false)}
-                        onTouchStart={() => setIsDraggingEnd(true)}
-                        onTouchEnd={() => setIsDraggingEnd(false)}
-                        className="absolute w-full h-3 bg-transparent appearance-none cursor-pointer end-handle"
-                        style={{ zIndex: isDraggingEnd ? 10 : 4 }}
-                        title={`End: ${formatDateTime(viewEnd)}`}
-                      />
-                    </div>
+                    {/* Invisible range input for dragging */}
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={getViewWindowPosition().left}
+                      onChange={(e) => handleStartTimeChange(parseFloat(e.target.value))}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize"
+                      style={{ zIndex: 11 }}
+                    />
                   </div>
-
-                  {/* Time markers */}
-                  <div className="absolute inset-x-4 bottom-1 flex justify-between text-[10px] text-gray-500">
-                    <span>{formatDateShort(rangeStart)}</span>
-                    <span>{formatDateShort(new Date((rangeStart.getTime() + rangeEnd.getTime()) / 2))}</span>
-                    <span>{formatDateShort(rangeEnd)}</span>
-                  </div>
-                </div>
-
-                <div className="text-xs text-gray-500 mt-2 text-center">
-                  💡 Tip: Drag the blue handles to adjust viewing window
                 </div>
               </div>
 
@@ -855,7 +1011,12 @@ export default function TimelineViewPage() {
                     <p className="text-sm font-medium text-gray-600">Active Ratesheets</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{counts.total}</p>
                     {counts.total > 0 && (
-                      <div className="flex gap-2 mt-1">
+                      <div className="flex gap-2 mt-1 flex-wrap">
+                        {counts.event > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded">
+                            {counts.event} Event
+                          </span>
+                        )}
                         {counts.customer > 0 && (
                           <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
                             {counts.customer} Cust

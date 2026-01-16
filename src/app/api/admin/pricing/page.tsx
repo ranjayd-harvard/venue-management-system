@@ -2,15 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Edit, Trash2, Plus, Power, PowerOff } from 'lucide-react';
-
-interface PriorityConfig {
-  _id?: string;
-  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-  minPriority: number;
-  maxPriority: number;
-  color: string;
-  description: string;
-}
+import { PriorityConfig } from '@/models/types';
 
 interface Ratesheet {
   _id: string;
@@ -162,7 +154,7 @@ export default function AdminPricingPage() {
   // Get priority config for ratesheet type
   const getPriorityConfig = (type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | undefined) => {
     if (!type) return null;
-    return priorityConfigs.find(c => c.type === type);
+    return priorityConfigs.find(c => c.level === type);
   };
 
   // Get color for ratesheet type
@@ -227,18 +219,20 @@ export default function AdminPricingPage() {
           <div className="grid grid-cols-3 gap-4">
             {priorityConfigs.map((config) => (
               <div
-                key={config.type}
+                key={config._id?.toString()}
                 className="border-2 rounded-lg p-4"
                 style={{ borderColor: config.color }}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold text-gray-900">{config.type}</h3>
+                  <h3 className="font-semibold text-gray-900">{config.level}</h3>
                   <div
                     className="w-4 h-4 rounded-full"
                     style={{ backgroundColor: config.color }}
                   ></div>
                 </div>
-                <p className="text-sm text-gray-600 mb-2">{config.description}</p>
+                <p className="text-sm text-gray-600 mb-2">
+                  {config.description}
+                </p>
                 <div className="bg-gray-50 rounded px-3 py-2">
                   <p className="text-xs font-mono text-gray-700">
                     Range: {config.minPriority} - {config.maxPriority}
@@ -341,7 +335,7 @@ function RatesheetsList({
 }) {
   const getTypeColor = (type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | undefined) => {
     if (!type) return 'gray';
-    const config = priorityConfigs.find(c => c.type === type);
+    const config = priorityConfigs.find(c => c.level === type);
     return config?.color || 'gray';
   };
 
@@ -544,7 +538,7 @@ function CreateRatesheetModal({
   const [effectiveFrom, setEffectiveFrom] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const priorityConfig = priorityConfigs.find(c => c.type === level);
+  const priorityConfig = priorityConfigs.find(c => c.level === level);
 
   const filteredLocations = selectedCustomer
     ? locations.filter(l => l.customerId === selectedCustomer)
@@ -642,7 +636,9 @@ function CreateRatesheetModal({
               <p className="text-sm font-semibold text-gray-900 mb-1">
                 Priority Range: {priorityConfig.minPriority} - {priorityConfig.maxPriority}
               </p>
-              <p className="text-xs text-gray-600">{priorityConfig.description}</p>
+              <p className="text-xs text-gray-600">
+                {priorityConfig.description}
+              </p>
             </div>
           )}
 

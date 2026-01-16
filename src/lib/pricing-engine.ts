@@ -20,6 +20,7 @@ interface Ratesheet {
   subLocationId?: ObjectId | string;
   locationId?: ObjectId | string;
   customerId?: ObjectId | string;
+  eventId?: ObjectId | string;
   name: string;
   description?: string;
   type: 'TIMING_BASED' | 'DURATION_BASED';
@@ -33,7 +34,7 @@ interface Ratesheet {
 }
 
 interface DefaultRate {
-  level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   hourlyRate: number;
   entityId: string;
 }
@@ -42,6 +43,7 @@ interface PricingContext {
   customerId: string;
   locationId: string;
   subLocationId: string;
+  eventId?: string;
   startDateTime: Date;
   endDateTime: Date;
 }
@@ -80,11 +82,17 @@ interface PricingResult {
 
 /**
  * 🔧 CRITICAL FIX: Ratesheets now ALWAYS override default rates
- * 
+ *
  * PRIORITY ORDER (FIXED):
- * 1. ANY active ratesheet (Customer/Location/SubLocation) - by hierarchy and priority
+ * 1. ANY active ratesheet (Event/SubLocation/Location/Customer) - by hierarchy and priority
  * 2. Default rates (ONLY if NO ratesheets found) - by hierarchy
- * 
+ *
+ * HIERARCHY (Highest to Lowest):
+ * - EVENT: 4000-4999 (Overrides all other levels for specific events)
+ * - SUBLOCATION: 3000-3999
+ * - LOCATION: 2000-2999
+ * - CUSTOMER: 1000-1999
+ *
  * BUG FIX: Default rates at SubLocation level were overriding Customer-level ratesheets
  * NEW: Ratesheets ALWAYS win, defaults are true fallback
  */
@@ -216,6 +224,11 @@ export class PricingEngine {
    * Check if ratesheet applies to the given entity hierarchy
    */
   private checkEntityMatch(rs: Ratesheet, context: PricingContext): boolean {
+    // Event-specific ratesheet (highest priority)
+    if (rs.eventId) {
+      return context.eventId !== undefined && rs.eventId.toString() === context.eventId;
+    }
+
     // SubLocation-specific ratesheet
     if (rs.subLocationId) {
       return rs.subLocationId.toString() === context.subLocationId;
@@ -237,7 +250,8 @@ export class PricingEngine {
   /**
    * Get ratesheet hierarchy level
    */
-  private getRatesheetLevel(rs: Ratesheet): 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER' {
+  private getRatesheetLevel(rs: Ratesheet): 'EVENT' | 'SUBLOCATION' | 'LOCATION' | 'CUSTOMER' {
+    if (rs.eventId) return 'EVENT';
     if (rs.subLocationId) return 'SUBLOCATION';
     if (rs.locationId) return 'LOCATION';
     return 'CUSTOMER';
@@ -316,10 +330,20 @@ export class PricingEngine {
     context: PricingContext,
     defaultRates: DefaultRate[]
   ): Promise<PricingResult> {
-    // Find best default rate by hierarchy
-    let selectedRate = defaultRates.find(
-      r => r.level === 'SUBLOCATION' && r.entityId === context.subLocationId
-    );
+    // Find best default rate by hierarchy (Event > SubLocation > Location > Customer)
+    let selectedRate: DefaultRate | undefined;
+
+    if (context.eventId) {
+      selectedRate = defaultRates.find(
+        r => r.level === 'EVENT' && r.entityId === context.eventId
+      );
+    }
+
+    if (!selectedRate) {
+      selectedRate = defaultRates.find(
+        r => r.level === 'SUBLOCATION' && r.entityId === context.subLocationId
+      );
+    }
 
     if (!selectedRate) {
       selectedRate = defaultRates.find(
@@ -377,11 +401,11 @@ export class PricingEngine {
    */
   private sortRatesheetsByPriority(ratesheets: Ratesheet[]): Ratesheet[] {
     return [...ratesheets].sort((a, b) => {
-      // First, sort by hierarchy level (SubLocation > Location > Customer)
+      // First, sort by hierarchy level (Event > SubLocation > Location > Customer)
       const levelA = this.getRatesheetLevel(a);
       const levelB = this.getRatesheetLevel(b);
 
-      const levelPriority = { SUBLOCATION: 3, LOCATION: 2, CUSTOMER: 1 };
+      const levelPriority = { EVENT: 4, SUBLOCATION: 3, LOCATION: 2, CUSTOMER: 1 };
       if (levelPriority[levelA] !== levelPriority[levelB]) {
         return levelPriority[levelB] - levelPriority[levelA];
       }

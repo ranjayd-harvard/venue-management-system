@@ -3,15 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X, Plus, Trash2, Clock, Calendar, Globe } from 'lucide-react';
 import TimezoneSelector from './TimezoneSelector';
-
-interface PriorityConfig {
-  _id: string;
-  type: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
-  minPriority: number;
-  maxPriority: number;
-  color: string;
-  description: string;
-}
+import { PriorityConfig } from '@/models/types';
 
 interface Customer {
   _id: string;
@@ -30,6 +22,18 @@ interface SubLocation {
   locationId: string;
   label: string;
   pricingEnabled: boolean;
+}
+
+interface Event {
+  _id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  customerId?: string;
+  locationId?: string;
+  subLocationId?: string;
+  timezone?: string;
+  isActive: boolean;
 }
 
 interface TimeWindow {
@@ -56,12 +60,14 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
-  
+  const [events, setEvents] = useState<Event[]>([]);
+
   // Form state
-  const [applyTo, setApplyTo] = useState<'CUSTOMER' | 'LOCATION' | 'SUBLOCATION'>('SUBLOCATION');
+  const [applyTo, setApplyTo] = useState<'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT'>('SUBLOCATION');
   const [selectedCustomer, setSelectedCustomer] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('');
   const [selectedSubLocation, setSelectedSubLocation] = useState('');
+  const [selectedEvent, setSelectedEvent] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [ratesheetType, setRatesheetType] = useState<'TIMING_BASED' | 'DURATION_BASED'>('TIMING_BASED');
@@ -138,6 +144,57 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
     }
   }, [selectedLocation]);
 
+  const loadEvents = async () => {
+    try {
+      // Always load all active events for EVENT-level ratesheets
+      // The user can create event-specific rates regardless of hierarchy
+      const res = await fetch('/api/events?filter=all');
+      const data = await res.json();
+
+      // Filter to only show active events
+      const activeEvents = data.filter((e: Event) => e.isActive);
+      setEvents(activeEvents);
+    } catch (err) {
+      console.error('Failed to load events:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (applyTo === 'EVENT') {
+      loadEvents();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyTo]);
+
+  // Auto-populate priority and dates when an event is selected
+  useEffect(() => {
+    if (selectedEvent && applyTo === 'EVENT') {
+      const event = events.find(e => e._id === selectedEvent);
+      if (event) {
+        // Set priority to middle of EVENT range (4000-4999)
+        const eventConfig = priorityConfigs.find(c => c.level === 'EVENT');
+        if (eventConfig && !priority) {
+          const midPriority = Math.floor((eventConfig.minPriority + eventConfig.maxPriority) / 2);
+          setPriority(midPriority.toString());
+        }
+
+        // Auto-populate effective dates from event dates
+        if (!effectiveFrom) {
+          setEffectiveFrom(formatDateTimeLocal(new Date(event.startDate)));
+        }
+        if (!effectiveTo) {
+          setEffectiveTo(formatDateTimeLocal(new Date(event.endDate)));
+        }
+
+        // Auto-populate timezone if event has one
+        if (event.timezone && !timezone) {
+          setTimezone(event.timezone);
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEvent, events, applyTo]);
+
   const loadInitialData = async () => {
     try {
       console.log('Loading initial data...');
@@ -198,7 +255,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   };
 
   const getCurrentPriorityConfig = () => {
-    return priorityConfigs.find(c => c.type === applyTo);
+    return priorityConfigs.find(c => c.level === applyTo);
   };
 
   const addTimeWindow = () => {
@@ -235,18 +292,26 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
 
   const validateStep1 = () => {
     if (!name.trim()) return 'Name is required';
-    if (!selectedCustomer) return 'Customer is required';
-    if (applyTo === 'LOCATION' && !selectedLocation) return 'Location is required';
-    if (applyTo === 'SUBLOCATION' && !selectedSubLocation) return 'SubLocation is required';
+
+    // Validate entity selections based on applyTo level
+    if (applyTo === 'EVENT') {
+      if (!selectedEvent) return 'Event is required';
+    } else {
+      // For non-EVENT ratesheets, customer is required
+      if (!selectedCustomer) return 'Customer is required';
+      if (applyTo === 'LOCATION' && !selectedLocation) return 'Location is required';
+      if (applyTo === 'SUBLOCATION' && !selectedSubLocation) return 'SubLocation is required';
+    }
+
     if (!priority) return 'Priority is required';
     if (!timezone) return 'Timezone is required';
-    
+
     const config = getCurrentPriorityConfig();
     const priorityNum = parseInt(priority);
     if (config && (priorityNum < config.minPriority || priorityNum > config.maxPriority)) {
       return `Priority must be between ${config.minPriority} and ${config.maxPriority}`;
     }
-    
+
     return null;
   };
 
@@ -332,8 +397,10 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
         payload.customerId = selectedCustomer;
       } else if (applyTo === 'LOCATION') {
         payload.locationId = selectedLocation;
-      } else {
+      } else if (applyTo === 'SUBLOCATION') {
         payload.subLocationId = selectedSubLocation;
+      } else if (applyTo === 'EVENT') {
+        payload.eventId = selectedEvent;
       }
 
       if (ratesheetType === 'TIMING_BASED') {
@@ -371,6 +438,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
     setSelectedCustomer('');
     setSelectedLocation('');
     setSelectedSubLocation('');
+    setSelectedEvent('');
     setEffectiveFrom('');
     setEffectiveTo('');
     setTimezone('');
@@ -387,6 +455,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   const config = getCurrentPriorityConfig();
 
   const getEntityIdForTimezone = () => {
+    if (applyTo === 'EVENT') return selectedEvent;
     if (applyTo === 'SUBLOCATION') return selectedSubLocation;
     if (applyTo === 'LOCATION') return selectedLocation;
     return selectedCustomer;
@@ -481,9 +550,9 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Apply To *
                 </label>
-                <div className="grid grid-cols-3 gap-3">
-                  {(['CUSTOMER', 'LOCATION', 'SUBLOCATION'] as const).map((type) => {
-                    const config = priorityConfigs.find(c => c.type === type);
+                <div className="grid grid-cols-4 gap-3">
+                  {(['CUSTOMER', 'LOCATION', 'SUBLOCATION', 'EVENT'] as const).map((type) => {
+                    const config = priorityConfigs.find(c => c.level === type);
                     const isSelected = applyTo === type;
                     return (
                       <button
@@ -511,38 +580,40 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Customer *
-                </label>
-                <select
-                  value={selectedCustomer}
-                  onChange={(e) => {
-                    console.log('Customer selected:', e.target.value);
-                    setSelectedCustomer(e.target.value);
-                    setSelectedLocation('');
-                    setSelectedSubLocation('');
-                  }}
-                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
-                >
-                  <option value="" className="text-gray-500">Select customer...</option>
+              {applyTo !== 'EVENT' && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Customer *
+                  </label>
+                  <select
+                    value={selectedCustomer}
+                    onChange={(e) => {
+                      console.log('Customer selected:', e.target.value);
+                      setSelectedCustomer(e.target.value);
+                      setSelectedLocation('');
+                      setSelectedSubLocation('');
+                    }}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
+                  >
+                    <option value="" className="text-gray-500">Select customer...</option>
+                    {customers.length === 0 && (
+                      <option value="" disabled className="text-gray-400">Loading customers...</option>
+                    )}
+                    {customers.map((c) => (
+                      <option key={c._id} value={c._id} className="text-gray-900">
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
                   {customers.length === 0 && (
-                    <option value="" disabled className="text-gray-400">Loading customers...</option>
+                    <p className="text-xs text-red-500 mt-1">
+                      No customers found. Please create a customer first.
+                    </p>
                   )}
-                  {customers.map((c) => (
-                    <option key={c._id} value={c._id} className="text-gray-900">
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {customers.length === 0 && (
-                  <p className="text-xs text-red-500 mt-1">
-                    No customers found. Please create a customer first.
-                  </p>
-                )}
-              </div>
+                </div>
+              )}
 
-              {applyTo !== 'CUSTOMER' && selectedCustomer && (
+              {applyTo !== 'CUSTOMER' && applyTo !== 'EVENT' && selectedCustomer && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Location {applyTo === 'LOCATION' && '*'}
@@ -605,6 +676,37 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
                 </div>
               )}
 
+              {applyTo === 'EVENT' && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Event *
+                  </label>
+                  <select
+                    value={selectedEvent}
+                    onChange={(e) => {
+                      console.log('Event selected:', e.target.value);
+                      setSelectedEvent(e.target.value);
+                    }}
+                    className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
+                  >
+                    <option value="" className="text-gray-500">Select event...</option>
+                    {events.length === 0 && (
+                      <option value="" disabled className="text-gray-400">No events found...</option>
+                    )}
+                    {events.map((e) => (
+                      <option key={e._id} value={e._id} className="text-gray-900">
+                        {e.name} ({new Date(e.startDate).toLocaleDateString()} - {new Date(e.endDate).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                  {events.length === 0 && (
+                    <p className="text-xs text-yellow-600 mt-1">
+                      No events found. Please create an event first.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Type
@@ -653,7 +755,9 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
                     className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 text-gray-900 placeholder-gray-400 bg-white"
                     placeholder={`Enter priority (${config.minPriority}-${config.maxPriority})`}
                   />
-                  <p className="text-sm text-gray-600 mt-2">{config.description}</p>
+                  <p className="text-sm text-gray-600 mt-2">
+                    {config.description}
+                  </p>
                 </div>
               )}
 

@@ -52,6 +52,7 @@ async function initPricingConfig() {
         minPriority: 1000,
         maxPriority: 1999,
         color: '#3B82F6', // Blue
+        description: 'Customer-level ratesheets have lowest priority and apply across all locations',
         enabled: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -61,6 +62,7 @@ async function initPricingConfig() {
         minPriority: 2000,
         maxPriority: 2999,
         color: '#10B981', // Green
+        description: 'Location-level ratesheets override customer rates for specific locations',
         enabled: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -69,7 +71,18 @@ async function initPricingConfig() {
         level: 'SUBLOCATION',
         minPriority: 3000,
         maxPriority: 3999,
-        color: '#8B5CF6', // Purple
+        color: '#F59E0B', // Orange
+        description: 'SubLocation-level ratesheets have highest priority for specific spaces',
+        enabled: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      {
+        level: 'EVENT',
+        minPriority: 4000,
+        maxPriority: 4999,
+        color: '#EC4899', // Pink
+        description: 'Event-level ratesheets have highest priority and override all other rates for specific events',
         enabled: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -81,7 +94,7 @@ async function initPricingConfig() {
     
     if (existingPriorityConfigs === 0) {
       await db.collection('priority_configs').insertMany(priorityConfigs);
-      console.log('✅ Created 3 priority configs');
+      console.log('✅ Created 4 priority configs');
     } else {
       console.log('ℹ️  Priority configs already exist');
     }

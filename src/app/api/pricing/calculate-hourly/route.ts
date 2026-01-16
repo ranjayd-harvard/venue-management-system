@@ -10,8 +10,8 @@ import { TimezoneSettingsRepository } from '@/models/TimezoneSettings';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { subLocationId, startTime, endTime, timezone: requestTimezone } = body;
-    
+    const { subLocationId, eventId, startTime, endTime, timezone: requestTimezone } = body;
+
     if (!subLocationId || !startTime || !endTime) {
       return NextResponse.json(
         { error: 'Missing required fields' },
@@ -68,16 +68,37 @@ export async function POST(request: NextRequest) {
       customerId: new ObjectId(customer._id),
       isActive: true
     }).toArray();
-    
+
     const locationRatesheets = await db.collection('ratesheets').find({
       locationId: new ObjectId(location._id),
       isActive: true
     }).toArray();
-    
+
     const sublocationRatesheets = await db.collection('ratesheets').find({
       subLocationId: new ObjectId(sublocation._id),
       isActive: true
     }).toArray();
+
+    // Fetch EVENT ratesheets for ALL active events that overlap with the booking period
+    // This ensures event-specific pricing is always applied when booking falls within an event
+    const bookingStartDate = new Date(startTime);
+    const bookingEndDate = new Date(endTime);
+
+    // Find all active events that overlap with the booking time
+    const overlappingEvents = await db.collection('events').find({
+      isActive: true,
+      // Event must not end before booking starts AND must not start after booking ends
+      endDate: { $gte: bookingStartDate },
+      startDate: { $lte: bookingEndDate }
+    }).toArray();
+
+    // Fetch ratesheets for all overlapping events
+    const eventRatesheets = overlappingEvents.length > 0
+      ? await db.collection('ratesheets').find({
+          eventId: { $in: overlappingEvents.map(e => e._id) },
+          isActive: true
+        }).toArray()
+      : [];
     
     // Get pricing config (auto-create if missing)
     let pricingConfig = await db.collection('pricing_configs').findOne({});
@@ -107,19 +128,21 @@ export async function POST(request: NextRequest) {
       bookingStart: new Date(startTime),
       bookingEnd: new Date(endTime),
       timezone,
-      
+
       customerId: customer._id.toString(),
       locationId: location._id.toString(),
       subLocationId: sublocation._id.toString(),
-      
+      eventId: eventId ? eventId : undefined,
+
       customerRatesheets: customerRatesheets as any[],
       locationRatesheets: locationRatesheets as any[],
       sublocationRatesheets: sublocationRatesheets as any[],
-      
+      eventRatesheets: eventRatesheets as any[],
+
       customerDefaultRate: customer.defaultHourlyRate,
       locationDefaultRate: location.defaultHourlyRate,
       sublocationDefaultRate: sublocation.defaultHourlyRate,
-      
+
       pricingConfig: pricingConfig as any
     };
     
@@ -135,11 +158,18 @@ export async function POST(request: NextRequest) {
         location: location.name,
         sublocation: sublocation.label,
         timezone: result.timezone,
+        overlappingEvents: overlappingEvents.map(e => ({
+          id: e._id.toString(),
+          name: e.name,
+          startDate: e.startDate,
+          endDate: e.endDate
+        })),
         ratesheetSummary: {
-          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length,
+          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length + eventRatesheets.length,
           customer: customerRatesheets.length,
           location: locationRatesheets.length,
-          sublocation: sublocationRatesheets.length
+          sublocation: sublocationRatesheets.length,
+          event: eventRatesheets.length
         }
       }
     });

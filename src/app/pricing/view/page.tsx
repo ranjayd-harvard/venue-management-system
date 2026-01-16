@@ -20,6 +20,18 @@ interface Location {
   city: string;
 }
 
+interface Event {
+  _id: string;
+  name: string;
+  description?: string;
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  subLocationId?: string;
+  locationId?: string;
+  customerId?: string;
+}
+
 interface PricingBreakdown {
   startDateTime: string;
   endDateTime: string;
@@ -73,14 +85,16 @@ const getDefaultDates = () => {
 export default function PricingViewPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [selectedLocation, setSelectedLocation] = useState('');
   const [subLocationId, setSubLocationId] = useState('');
-  
+  const [selectedEventId, setSelectedEventId] = useState('');
+
   // Initialize with default dates
   const defaultDates = getDefaultDates();
   const [startDateTime, setStartDateTime] = useState(defaultDates.start);
   const [endDateTime, setEndDateTime] = useState(defaultDates.end);
-  
+
   const [result, setResult] = useState<PricingResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -125,6 +139,26 @@ export default function PricingViewPage() {
     }
   }, [selectedLocation]);
 
+  // Fetch all active events (including upcoming) when sublocation is selected
+  useEffect(() => {
+    if (subLocationId) {
+      fetch('/api/events')
+        .then(res => res.json())
+        .then(data => {
+          // Filter to only show events with isActive=true
+          const activeEvents = data.filter((e: Event) => e.isActive);
+          setEvents(activeEvents);
+        })
+        .catch(err => {
+          console.error('Failed to load events:', err);
+          setEvents([]);
+        });
+    } else {
+      setEvents([]);
+      setSelectedEventId('');
+    }
+  }, [subLocationId]);
+
   const handleCalculate = async () => {
     if (!subLocationId || !startDateTime || !endDateTime) {
       setError('Please fill in all fields');
@@ -144,6 +178,7 @@ export default function PricingViewPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subLocationId,
+          eventId: selectedEventId || undefined,
           startTime: new Date(startDateTime).toISOString(),
           endTime: new Date(endDateTime).toISOString(),
           timezone: userTimezone
@@ -265,6 +300,37 @@ export default function PricingViewPage() {
                       </option>
                     ))}
                   </select>
+                )}
+              </div>
+            )}
+
+            {/* Event Selection (Optional) */}
+            {subLocationId && events.length > 0 && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Event (Optional)
+                  <span className="text-xs font-normal text-gray-500 ml-2">
+                    (Choose if this booking is for a specific event)
+                  </span>
+                </label>
+                <select
+                  value={selectedEventId}
+                  onChange={(e) => setSelectedEventId(e.target.value)}
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 text-gray-900"
+                >
+                  <option value="">No specific event (regular booking)</option>
+                  {events.map((event) => (
+                    <option key={event._id} value={event._id}>
+                      {event.name}
+                      {event.description && ` - ${event.description}`}
+                      {` (${new Date(event.startDate).toLocaleDateString()} - ${new Date(event.endDate).toLocaleDateString()})`}
+                    </option>
+                  ))}
+                </select>
+                {selectedEventId && (
+                  <p className="text-xs text-pink-600 mt-1 font-medium">
+                    📅 Event-specific pricing will be applied if available
+                  </p>
                 )}
               </div>
             )}

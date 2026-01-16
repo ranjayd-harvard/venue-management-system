@@ -61,6 +61,24 @@ export interface Venue {
   updatedAt: Date;
 }
 
+export interface Event {
+  _id?: ObjectId;
+  name: string;
+  description?: string;
+  subLocationId?: ObjectId;
+  locationId?: ObjectId;
+  customerId?: ObjectId;
+  startDate: Date;
+  endDate: Date;
+  attendees?: number;
+  attributes?: Attribute[];
+  defaultHourlyRate?: number;
+  timezone?: string;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface SubLocationVenue {
   _id?: ObjectId;
   subLocationId: ObjectId;
@@ -96,13 +114,14 @@ export interface RateSheet {
   name: string;
   description?: string;
   type: 'TIMING_BASED' | 'PACKAGE_BASED';
-  
+
   // Application scope
-  applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   customerId?: ObjectId;
   locationId?: ObjectId;
   subLocationId?: ObjectId;
-  
+  eventId?: ObjectId;
+
   // Priority (higher = more important)
   priority: number;
   
@@ -146,10 +165,11 @@ export interface PricingConfig {
 
 export interface PriorityConfig {
   _id?: ObjectId;
-  level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
+  level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   minPriority: number;
   maxPriority: number;
   color: string;
+  description: string;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
