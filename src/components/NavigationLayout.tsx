@@ -19,7 +19,8 @@ import {
   Settings,
   Calculator,
   Timer,
-  Calendar
+  Calendar,
+  TrendingUp
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -27,6 +28,9 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pricingOpen, setPricingOpen] = useState(
     pathname.startsWith('/pricing') || pathname.startsWith('/admin/pricing')
+  );
+  const [capacityOpen, setCapacityOpen] = useState(
+    pathname.startsWith('/capacity') || pathname.startsWith('/admin/capacity')
   );
 
   const isActive = (path: string) => {
@@ -58,11 +62,17 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       description: 'See Pricing Timeline'
     },
     {
+      href: '/pricing/timeseries',
+      icon: TrendingUp,
+      label: 'Pricing TimeSeries',
+      description: 'Pricing trends over time'
+    },
+    {
       href: '/pricing/timeline-tiles',
       icon: Timer,
       label: 'Pricing Tiles',
       description: 'Sublocations Pricing Tiles'
-    },    
+    },
     {
       href: '/pricing/timeline-all-sublocations',
       icon: Timer,
@@ -83,7 +93,53 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
     },
   ];
 
+  const capacitySubItems = [
+    {
+      href: '/capacity/manage',
+      icon: TrendingUp,
+      label: 'Manage Capacity',
+      description: 'View and manage capacity'
+    },
+    {
+      href: '/capacity/calculator',
+      icon: Calculator,
+      label: 'Capacity Calculator',
+      description: 'Calculate booking capacity'
+    },
+    {
+      href: '/capacity/timeline-view',
+      icon: Timer,
+      label: 'Capacity Timeline',
+      description: 'Visual capacity timeline'
+    },
+    {
+      href: '/capacity/timeseries',
+      icon: TrendingUp,
+      label: 'Capacity TimeSeries',
+      description: 'Capacity trends over time'
+    },
+    {
+      href: '/capacity/analytics',
+      icon: BarChart3,
+      label: 'Capacity Analytics',
+      description: 'Insights and statistics'
+    },
+    {
+      href: '/admin/capacity-sheets',
+      icon: Users,
+      label: 'Manage CapacitySheets',
+      description: 'Configure capacity rules'
+    },
+    {
+      href: '/admin/capacity-settings',
+      icon: Settings,
+      label: 'Capacity Settings',
+      description: 'Configure capacity constraints'
+    },
+  ];
+
   const isPricingActive = pathname.startsWith('/pricing') || pathname.startsWith('/admin/pricing');
+  const isCapacityActive = pathname.startsWith('/capacity') || pathname.startsWith('/admin/capacity');
 
   return (
     <div className="min-h-screen flex">
@@ -194,7 +250,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
                     {pricingSubItems.map((subItem) => {
                       const SubIcon = subItem.icon;
                       const active = pathname === subItem.href;
-                      
+
                       return (
                         <Link
                           key={subItem.href}
@@ -209,6 +265,108 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
                           <div className="flex-1">
                             <div className={`text-xs font-medium ${
                               active ? 'text-emerald-700' : 'text-gray-700'
+                            }`}>
+                              {subItem.label}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {subItem.description}
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Capacity Menu with Submenu */}
+          <div>
+            <button
+              onClick={() => setCapacityOpen(!capacityOpen)}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${
+                isCapacityActive
+                  ? 'bg-orange-100 text-orange-700'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Capacity"
+            >
+              <div className="flex items-center space-x-3">
+                <TrendingUp className="w-5 h-5 flex-shrink-0" />
+                {sidebarOpen && <span className="text-sm font-medium">Capacity</span>}
+              </div>
+              {sidebarOpen && (
+                capacityOpen ?
+                  <ChevronDown className="w-4 h-4" /> :
+                  <ChevronRight className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* Submenu Items */}
+            {capacityOpen && sidebarOpen && (
+              <div className="ml-4 mt-2 space-y-1 border-l-2 border-orange-200 pl-4">
+                {capacitySubItems.map((subItem) => {
+                  const SubIcon = subItem.icon;
+                  const active = pathname === subItem.href;
+
+                  return (
+                    <Link
+                      key={subItem.href}
+                      href={subItem.href}
+                      className={`flex items-start space-x-3 px-3 py-2 rounded-lg transition-colors group ${
+                        active
+                          ? 'bg-orange-50 text-orange-700'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                      title={subItem.label}
+                    >
+                      <SubIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-xs font-medium ${
+                          active ? 'text-orange-700' : 'text-gray-700'
+                        }`}>
+                          {subItem.label}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {subItem.description}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Collapsed State - Show submenu on hover */}
+            {!sidebarOpen && (
+              <div className="relative group">
+                <div className="absolute left-full top-0 ml-2 w-56 bg-white shadow-lg rounded-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                  <div className="p-3 border-b border-gray-100">
+                    <div className="flex items-center space-x-2 text-orange-700">
+                      <TrendingUp className="w-5 h-5" />
+                      <span className="font-semibold text-sm">Capacity</span>
+                    </div>
+                  </div>
+                  <div className="p-2 space-y-1">
+                    {capacitySubItems.map((subItem) => {
+                      const SubIcon = subItem.icon;
+                      const active = pathname === subItem.href;
+
+                      return (
+                        <Link
+                          key={subItem.href}
+                          href={subItem.href}
+                          className={`flex items-start space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            active
+                              ? 'bg-orange-50 text-orange-700'
+                              : 'text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <SubIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <div className={`text-xs font-medium ${
+                              active ? 'text-orange-700' : 'text-gray-700'
                             }`}>
                               {subItem.label}
                             </div>
@@ -253,7 +411,7 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
         </header>
 
         {/* Page Content */}
-        <main className="pt-16">
+        <main className="pt-16 bg-white min-h-screen">
           {children}
         </main>
       </div>

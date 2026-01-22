@@ -7,8 +7,18 @@ export type RecurrencePattern = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARL
 export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY' | 'SUNDAY';
 
 export interface TimeWindow {
-  startTime: string; // HH:mm format (24-hour)
-  endTime: string;   // HH:mm format (24-hour)
+  // Window type: ABSOLUTE_TIME uses clock time, DURATION_BASED uses minutes from booking start
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED'; // Defaults to ABSOLUTE_TIME for backward compatibility
+
+  // Absolute time mode (HH:mm format, 24-hour)
+  startTime?: string;
+  endTime?: string;
+
+  // Duration-based mode (minutes from booking start)
+  startMinute?: number;  // e.g., 0 = booking start, 120 = 2 hours from start
+  endMinute?: number;    // e.g., 240 = 4 hours from start
+
+  // Common fields
   pricePerHour: number;
 }
 

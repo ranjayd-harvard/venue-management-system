@@ -245,19 +245,35 @@ export class HourlyPricingEngine {
       
       // Check time windows for TIMING_BASED ratesheets
       if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
-        const hourTime = getTimeInTimezone(hourStart, context.timezone);
-        const hourMinutes = timeToMinutes(hourTime);
-        
         for (const tw of rs.timeWindows) {
-          const startMinutes = timeToMinutes(tw.startTime);
-          const endMinutes = timeToMinutes(tw.endTime);
-          
-          if (hourMinutes >= startMinutes && hourMinutes < endMinutes) {
+          const windowType = tw.windowType || 'ABSOLUTE_TIME';
+          let matches = false;
+
+          if (windowType === 'ABSOLUTE_TIME') {
+            // Existing logic: match against hour time
+            const hourTime = getTimeInTimezone(hourStart, context.timezone);
+            const hourMinutes = timeToMinutes(hourTime);
+            const startMinutes = timeToMinutes(tw.startTime!);
+            const endMinutes = timeToMinutes(tw.endTime!);
+
+            matches = hourMinutes >= startMinutes && hourMinutes < endMinutes;
+          } else {
+            // Duration-based logic: match against minutes from booking start
+            const minutesFromStart = Math.floor((hourStart.getTime() - context.bookingStart.getTime()) / (1000 * 60));
+            const startMinute = tw.startMinute ?? 0;
+            const endMinute = tw.endMinute ?? 0;
+
+            matches = minutesFromStart >= startMinute && minutesFromStart < endMinute;
+          }
+
+          if (matches) {
             applicable.push({
               ratesheet: rs,
               pricePerHour: tw.pricePerHour,
               level,
-              timeWindow: { start: tw.startTime, end: tw.endTime }
+              timeWindow: windowType === 'ABSOLUTE_TIME'
+                ? { start: tw.startTime!, end: tw.endTime! }
+                : { start: `${tw.startMinute}m`, end: `${tw.endMinute}m` }
             });
             break; // Found matching window
           }

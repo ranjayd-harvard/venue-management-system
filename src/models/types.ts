@@ -5,6 +5,43 @@ export interface Attribute {
   value: string;
 }
 
+// ===== CAPACITY & REVENUE GOAL TYPES =====
+
+export interface CapacityBounds {
+  minCapacity: number; // default: 0
+  maxCapacity: number; // default: 100
+}
+
+export interface DailyCapacity {
+  date: string; // ISO date string (YYYY-MM-DD)
+  capacity: number; // Must be between minCapacity and maxCapacity
+}
+
+export interface HourlyCapacityOverride {
+  date: string; // ISO date string (YYYY-MM-DD)
+  hour: number; // 0-23
+  minCapacity?: number;
+  maxCapacity?: number;
+  defaultCapacity?: number;
+  allocatedCapacity?: number;
+}
+
+export interface RevenueGoal {
+  startDate: string; // ISO date string (YYYY-MM-DD)
+  endDate: string;   // ISO date string (YYYY-MM-DD)
+  dailyGoal?: number;
+  weeklyGoal?: number;
+  monthlyGoal?: number;
+  revenueGoalType?: RevenueGoalType; // Which calculation method was used for this goal
+}
+
+export interface CapacityConfig extends CapacityBounds {
+  dailyCapacities: DailyCapacity[]; // Explicit daily overrides (deprecated - use hourlyCapacities)
+  hourlyCapacities?: HourlyCapacityOverride[]; // Hour-level capacity overrides
+  revenueGoals: RevenueGoal[];      // Time-varying goals
+  hoursPerDay?: number;             // Hours per day for revenue calculation (default: 24)
+}
+
 export interface Customer {
   _id?: ObjectId;
   name: string;
@@ -13,7 +50,13 @@ export interface Customer {
   address?: string;
   attributes?: Attribute[];
   defaultHourlyRate?: number;
+  // Aggregated capacity from all locations
+  minCapacity?: number;       // Sum of all location minCapacity values
+  maxCapacity?: number;       // Sum of all location maxCapacity values
+  defaultCapacity?: number;   // Sum of all location defaultCapacity values
+  allocatedCapacity?: number; // Sum of all location allocatedCapacity values
   timezone?: string;
+  capacityConfig?: CapacityConfig;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,24 +71,38 @@ export interface Location {
   zipCode: string;
   country: string;
   totalCapacity?: number;
+  // Aggregated capacity from sublocations
+  minCapacity?: number;       // Sum of all sublocation minCapacity values
+  maxCapacity?: number;       // Sum of all sublocation maxCapacity values
+  defaultCapacity?: number;   // Sum of all sublocation defaultCapacity values
+  allocatedCapacity?: number; // Sum of all sublocation allocatedCapacity values
   attributes?: Attribute[];
   defaultHourlyRate?: number;
   timezone?: string;
+  capacityConfig?: CapacityConfig;
   createdAt: Date;
   updatedAt: Date;
 }
+
+export type RevenueGoalType = 'max' | 'allocated' | 'custom';
 
 export interface SubLocation {
   _id?: ObjectId;
   locationId: ObjectId;
   label: string;
   description?: string;
-  allocatedCapacity?: number;
+  // Capacity settings (at sublocation level)
+  minCapacity?: number;       // Minimum capacity constraint
+  maxCapacity?: number;       // Maximum capacity constraint
+  defaultCapacity?: number;   // Default capacity value (must be within min-max)
+  allocatedCapacity?: number; // Currently allocated capacity (must be within min-max)
   attributes?: Attribute[];
   defaultHourlyRate?: number;
   pricingEnabled: boolean;
   isActive: boolean;
   timezone?: string;
+  capacityConfig?: CapacityConfig;
+  revenueGoalType?: RevenueGoalType; // Which calculation method to use for revenue goals (default: 'max')
   createdAt: Date;
   updatedAt: Date;
 }
@@ -75,6 +132,7 @@ export interface Event {
   defaultHourlyRate?: number;
   timezone?: string;
   isActive: boolean;
+  capacityConfig?: CapacityConfig;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -96,8 +154,18 @@ export interface LocationVenue {
 // ===== PRICING TYPES =====
 
 export interface TimeWindow {
-  startTime: string; // Format: "HH:MM" (24-hour)
-  endTime: string;   // Format: "HH:MM" (24-hour)
+  // Window type: ABSOLUTE_TIME uses clock time, DURATION_BASED uses minutes from booking start
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED'; // Defaults to ABSOLUTE_TIME for backward compatibility
+
+  // Absolute time mode (HH:MM format)
+  startTime?: string; // Format: "HH:MM" (24-hour)
+  endTime?: string;   // Format: "HH:MM" (24-hour)
+
+  // Duration-based mode (minutes from booking start)
+  startMinute?: number;  // e.g., 0 = booking start, 120 = 2 hours from start
+  endMinute?: number;    // e.g., 240 = 4 hours from start
+
+  // Common fields
   pricePerHour: number;
   daysOfWeek?: number[]; // 0=Sunday, 6=Saturday
 }
@@ -174,3 +242,17 @@ export interface PriorityConfig {
   createdAt: Date;
   updatedAt: Date;
 }
+
+// ===== CAPACITY SHEET TYPES =====
+// Re-export from CapacitySheet model for convenience
+
+export type {
+  CapacitySheet,
+  CapacitySheetType,
+  TimeCapacityWindow,
+  DateCapacityRange,
+  EventCapacityRule,
+  RecurrenceRule,
+  CapacityQuery,
+  CapacityResult
+} from './CapacitySheet';

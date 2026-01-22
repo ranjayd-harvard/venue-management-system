@@ -1,6 +1,13 @@
 import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { Event } from './types';
+import {
+  setCapacityForDate,
+  setCapacityForDateRange,
+  setRevenueGoal,
+  removeCapacityForDate,
+  removeRevenueGoal
+} from '@/lib/capacity-utils';
 
 export class EventRepository {
   private static COLLECTION = 'events';
@@ -116,5 +123,137 @@ export class EventRepository {
     const objectId = typeof id === 'string' ? new ObjectId(id) : id;
     const result = await db.collection<Event>(this.COLLECTION).deleteOne({ _id: objectId });
     return result.deletedCount > 0;
+  }
+
+  // ===== CAPACITY & REVENUE GOAL METHODS =====
+
+  /**
+   * Updates capacity configuration bounds
+   */
+  static async updateCapacityBounds(
+    id: string | ObjectId,
+    minCapacity: number,
+    maxCapacity: number
+  ): Promise<Event | null> {
+    const db = await getDb();
+    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+
+    const result = await db.collection<Event>(this.COLLECTION).findOneAndUpdate(
+      { _id: objectId },
+      {
+        $set: {
+          'capacityConfig.minCapacity': minCapacity,
+          'capacityConfig.maxCapacity': maxCapacity,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after' }
+    );
+
+    return result;
+  }
+
+  /**
+   * Sets capacity for a specific date
+   */
+  static async setDailyCapacity(
+    id: string | ObjectId,
+    date: string,
+    capacity: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setCapacityForDate(config, date, capacity);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Sets capacity for a date range
+   */
+  static async setCapacityRange(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string,
+    capacity: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setCapacityForDateRange(config, startDate, endDate, capacity);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Removes capacity override for a specific date
+   */
+  static async removeDailyCapacity(
+    id: string | ObjectId,
+    date: string
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event || !event.capacityConfig) return event;
+
+    const config = event.capacityConfig;
+    removeCapacityForDate(config, date);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Sets revenue goal for a date range
+   */
+  static async setRevenueGoal(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string,
+    dailyGoal: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setRevenueGoal(config, startDate, endDate, dailyGoal);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Removes revenue goal for a specific date range
+   */
+  static async removeRevenueGoal(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event || !event.capacityConfig) return event;
+
+    const config = event.capacityConfig;
+    removeRevenueGoal(config, startDate, endDate);
+
+    return this.update(id, { capacityConfig: config });
   }
 }

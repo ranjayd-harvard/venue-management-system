@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { 
-  Calendar, 
-  Clock, 
-  DollarSign, 
-  TrendingUp, 
-  ChevronDown, 
+import {
+  Calendar,
+  Clock,
+  DollarSign,
+  TrendingUp,
+  ChevronDown,
   ChevronUp,
   Zap,
   Award,
@@ -15,10 +15,14 @@ import {
   MapPin,
   User
 } from 'lucide-react';
+import PricingFilters from '@/components/PricingFilters';
 
 interface TimeWindow {
-  startTime: string;
-  endTime: string;
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
+  startTime?: string;
+  endTime?: string;
+  startMinute?: number;
+  endMinute?: number;
   pricePerHour: number;
 }
 
@@ -112,13 +116,11 @@ interface TimeSlot {
 }
 
 export default function TimelineViewPage() {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
-  const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [ratesheets, setRatesheets] = useState<Ratesheet[]>([]);
+  const [events, setEvents] = useState<Event[]>([]); // Needed for getActiveRatesheetsForInterval filtering
   const [loading, setLoading] = useState(false);
 
   // Pricing config for priority ranges
@@ -150,6 +152,10 @@ export default function TimelineViewPage() {
   });
 
   const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
+
+  // Booking start time for duration-based window calculations
+  const [useDurationContext, setUseDurationContext] = useState<boolean>(false);
+  const [bookingStartTime, setBookingStartTime] = useState<Date>(viewStart);
 
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -208,16 +214,13 @@ export default function TimelineViewPage() {
   };
 
   useEffect(() => {
-    fetchLocations();
     fetchPricingConfig();
   }, []);
 
   useEffect(() => {
     if (selectedLocation) {
-      fetchSubLocations(selectedLocation);
       fetchLocationDetails(selectedLocation);
     } else {
-      setSublocations([]);
       setSelectedSubLocation('');
       setCurrentLocation(null);
       setCurrentCustomer(null);
@@ -227,11 +230,10 @@ export default function TimelineViewPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      // Load all active events (including upcoming ones)
+      // Load all active events for filtering logic
       fetch('/api/events')
         .then(res => res.json())
         .then(data => {
-          // Filter to only show events with isActive=true
           const activeEvents = data.filter((e: Event) => e.isActive);
           setEvents(activeEvents);
         })
@@ -260,7 +262,7 @@ export default function TimelineViewPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -269,26 +271,6 @@ export default function TimelineViewPage() {
       setPricingConfig(data.pricingConfig);
     } catch (error) {
       console.error('Failed to fetch pricing config:', error);
-    }
-  };
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      const data = await response.json();
-      setLocations(data);
-    } catch (error) {
-      console.error('Failed to fetch locations:', error);
-    }
-  };
-
-  const fetchSubLocations = async (locationId: string) => {
-    try {
-      const response = await fetch(`/api/sublocations?locationId=${locationId}`);
-      const data = await response.json();
-      setSublocations(data);
-    } catch (error) {
-      console.error('Failed to fetch sublocations:', error);
     }
   };
 
@@ -443,9 +425,32 @@ export default function TimelineViewPage() {
       const candidateRatesheets = activeRatesheets
         .map(rs => {
           if (rs.timeWindows && rs.timeWindows.length > 0) {
-            const matchingWindow = rs.timeWindows.find(tw => 
-              timeInWindow(timeStr, tw.startTime, tw.endTime)
-            );
+            const matchingWindow = rs.timeWindows.find(tw => {
+              const windowType = tw.windowType || 'ABSOLUTE_TIME';
+
+              if (windowType === 'DURATION_BASED') {
+                // Duration-based windows: only show if duration context is enabled
+                if (!useDurationContext) {
+                  return false; // Skip duration-based windows when context is disabled
+                }
+
+                // Calculate minutes from booking start
+                const minutesFromStart = Math.floor(
+                  (currentTime.getTime() - bookingStartTime.getTime()) / (1000 * 60)
+                );
+                const startMinute = tw.startMinute ?? 0;
+                const endMinute = tw.endMinute ?? 0;
+
+                return minutesFromStart >= startMinute && minutesFromStart < endMinute;
+              } else {
+                // ABSOLUTE_TIME windows: match against hour time
+                if (!tw.startTime || !tw.endTime) {
+                  return false; // Invalid window
+                }
+                return timeInWindow(timeStr, tw.startTime, tw.endTime);
+              }
+            });
+
             if (matchingWindow) {
               return {
                 ratesheet: rs,
@@ -743,123 +748,21 @@ export default function TimelineViewPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Location
-              </label>
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              >
-                <option value="">Select location...</option>
-                {locations.map((loc) => (
-                  <option key={loc._id} value={loc._id}>
-                    {loc.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sub-Location
-              </label>
-              <select
-                value={selectedSubLocation}
-                onChange={(e) => setSelectedSubLocation(e.target.value)}
-                disabled={!selectedLocation}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Select sub-location...</option>
-                {sublocations.map((subloc) => (
-                  <option key={subloc._id} value={subloc._id}>
-                    {subloc.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Event (Optional - Auto-detected)
-              </label>
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectedSubLocation || events.length === 0}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Auto-detect overlapping events</option>
-                {events.map((event) => (
-                  <option key={event._id} value={event._id}>
-                    {event.name}
-                    {event.description && ` - ${event.description}`}
-                  </option>
-                ))}
-              </select>
-              {selectedEventId ? (
-                <p className="text-xs text-pink-600 mt-1 font-medium">
-                  📅 Manual: Showing only this event
-                </p>
-              ) : counts.event > 0 ? (
-                <p className="text-xs text-green-600 mt-1 font-medium">
-                  ✨ Auto: Detected {counts.event} event ratesheet{counts.event > 1 ? 's' : ''}
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setQuickRange(7)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 7
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  7h
-                </button>
-                <button
-                  onClick={() => setQuickRange(12)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 12
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  12h
-                </button>
-                <button
-                  onClick={() => setQuickRange(24)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 24
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  24h
-                </button>
-                <button
-                  onClick={() => setQuickRange(48)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 48
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  48h
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PricingFilters
+          selectedLocation={selectedLocation}
+          selectedSubLocation={selectedSubLocation}
+          selectedEventId={selectedEventId}
+          onLocationChange={setSelectedLocation}
+          onSubLocationChange={setSelectedSubLocation}
+          onEventChange={setSelectedEventId}
+          selectedDuration={selectedDuration}
+          onDurationChange={setQuickRange}
+          useDurationContext={useDurationContext}
+          bookingStartTime={bookingStartTime}
+          onUseDurationContextChange={setUseDurationContext}
+          onBookingStartTimeChange={setBookingStartTime}
+          eventCount={counts.event}
+        />
 
         {loading && (
           <div className="flex items-center justify-center h-64">

@@ -70,16 +70,16 @@ async function fixDates() {
       const updated = await db.collection('ratesheets').findOne({
         _id: ratesheet._id
       });
-      
-      console.log('  effectiveFrom:', updated.effectiveFrom);
-      console.log('  effectiveTo:', updated.effectiveTo);
+
+      console.log('  effectiveFrom:', updated?.effectiveFrom);
+      console.log('  effectiveTo:', updated?.effectiveTo);
       console.log();
       
       // Test if booking now falls within range
       const testBookingStart = new Date('2026-01-13T14:00:00.000Z'); // 9 AM EST
       const testBookingEnd = new Date('2026-01-13T19:00:00.000Z');   // 2 PM EST
       
-      const isWithinRange = 
+      const isWithinRange = updated &&
         testBookingStart >= updated.effectiveFrom &&
         testBookingEnd <= updated.effectiveTo;
       

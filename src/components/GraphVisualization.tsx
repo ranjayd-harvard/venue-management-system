@@ -49,6 +49,20 @@ interface AllData {
   slvRelations: any[];
 }
 
+interface CapacityMetrics {
+  minCapacity: number;
+  maxCapacity: number;
+  defaultCapacity: number;
+  allocatedCapacity: number;
+}
+
+interface GraphCapacityMetrics {
+  date: string;
+  customers: Record<string, CapacityMetrics>;
+  locations: Record<string, CapacityMetrics>;
+  sublocations: Record<string, CapacityMetrics>;
+}
+
 interface TooltipData {
   name: string;
   type: string;
@@ -62,17 +76,18 @@ export default function GraphVisualization() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  
+
   // State management
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   const [highlightedEdges, setHighlightedEdges] = useState<Set<string>>(new Set());
-  const [allData, setAllData] = useState<AllData>({ 
-    customers: [], 
-    locations: [], 
-    sublocations: [], 
-    venues: [], 
-    slvRelations: [] 
+  const [allData, setAllData] = useState<AllData>({
+    customers: [],
+    locations: [],
+    sublocations: [],
+    venues: [],
+    slvRelations: []
   });
+  const [capacityMetrics, setCapacityMetrics] = useState<GraphCapacityMetrics | null>(null);
   
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
@@ -240,6 +255,7 @@ export default function GraphVisualization() {
         // Rebuild label with updated colors
         let label;
         if (entityType === 'customer') {
+          const metrics = capacityMetrics?.customers[entity._id];
           label = (
             <div className="text-center px-4 py-3">
               <div className={`font-bold text-lg mb-1 ${textColorPrimary}`}>
@@ -248,6 +264,26 @@ export default function GraphVisualization() {
               <div className={`text-xs ${textColorSecondary}`}>
                 {entity.email}
               </div>
+              {metrics && (
+                <div className={`text-xs mt-2 space-y-1 ${badgeColor}`}>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-left">Min:</span>
+                    <span className="font-semibold">{metrics.minCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-left">Max:</span>
+                    <span className="font-semibold">{metrics.maxCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-left">Default:</span>
+                    <span className="font-semibold">{metrics.defaultCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-left">Allocated:</span>
+                    <span className="font-semibold">{metrics.allocatedCapacity}</span>
+                  </div>
+                </div>
+              )}
               {entity.attributes && entity.attributes.length > 0 && (
                 <div className="mt-2 flex justify-center">
                   <span className={`text-xs px-2 py-1 rounded-full ${badgeColor}`}>
@@ -258,10 +294,11 @@ export default function GraphVisualization() {
             </div>
           );
         } else if (entityType === 'location') {
+          const locMetrics = capacityMetrics?.locations[entity._id];
           const locationSublocations = allData.sublocations.filter((sl: any) => sl.locationId === entity._id);
           const totalAllocated = locationSublocations.reduce((sum: number, sl: any) => sum + (sl.allocatedCapacity || 0), 0);
           const remainingCapacity = entity.totalCapacity ? entity.totalCapacity - totalAllocated : null;
-          
+
           label = (
             <div className="text-center px-4 py-3">
               <div className={`font-bold text-base mb-1 ${textColorPrimary}`}>
@@ -270,7 +307,27 @@ export default function GraphVisualization() {
               <div className={`text-xs mb-2 ${textColorSecondary}`}>
                 {entity.city}, {entity.state}
               </div>
-              {entity.totalCapacity && (
+              {locMetrics && (
+                <div className={`text-xs space-y-1 ${badgeColor}`}>
+                  <div className="flex justify-between gap-2">
+                    <span>Min:</span>
+                    <span className="font-semibold">{locMetrics.minCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span>Max:</span>
+                    <span className="font-semibold">{locMetrics.maxCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span>Default:</span>
+                    <span className="font-semibold">{locMetrics.defaultCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span>Allocated:</span>
+                    <span className="font-semibold">{locMetrics.allocatedCapacity}</span>
+                  </div>
+                </div>
+              )}
+              {!locMetrics && entity.totalCapacity && (
                 <div className={`text-xs space-y-1 ${badgeColor}`}>
                   <div className="flex justify-between">
                     <span>Total:</span>
@@ -283,8 +340,8 @@ export default function GraphVisualization() {
                   <div className="flex justify-between">
                     <span>Available:</span>
                     <span className={`font-semibold ${
-                      remainingCapacity && remainingCapacity < 0 
-                        ? 'text-red-500' 
+                      remainingCapacity && remainingCapacity < 0
+                        ? 'text-red-500'
                         : isHighlighted ? 'text-emerald-100' : 'text-emerald-600'
                     }`}>
                       {remainingCapacity}
@@ -295,35 +352,58 @@ export default function GraphVisualization() {
             </div>
           );
         } else if (entityType === 'sublocation') {
+          const slMetrics = capacityMetrics?.sublocations[entity._id];
           const sublocationVenues = allData.slvRelations
             .filter((r: any) => r.subLocationId === entity._id)
             .map((r: any) => allData.venues.find((v: any) => v._id === r.venueId))
             .filter(Boolean);
           const totalVenueCapacity = sublocationVenues.reduce((sum: number, v: any) => sum + (v.capacity || 0), 0);
-          
+
           label = (
             <div className="text-center px-4 py-3">
               <div className={`font-bold text-sm mb-1 ${textColorPrimary}`}>
-                {entity.name }
+                {entity.name}
               </div>
-              <div className={`text-xs space-y-1 ${badgeColor}`}>
-                {entity.allocatedCapacity && (
-                  <div className="flex justify-between">
+              {slMetrics && (
+                <div className={`text-xs space-y-1 ${badgeColor}`}>
+                  <div className="flex justify-between gap-2">
+                    <span>Min:</span>
+                    <span className="font-semibold">{slMetrics.minCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span>Max:</span>
+                    <span className="font-semibold">{slMetrics.maxCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span>Default:</span>
+                    <span className="font-semibold">{slMetrics.defaultCapacity}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
                     <span>Allocated:</span>
-                    <span className="font-semibold">{entity.allocatedCapacity}</span>
+                    <span className="font-semibold">{slMetrics.allocatedCapacity}</span>
                   </div>
-                )}
-                <div className="flex justify-between">
-                  <span>Venues:</span>
-                  <span className="font-semibold">{sublocationVenues.length}</span>
                 </div>
-                {totalVenueCapacity > 0 && (
+              )}
+              {!slMetrics && (
+                <div className={`text-xs space-y-1 ${badgeColor}`}>
+                  {entity.allocatedCapacity && (
+                    <div className="flex justify-between">
+                      <span>Allocated:</span>
+                      <span className="font-semibold">{entity.allocatedCapacity}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
-                    <span>Total Cap:</span>
-                    <span className="font-semibold">{totalVenueCapacity}</span>
+                    <span>Venues:</span>
+                    <span className="font-semibold">{sublocationVenues.length}</span>
                   </div>
-                )}
-              </div>
+                  {totalVenueCapacity > 0 && (
+                    <div className="flex justify-between">
+                      <span>Total Cap:</span>
+                      <span className="font-semibold">{totalVenueCapacity}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         } else { // venue
@@ -391,7 +471,7 @@ export default function GraphVisualization() {
         };
       })
     );
-  }, [edges, findAllPathsToRoot, setNodes, setEdges, allData, getEntityData]);
+  }, [edges, findAllPathsToRoot, setNodes, setEdges, allData, getEntityData, capacityMetrics]);
 
   // Handle node right-click for context menu
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
@@ -596,15 +676,17 @@ export default function GraphVisualization() {
   const loadGraphData = useCallback(async () => {
     setLoading(true);
     try {
-      const [customers, locations, sublocations, venues, slvRelations] = await Promise.all([
+      const [customers, locations, sublocations, venues, slvRelations, metrics] = await Promise.all([
         fetch('/api/customers').then(r => r.json()),
         fetch('/api/locations').then(r => r.json()),
         fetch('/api/sublocations').then(r => r.json()),
         fetch('/api/venues').then(r => r.json()),
         fetch('/api/sublocation-venues').then(r => r.json()),
+        fetch('/api/capacity/graph-metrics').then(r => r.json()),
       ]);
 
       setAllData({ customers, locations, sublocations, venues, slvRelations });
+      setCapacityMetrics(metrics);
 
       // Determine data to visualize
       const dataToVisualize = activeFilters.customer === 'all' && 
@@ -625,11 +707,12 @@ export default function GraphVisualization() {
       dataToVisualize.customers.forEach((customer: any, cIndex: number) => {
         const customerId = `customer-${customer._id}`;
         const isHighlighted = highlightedNodes.has(customerId);
-        
+        const metrics = capacityMetrics?.customers[customer._id];
+
         newNodes.push({
           id: customerId,
           type: 'default',
-          data: { 
+          data: {
             label: (
               <div className="text-center px-4 py-3">
                 <div className={`font-bold text-lg mb-1 ${isHighlighted ? 'text-white' : 'text-blue-900'}`}>
@@ -638,6 +721,26 @@ export default function GraphVisualization() {
                 <div className={`text-xs ${isHighlighted ? 'text-blue-100' : 'text-blue-600'}`}>
                   {customer.email}
                 </div>
+                {metrics && (
+                  <div className={`text-xs mt-2 space-y-1 ${isHighlighted ? 'text-white' : 'text-blue-700'}`}>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-left">Min:</span>
+                      <span className="font-semibold">{metrics.minCapacity}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-left">Max:</span>
+                      <span className="font-semibold">{metrics.maxCapacity}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-left">Default:</span>
+                      <span className="font-semibold">{metrics.defaultCapacity}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-left">Allocated:</span>
+                      <span className="font-semibold">{metrics.allocatedCapacity}</span>
+                    </div>
+                  </div>
+                )}
                 {customer.attributes && customer.attributes.length > 0 && (
                   <div className="mt-2 flex justify-center">
                     <span className={`text-xs px-2 py-1 rounded-full ${
@@ -673,7 +776,8 @@ export default function GraphVisualization() {
           const locationY = cIndex * 800 + lIndex * 350;
           const locationId = `location-${location._id}`;
           const isLocHighlighted = highlightedNodes.has(locationId);
-          
+          const locMetrics = capacityMetrics?.locations[location._id];
+
           const locationSublocations = dataToVisualize.sublocations.filter((sl: any) => sl.locationId === location._id);
           const totalAllocated = locationSublocations.reduce((sum: number, sl: any) => sum + (sl.allocatedCapacity || 0), 0);
           const remainingCapacity = location.totalCapacity ? location.totalCapacity - totalAllocated : null;
@@ -681,7 +785,7 @@ export default function GraphVisualization() {
           newNodes.push({
             id: locationId,
             type: 'default',
-            data: { 
+            data: {
               label: (
                 <div className="text-center px-4 py-3">
                   <div className={`font-bold text-base mb-1 ${isLocHighlighted ? 'text-white' : 'text-emerald-900'}`}>
@@ -690,7 +794,27 @@ export default function GraphVisualization() {
                   <div className={`text-xs mb-2 ${isLocHighlighted ? 'text-emerald-100' : 'text-emerald-600'}`}>
                     {location.city}, {location.state}
                   </div>
-                  {location.totalCapacity && (
+                  {locMetrics && (
+                    <div className={`text-xs space-y-1 ${isLocHighlighted ? 'text-white' : 'text-emerald-700'}`}>
+                      <div className="flex justify-between gap-2">
+                        <span>Min:</span>
+                        <span className="font-semibold">{locMetrics.minCapacity}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>Max:</span>
+                        <span className="font-semibold">{locMetrics.maxCapacity}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>Default:</span>
+                        <span className="font-semibold">{locMetrics.defaultCapacity}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span>Allocated:</span>
+                        <span className="font-semibold">{locMetrics.allocatedCapacity}</span>
+                      </div>
+                    </div>
+                  )}
+                  {!locMetrics && location.totalCapacity && (
                     <div className={`text-xs space-y-1 ${isLocHighlighted ? 'text-white' : 'text-emerald-700'}`}>
                       <div className="flex justify-between">
                         <span>Total:</span>
@@ -703,8 +827,8 @@ export default function GraphVisualization() {
                       <div className="flex justify-between">
                         <span>Available:</span>
                         <span className={`font-semibold ${
-                          remainingCapacity && remainingCapacity < 0 
-                            ? 'text-red-500' 
+                          remainingCapacity && remainingCapacity < 0
+                            ? 'text-red-500'
                             : isLocHighlighted ? 'text-emerald-100' : 'text-emerald-600'
                         }`}>
                           {remainingCapacity}
@@ -768,41 +892,64 @@ export default function GraphVisualization() {
             const sublocationY = locationY + slIndex * 200;
             const sublocationId = `sublocation-${sublocation._id}`;
             const isSlHighlighted = highlightedNodes.has(sublocationId);
+            const slMetrics = capacityMetrics?.sublocations[sublocation._id];
 
             const sublocationVenues = dataToVisualize.slvRelations
               .filter((r: any) => r.subLocationId === sublocation._id)
               .map((r: any) => dataToVisualize.venues.find((v: any) => v._id === r.venueId))
               .filter(Boolean);
-            
+
             const totalVenueCapacity = sublocationVenues.reduce((sum: number, v: any) => sum + (v.capacity || 0), 0);
 
             newNodes.push({
               id: sublocationId,
               type: 'default',
-              data: { 
+              data: {
                 label: (
                   <div className="text-center px-4 py-3">
                     <div className={`font-bold text-sm mb-1 ${isSlHighlighted ? 'text-white' : 'text-orange-900'}`}>
                       {sublocation.label}
                     </div>
-                    <div className={`text-xs space-y-1 ${isSlHighlighted ? 'text-orange-100' : 'text-orange-700'}`}>
-                      {sublocation.allocatedCapacity && (
-                        <div className="flex justify-between">
+                    {slMetrics && (
+                      <div className={`text-xs space-y-1 ${isSlHighlighted ? 'text-orange-100' : 'text-orange-700'}`}>
+                        <div className="flex justify-between gap-2">
+                          <span>Min:</span>
+                          <span className="font-semibold">{slMetrics.minCapacity}</span>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <span>Max:</span>
+                          <span className="font-semibold">{slMetrics.maxCapacity}</span>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <span>Default:</span>
+                          <span className="font-semibold">{slMetrics.defaultCapacity}</span>
+                        </div>
+                        <div className="flex justify-between gap-2">
                           <span>Allocated:</span>
-                          <span className="font-semibold">{sublocation.allocatedCapacity}</span>
+                          <span className="font-semibold">{slMetrics.allocatedCapacity}</span>
                         </div>
-                      )}
-                      <div className="flex justify-between">
-                        <span>Venues:</span>
-                        <span className="font-semibold">{sublocationVenues.length}</span>
                       </div>
-                      {totalVenueCapacity > 0 && (
+                    )}
+                    {!slMetrics && (
+                      <div className={`text-xs space-y-1 ${isSlHighlighted ? 'text-orange-100' : 'text-orange-700'}`}>
+                        {sublocation.allocatedCapacity && (
+                          <div className="flex justify-between">
+                            <span>Allocated:</span>
+                            <span className="font-semibold">{sublocation.allocatedCapacity}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between">
-                          <span>Total Cap:</span>
-                          <span className="font-semibold">{totalVenueCapacity}</span>
+                          <span>Venues:</span>
+                          <span className="font-semibold">{sublocationVenues.length}</span>
                         </div>
-                      )}
-                    </div>
+                        {totalVenueCapacity > 0 && (
+                          <div className="flex justify-between">
+                            <span>Total Cap:</span>
+                            <span className="font-semibold">{totalVenueCapacity}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               },
@@ -959,7 +1106,7 @@ export default function GraphVisualization() {
     } finally {
       setLoading(false);
     }
-  }, [activeFilters, highlightedNodes, highlightedEdges, getFilteredDataForVisualization, setNodes, setEdges]);
+  }, [activeFilters, highlightedNodes, highlightedEdges, getFilteredDataForVisualization, setNodes, setEdges, capacityMetrics]);
 
   // Sync to Neo4j
   const syncToNeo4j = async () => {

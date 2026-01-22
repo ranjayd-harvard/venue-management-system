@@ -37,8 +37,11 @@ interface Event {
 }
 
 interface TimeWindow {
-  startTime: string;
-  endTime: string;
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
+  startTime?: string;
+  endTime?: string;
+  startMinute?: number;
+  endMinute?: number;
   pricePerHour: number;
 }
 
@@ -81,7 +84,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   
   // Pricing state
   const [timeWindows, setTimeWindows] = useState<TimeWindow[]>([
-    { startTime: '09:00', endTime: '17:00', pricePerHour: 100 }
+    { windowType: 'ABSOLUTE_TIME', startTime: '09:00', endTime: '17:00', pricePerHour: 100 }
   ]);
   const [durationRules, setDurationRules] = useState<DurationRule[]>([
     { durationHours: 4, totalPrice: 300, description: '4-hour package' },
@@ -259,7 +262,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   };
 
   const addTimeWindow = () => {
-    setTimeWindows([...timeWindows, { startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
+    setTimeWindows([...timeWindows, { windowType: 'ABSOLUTE_TIME', startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
   };
 
   const removeTimeWindow = (index: number) => {
@@ -334,11 +337,20 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
   const validateStep3 = () => {
     if (ratesheetType === 'TIMING_BASED') {
       if (timeWindows.length === 0) return 'At least one time window is required';
-      
+
       for (let i = 0; i < timeWindows.length; i++) {
         const tw = timeWindows[i];
-        if (!tw.startTime || !tw.endTime) return `Time window ${i + 1}: Start and end times are required`;
-        if (tw.startTime >= tw.endTime) return `Time window ${i + 1}: Start time must be before end time`;
+        const windowType = tw.windowType || 'ABSOLUTE_TIME';
+
+        if (windowType === 'ABSOLUTE_TIME') {
+          if (!tw.startTime || !tw.endTime) return `Time window ${i + 1}: Start and end times are required`;
+          if (tw.startTime >= tw.endTime) return `Time window ${i + 1}: Start time must be before end time`;
+        } else {
+          if (tw.startMinute === undefined || tw.endMinute === undefined) return `Time window ${i + 1}: Start and end minutes are required`;
+          if (tw.startMinute < 0) return `Time window ${i + 1}: Start minute cannot be negative`;
+          if (tw.endMinute <= tw.startMinute) return `Time window ${i + 1}: End minute must be after start minute`;
+        }
+
         if (tw.pricePerHour <= 0) return `Time window ${i + 1}: Price must be greater than 0`;
       }
     } else {
@@ -442,7 +454,7 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
     setEffectiveFrom('');
     setEffectiveTo('');
     setTimezone('');
-    setTimeWindows([{ startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
+    setTimeWindows([{ windowType: 'ABSOLUTE_TIME', startTime: '09:00', endTime: '17:00', pricePerHour: 100 }]);
     setDurationRules([
       { durationHours: 4, totalPrice: 300, description: '4-hour package' },
       { durationHours: 8, totalPrice: 500, description: '8-hour package' }
@@ -852,61 +864,162 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
                     </button>
                   </div>
 
-                  {timeWindows.map((tw, index) => (
-                    <div key={index} className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-semibold text-gray-900">Window {index + 1}</h4>
-                        {timeWindows.length > 1 && (
-                          <button
-                            onClick={() => removeTimeWindow(index)}
-                            className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                  {timeWindows.map((tw, index) => {
+                    const windowType = tw.windowType || 'ABSOLUTE_TIME';
+                    return (
+                      <div key={index} className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="font-semibold text-gray-900">Window {index + 1}</h4>
+                          {timeWindows.length > 1 && (
+                            <button
+                              onClick={() => removeTimeWindow(index)}
+                              className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Window Type Toggle */}
+                        <div className="mb-3">
+                          <label className="block text-xs font-medium text-gray-700 mb-2">
+                            Window Type
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...timeWindows];
+                                updated[index] = {
+                                  windowType: 'ABSOLUTE_TIME',
+                                  startTime: '09:00',
+                                  endTime: '17:00',
+                                  pricePerHour: tw.pricePerHour
+                                };
+                                setTimeWindows(updated);
+                              }}
+                              className={`px-3 py-2 rounded border-2 text-sm font-medium transition-all ${
+                                windowType === 'ABSOLUTE_TIME'
+                                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                                  : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400'
+                              }`}
+                            >
+                              Clock Time
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...timeWindows];
+                                updated[index] = {
+                                  windowType: 'DURATION_BASED',
+                                  startMinute: 0,
+                                  endMinute: 120,
+                                  pricePerHour: tw.pricePerHour
+                                };
+                                setTimeWindows(updated);
+                              }}
+                              className={`px-3 py-2 rounded border-2 text-sm font-medium transition-all ${
+                                windowType === 'DURATION_BASED'
+                                  ? 'border-purple-500 bg-purple-50 text-purple-700'
+                                  : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400'
+                              }`}
+                            >
+                              Duration (Minutes)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Inputs based on window type */}
+                        {windowType === 'ABSOLUTE_TIME' ? (
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Start Time
+                              </label>
+                              <input
+                                type="time"
+                                value={tw.startTime || ''}
+                                onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                End Time
+                              </label>
+                              <input
+                                type="time"
+                                value={tw.endTime || ''}
+                                onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Price/Hour ($)
+                              </label>
+                              <input
+                                type="number"
+                                value={tw.pricePerHour}
+                                onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                min="0"
+                                step="0.01"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Start Minute
+                              </label>
+                              <input
+                                type="number"
+                                value={tw.startMinute ?? 0}
+                                onChange={(e) => updateTimeWindow(index, 'startMinute', parseInt(e.target.value))}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                min="0"
+                                step="1"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">From booking start</p>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                End Minute
+                              </label>
+                              <input
+                                type="number"
+                                value={tw.endMinute ?? 120}
+                                onChange={(e) => updateTimeWindow(index, 'endMinute', parseInt(e.target.value))}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                min="0"
+                                step="1"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">From booking start</p>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Price/Hour ($)
+                              </label>
+                              <input
+                                type="number"
+                                value={tw.pricePerHour}
+                                onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
+                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                min="0"
+                                step="0.01"
+                              />
+                            </div>
+                          </div>
                         )}
                       </div>
-
-                      <div className="grid grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Start Time
-                          </label>
-                          <input
-                            type="time"
-                            value={tw.startTime}
-                            onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
-                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            End Time
-                          </label>
-                          <input
-                            type="time"
-                            value={tw.endTime}
-                            onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
-                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Price/Hour ($)
-                          </label>
-                          <input
-                            type="number"
-                            value={tw.pricePerHour}
-                            onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
-                            className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                            min="0"
-                            step="0.01"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </>
               ) : (
                 <>

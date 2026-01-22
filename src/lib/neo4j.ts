@@ -42,6 +42,7 @@ export async function syncToNeo4j() {
     const { SubLocationRepository } = await import('@/models/SubLocation');
     const { VenueRepository } = await import('@/models/Venue');
     const { SubLocationVenueRepository } = await import('@/models/SubLocationVenue');
+    const { EventRepository } = await import('@/models/Event');
 
     // Create Customer nodes
     const customers = await CustomerRepository.findAll();
@@ -51,13 +52,15 @@ export async function syncToNeo4j() {
           id: $id,
           name: $name,
           email: $email,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: customer._id!.toString(),
           name: customer.name,
           email: customer.email,
           attributes: JSON.stringify(customer.attributes || []),
+          capacityConfig: JSON.stringify(customer.capacityConfig || null),
         }
       );
     }
@@ -71,7 +74,8 @@ export async function syncToNeo4j() {
           name: $name,
           city: $city,
           totalCapacity: $totalCapacity,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: location._id!.toString(),
@@ -79,6 +83,7 @@ export async function syncToNeo4j() {
           city: location.city,
           totalCapacity: location.totalCapacity || 0,
           attributes: JSON.stringify(location.attributes || []),
+          capacityConfig: JSON.stringify(location.capacityConfig || null),
         }
       );
 
@@ -102,13 +107,15 @@ export async function syncToNeo4j() {
           id: $id,
           label: $label,
           allocatedCapacity: $allocatedCapacity,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: sublocation._id!.toString(),
           label: sublocation.label,
           allocatedCapacity: sublocation.allocatedCapacity || 0,
           attributes: JSON.stringify(sublocation.attributes || []),
+          capacityConfig: JSON.stringify(sublocation.capacityConfig || null),
         }
       );
 
@@ -157,6 +164,64 @@ export async function syncToNeo4j() {
           venueId: slv.venueId.toString(),
         }
       );
+    }
+
+    // Create Event nodes and relationships
+    const events = await EventRepository.findAll();
+    for (const event of events) {
+      await session.run(
+        `CREATE (e:Event {
+          id: $id,
+          name: $name,
+          description: $description,
+          startDate: $startDate,
+          endDate: $endDate,
+          isActive: $isActive,
+          capacityConfig: $capacityConfig
+        })`,
+        {
+          id: event._id!.toString(),
+          name: event.name,
+          description: event.description || '',
+          startDate: event.startDate.toISOString(),
+          endDate: event.endDate.toISOString(),
+          isActive: event.isActive,
+          capacityConfig: JSON.stringify(event.capacityConfig || null),
+        }
+      );
+
+      // Create relationships
+      if (event.subLocationId) {
+        await session.run(
+          `MATCH (sl:SubLocation {id: $subLocationId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (sl)-[:HAS_EVENT]->(e)`,
+          {
+            subLocationId: event.subLocationId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.locationId) {
+        await session.run(
+          `MATCH (l:Location {id: $locationId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (l)-[:HAS_EVENT]->(e)`,
+          {
+            locationId: event.locationId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.customerId) {
+        await session.run(
+          `MATCH (c:Customer {id: $customerId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (c)-[:HAS_EVENT]->(e)`,
+          {
+            customerId: event.customerId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      }
     }
 
     console.log('✓ Successfully synced data to Neo4j');

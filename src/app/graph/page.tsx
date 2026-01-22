@@ -30,30 +30,32 @@ export default function GraphPage() {
             <p>
               <strong>Hierarchy:</strong> Customer → Location → Sub-Location → Venue
             </p>
-            <p>
-              <strong>Blue nodes:</strong> Customers (root entities)
-            </p>
-            <p>
-              <strong>Green nodes:</strong> Locations with capacity breakdown:
+            <p className="mt-3">
+              <strong>Capacity Attributes Shown:</strong>
             </p>
             <ul className="list-disc list-inside ml-4 text-sm">
-              <li><strong>Total:</strong> Maximum capacity for the location</li>
-              <li><strong>Allocated:</strong> Sum of all sub-location capacities</li>
-              <li><strong>Available:</strong> Remaining unallocated capacity (shown in green if positive, red if over-allocated)</li>
+              <li><strong>Min:</strong> Minimum capacity threshold</li>
+              <li><strong>Max:</strong> Maximum capacity limit</li>
+              <li><strong>Default:</strong> Default operating capacity</li>
+              <li><strong>Allocated:</strong> Currently allocated capacity</li>
             </ul>
-            <p>
-              <strong>Orange nodes:</strong> Sub-Locations showing:
+            <p className="mt-3">
+              <strong>Blue nodes:</strong> Customers (aggregated from all child locations)
             </p>
-            <ul className="list-disc list-inside ml-4 text-sm">
-              <li><strong>Allocated:</strong> Capacity assigned to this sub-location</li>
-              <li><strong>Venues:</strong> Total capacity of all assigned venues</li>
-              <li><strong>Left:</strong> Remaining capacity (✓ if within limit, ⚠️ if exceeded)</li>
-            </ul>
+            <p>
+              <strong>Green nodes:</strong> Locations (aggregated from all child sub-locations + own config)
+            </p>
+            <p>
+              <strong>Orange nodes:</strong> Sub-Locations (own capacity configuration)
+            </p>
             <p>
               <strong>Purple nodes:</strong> Venues with individual capacity shown
             </p>
             <p>
               <strong>Edge labels:</strong> Show capacity values being transferred through the hierarchy
+            </p>
+            <p className="mt-3 text-sm italic">
+              <strong>Note:</strong> Capacity values aggregate upward through the hierarchy: SubLocation → Location → Customer
             </p>
             <p className="mt-4 font-semibold">
               Capacity Flow Example:

@@ -47,7 +47,7 @@ async function diagnose() {
         
         console.log('\n⚠️  locationId type check:');
         console.log(`   Location._id type: ${typeof location._id} (${location._id.constructor.name})`);
-        console.log(`   SubLocation.locationId type: ${typeof anySublocation.locationId} (${anySublocation.locationId?.constructor?.name || 'undefined'})`);
+        console.log(`   SubLocation.locationId type: ${typeof anySublocation?.locationId} (${anySublocation?.locationId?.constructor?.name || 'undefined'})`);
       }
     } else {
       console.log('✅ SubLocations found:');

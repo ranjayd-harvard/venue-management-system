@@ -1,0 +1,209 @@
+// src/app/api/capacity/calculate/route.ts
+// Capacity calculator using hourly evaluation
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/mongodb';
+import { ObjectId } from 'mongodb';
+import { HourlyCapacityEngine, CapacityContext } from '@/lib/capacity-engine-hourly';
+import { TimezoneSettingsRepository } from '@/models/TimezoneSettings';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { subLocationId, eventId, startTime, endTime, timezone: requestTimezone } = body;
+
+    if (!subLocationId || !startTime || !endTime) {
+      return NextResponse.json(
+        { error: 'Missing required fields: subLocationId, startTime, endTime' },
+        { status: 400 }
+      );
+    }
+
+    const db = await getDb();
+
+    // Get sublocation
+    const sublocation = await db.collection('sublocations').findOne({
+      _id: new ObjectId(subLocationId)
+    });
+
+    if (!sublocation) {
+      return NextResponse.json(
+        { error: 'SubLocation not found' },
+        { status: 404 }
+      );
+    }
+
+    // Get location
+    const location = await db.collection('locations').findOne({
+      _id: new ObjectId(sublocation.locationId)
+    });
+
+    if (!location) {
+      return NextResponse.json(
+        { error: 'Location not found' },
+        { status: 404 }
+      );
+    }
+
+    // Get customer
+    const customer = await db.collection('customers').findOne({
+      _id: new ObjectId(location.customerId)
+    });
+
+    if (!customer) {
+      return NextResponse.json(
+        { error: 'Customer not found' },
+        { status: 404 }
+      );
+    }
+
+    // Get timezone (hierarchy: Request → SubLocation → Location → Customer → System)
+    const timezone = requestTimezone || await TimezoneSettingsRepository.getTimezoneForEntity(
+      'SUBLOCATION',
+      subLocationId
+    );
+
+    // Fetch all capacity sheets for hierarchy
+    const customerCapacitySheets = await db.collection('capacitysheets').find({
+      'appliesTo.level': 'CUSTOMER',
+      'appliesTo.entityId': new ObjectId(customer._id),
+      isActive: true,
+      approvalStatus: 'APPROVED'
+    }).toArray();
+
+    const locationCapacitySheets = await db.collection('capacitysheets').find({
+      'appliesTo.level': 'LOCATION',
+      'appliesTo.entityId': new ObjectId(location._id),
+      isActive: true,
+      approvalStatus: 'APPROVED'
+    }).toArray();
+
+    const sublocationCapacitySheets = await db.collection('capacitysheets').find({
+      'appliesTo.level': 'SUBLOCATION',
+      'appliesTo.entityId': new ObjectId(sublocation._id),
+      isActive: true,
+      approvalStatus: 'APPROVED'
+    }).toArray();
+
+    // Fetch EVENT capacity sheets for ALL active events that overlap with the booking period
+    // This ensures event-specific capacity is always applied when booking falls within an event
+    const bookingStartDate = new Date(startTime);
+    const bookingEndDate = new Date(endTime);
+
+    // Find all active events that overlap with the booking time
+    const overlappingEvents = await db.collection('events').find({
+      isActive: true,
+      // Event must not end before booking starts AND must not start after booking ends
+      endDate: { $gte: bookingStartDate },
+      startDate: { $lte: bookingEndDate }
+    }).toArray();
+
+    // Fetch capacity sheets for all overlapping events
+    const eventCapacitySheets = overlappingEvents.length > 0
+      ? await db.collection('capacitysheets').find({
+          'appliesTo.level': 'EVENT',
+          'appliesTo.entityId': { $in: overlappingEvents.map(e => e._id) },
+          isActive: true,
+          approvalStatus: 'APPROVED'
+        }).toArray()
+      : [];
+
+    // Get pricing config (for timezone settings)
+    let pricingConfig = await db.collection('pricing_configs').findOne({});
+
+    if (!pricingConfig) {
+      console.log('⚠️  Pricing config not found, creating default...');
+
+      // Create default config
+      const defaultConfig = {
+        customerPriorityRange: { min: 1000, max: 1999 },
+        locationPriorityRange: { min: 2000, max: 2999 },
+        sublocationPriorityRange: { min: 3000, max: 3999 },
+        defaultTimezone: 'America/Detroit',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await db.collection('pricing_configs').insertOne(defaultConfig);
+      pricingConfig = defaultConfig;
+
+      console.log('✅ Created default pricing config');
+    }
+
+    // Build capacity context
+    const context: CapacityContext = {
+      bookingStart: new Date(startTime),
+      bookingEnd: new Date(endTime),
+      timezone,
+
+      customerId: customer._id.toString(),
+      locationId: location._id.toString(),
+      subLocationId: sublocation._id.toString(),
+      eventId: eventId ? eventId : undefined,
+
+      customerCapacitySheets: customerCapacitySheets as any[],
+      locationCapacitySheets: locationCapacitySheets as any[],
+      sublocationCapacitySheets: sublocationCapacitySheets as any[],
+      eventCapacitySheets: eventCapacitySheets as any[],
+
+      customerDefaultCapacity: {
+        min: customer.minCapacity || 0,
+        max: customer.maxCapacity || 100,
+        default: customer.defaultCapacity || 50,
+        allocated: customer.allocatedCapacity || 0,
+      },
+      locationDefaultCapacity: {
+        min: location.minCapacity || 0,
+        max: location.maxCapacity || 100,
+        default: location.defaultCapacity || 50,
+        allocated: location.allocatedCapacity || 0,
+      },
+      sublocationDefaultCapacity: {
+        min: sublocation.minCapacity || 0,
+        max: sublocation.maxCapacity || 100,
+        default: sublocation.defaultCapacity || 50,
+        allocated: sublocation.allocatedCapacity || 0,
+      },
+
+      // Include sublocation capacity config for hourly overrides
+      sublocationCapacityConfig: sublocation.capacityConfig as any,
+
+      capacityConfig: pricingConfig as any
+    };
+
+    // Calculate capacity using hourly engine
+    const engine = new HourlyCapacityEngine();
+    const result = engine.calculateCapacity(context);
+
+    // Return enhanced result
+    return NextResponse.json({
+      ...result,
+      metadata: {
+        customer: customer.name,
+        location: location.name,
+        sublocation: sublocation.label,
+        timezone: result.timezone,
+        overlappingEvents: overlappingEvents.map(e => ({
+          id: e._id.toString(),
+          name: e.name,
+          startDate: e.startDate,
+          endDate: e.endDate
+        })),
+        capacitySheetSummary: {
+          total: customerCapacitySheets.length + locationCapacitySheets.length + sublocationCapacitySheets.length + eventCapacitySheets.length,
+          customer: customerCapacitySheets.length,
+          location: locationCapacitySheets.length,
+          sublocation: sublocationCapacitySheets.length,
+          event: eventCapacitySheets.length
+        }
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Capacity calculation error:', error);
+    return NextResponse.json(
+      { error: error.message || 'Failed to calculate capacity' },
+      { status: 500 }
+    );
+  }
+}
