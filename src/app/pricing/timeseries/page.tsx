@@ -23,10 +23,14 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
+import PricingFilters from '@/components/PricingFilters';
 
 interface TimeWindow {
-  startTime: string;
-  endTime: string;
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
+  startTime?: string;
+  endTime?: string;
+  startMinute?: number;
+  endMinute?: number;
   pricePerHour: number;
 }
 
@@ -81,11 +85,8 @@ interface TimeSeriesDataPoint {
 }
 
 export default function PricingTimeSeriesPage() {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
-  const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
@@ -99,6 +100,13 @@ export default function PricingTimeSeriesPage() {
 
   // Duration selection
   const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
+
+  // Duration-based pricing context
+  const [useDurationContext, setUseDurationContext] = useState<boolean>(false);
+  const [bookingStartTime, setBookingStartTime] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getTime() - 6 * 60 * 60 * 1000); // 6 hours ago (matches viewStart default)
+  });
 
   // Date-time range for the slider (30 days past to 60 days future)
   const [rangeStart, setRangeStart] = useState<Date>(() => {
@@ -126,15 +134,9 @@ export default function PricingTimeSeriesPage() {
   const [visibleRates, setVisibleRates] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetchLocations();
-  }, []);
-
-  useEffect(() => {
     if (selectedLocation) {
-      fetchSubLocations(selectedLocation);
       fetchLocationDetails(selectedLocation);
     } else {
-      setSublocations([]);
       setSelectedSubLocation('');
       setCurrentLocation(null);
       setCurrentCustomer(null);
@@ -144,26 +146,22 @@ export default function PricingTimeSeriesPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      // Load all active events
-      fetch('/api/events')
-        .then(res => res.json())
-        .then(data => {
-          const activeEvents = data.filter((e: Event) => e.isActive);
-          setEvents(activeEvents);
-        })
-        .catch(err => {
-          console.error('Failed to load events:', err);
-          setEvents([]);
-        });
       // Fetch ratesheets
       fetchRatesheets(selectedSubLocation);
     } else {
       setCurrentSubLocation(null);
-      setEvents([]);
       setSelectedEventId('');
       setRatesheets([]);
     }
   }, [selectedSubLocation, selectedEventId]);
+
+  // Sync view window with booking start time when duration context is enabled
+  useEffect(() => {
+    if (useDurationContext) {
+      setViewStart(new Date(bookingStartTime));
+      setViewEnd(new Date(bookingStartTime.getTime() + selectedDuration * 60 * 60 * 1000));
+    }
+  }, [useDurationContext, bookingStartTime]);
 
   // Recalculate timeseries when duration changes
   useEffect(() => {
@@ -176,27 +174,7 @@ export default function PricingTimeSeriesPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       generateTimeSeriesData();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer]);
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      const data = await response.json();
-      setLocations(data);
-    } catch (error) {
-      console.error('Failed to fetch locations:', error);
-    }
-  };
-
-  const fetchSubLocations = async (locationId: string) => {
-    try {
-      const response = await fetch(`/api/sublocations?locationId=${locationId}`);
-      const data = await response.json();
-      setSublocations(data);
-    } catch (error) {
-      console.error('Failed to fetch sublocations:', error);
-    }
-  };
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime]);
 
   const fetchLocationDetails = async (locationId: string) => {
     try {
@@ -304,8 +282,32 @@ export default function PricingTimeSeriesPage() {
           // Check time windows
           if (rs.timeWindows) {
             rs.timeWindows.forEach((tw) => {
-              if (timeStr >= tw.startTime && timeStr < tw.endTime) {
-                const key = `${rs.name} (${tw.startTime}-${tw.endTime})`;
+              const windowType = tw.windowType || 'ABSOLUTE_TIME';
+              let matches = false;
+              let windowLabel = '';
+
+              if (windowType === 'ABSOLUTE_TIME') {
+                // Absolute time matching
+                if (tw.startTime && tw.endTime && timeStr >= tw.startTime && timeStr < tw.endTime) {
+                  matches = true;
+                  windowLabel = `${tw.startTime}-${tw.endTime}`;
+                }
+              } else if (windowType === 'DURATION_BASED') {
+                // Duration-based matching (only if context is enabled)
+                if (useDurationContext) {
+                  const minutesFromStart = Math.floor((currentTime.getTime() - bookingStartTime.getTime()) / (1000 * 60));
+                  const startMinute = tw.startMinute ?? 0;
+                  const endMinute = tw.endMinute ?? 0;
+
+                  if (minutesFromStart >= startMinute && minutesFromStart < endMinute) {
+                    matches = true;
+                    windowLabel = `${startMinute}-${endMinute}min`;
+                  }
+                }
+              }
+
+              if (matches) {
+                const key = `${rs.name} (${windowLabel})`;
                 point[key] = tw.pricePerHour;
                 rateKeysSet.add(key);
               }
@@ -383,9 +385,17 @@ export default function PricingTimeSeriesPage() {
 
   const setQuickRange = (hours: number) => {
     setSelectedDuration(hours);
-    // Keep current start time, just update the end based on new duration
-    const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
-    setViewEnd(newViewEnd);
+    // If duration context is enabled, calculate from booking start time
+    if (useDurationContext) {
+      const newViewStart = new Date(bookingStartTime);
+      const newViewEnd = new Date(bookingStartTime.getTime() + hours * 60 * 60 * 1000);
+      setViewStart(newViewStart);
+      setViewEnd(newViewEnd);
+    } else {
+      // Keep current start time, just update the end based on new duration
+      const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
+      setViewEnd(newViewEnd);
+    }
   };
 
   const getViewWindowPosition = (): { left: number; width: number } => {
@@ -433,114 +443,20 @@ export default function PricingTimeSeriesPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Location
-              </label>
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              >
-                <option value="">Select location...</option>
-                {locations.map((loc) => (
-                  <option key={loc._id} value={loc._id}>
-                    {loc.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sub-Location
-              </label>
-              <select
-                value={selectedSubLocation}
-                onChange={(e) => setSelectedSubLocation(e.target.value)}
-                disabled={!selectedLocation}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Select sub-location...</option>
-                {sublocations.map((subloc) => (
-                  <option key={subloc._id} value={subloc._id}>
-                    {subloc.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Event (Optional)
-              </label>
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectedSubLocation || events.length === 0}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">No event selected</option>
-                {events.map((event) => (
-                  <option key={event._id} value={event._id}>
-                    {event.name}
-                    {event.description && ` - ${event.description}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSelectedDuration(7)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 7
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  7h
-                </button>
-                <button
-                  onClick={() => setSelectedDuration(12)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 12
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  12h
-                </button>
-                <button
-                  onClick={() => setSelectedDuration(24)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 24
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  24h
-                </button>
-                <button
-                  onClick={() => setSelectedDuration(48)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 48
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  48h
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PricingFilters
+          selectedLocation={selectedLocation}
+          selectedSubLocation={selectedSubLocation}
+          selectedEventId={selectedEventId}
+          onLocationChange={setSelectedLocation}
+          onSubLocationChange={setSelectedSubLocation}
+          onEventChange={setSelectedEventId}
+          selectedDuration={selectedDuration}
+          onDurationChange={setQuickRange}
+          useDurationContext={useDurationContext}
+          bookingStartTime={bookingStartTime}
+          onUseDurationContextChange={setUseDurationContext}
+          onBookingStartTimeChange={setBookingStartTime}
+        />
 
         {loading && (
           <div className="flex items-center justify-center h-64">

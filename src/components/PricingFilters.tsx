@@ -41,11 +41,11 @@ interface PricingFiltersProps {
   selectedDuration: number;
   onDurationChange: (hours: number) => void;
 
-  // Duration-based pricing context
-  useDurationContext: boolean;
-  bookingStartTime: Date;
-  onUseDurationContextChange: (enabled: boolean) => void;
-  onBookingStartTimeChange: (time: Date) => void;
+  // Duration-based pricing context (optional)
+  useDurationContext?: boolean;
+  bookingStartTime?: Date;
+  onUseDurationContextChange?: (enabled: boolean) => void;
+  onBookingStartTimeChange?: (time: Date) => void;
 
   // Event counts (for auto-detect message)
   eventCount?: number;
@@ -255,65 +255,67 @@ export default function PricingFilters({
         </div>
       </div>
 
-      {/* Duration-Based Pricing Context (Optional) */}
-      <div className="border-t border-gray-200 pt-4 mt-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700">
-              Duration-Based Pricing Context
-            </label>
-            <button
-              type="button"
-              onClick={() => onUseDurationContextChange(!useDurationContext)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                useDurationContext ? 'bg-purple-600' : 'bg-gray-300'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  useDurationContext ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
-          <p className="text-xs text-gray-500">
-            {useDurationContext
-              ? '✓ Showing duration-based windows with booking context'
-              : '○ Duration-based windows hidden (no booking context)'}
-          </p>
-        </div>
-
-        {useDurationContext && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Booking Start Time
+      {/* Duration-Based Pricing Context (Optional - only show if props provided) */}
+      {onUseDurationContextChange && useDurationContext !== undefined && bookingStartTime && onBookingStartTimeChange && (
+        <div className="border-t border-gray-200 pt-4 mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">
+                Duration-Based Pricing Context
               </label>
-              <input
-                type="datetime-local"
-                value={formatDateTimeLocal(bookingStartTime)}
-                onChange={(e) => {
-                  const newStart = new Date(e.target.value);
-                  onBookingStartTimeChange(newStart);
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white"
-              />
-              <p className="text-xs text-purple-600 mt-1">
-                📍 Reference point for duration-based windows (e.g., 0-120 minutes from this time)
-              </p>
+              <button
+                type="button"
+                onClick={() => onUseDurationContextChange(!useDurationContext)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  useDurationContext ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    useDurationContext ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
-            <div className="flex items-center">
-              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 w-full">
-                <p className="text-sm text-purple-800">
-                  <strong>How it works:</strong> Duration-based windows like "0-120 min → $8/hr"
-                  will be calculated from the booking start time you set. Toggle this off to only see
-                  clock-based windows (e.g., "09:00-17:00 → $100/hr").
+            <p className="text-xs text-gray-500">
+              {useDurationContext
+                ? '✓ Showing duration-based windows with booking context'
+                : '○ Duration-based windows hidden (no booking context)'}
+            </p>
+          </div>
+
+          {useDurationContext && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Booking Start Time
+                </label>
+                <input
+                  type="datetime-local"
+                  value={formatDateTimeLocal(bookingStartTime)}
+                  onChange={(e) => {
+                    const newStart = new Date(e.target.value);
+                    onBookingStartTimeChange(newStart);
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white"
+                />
+                <p className="text-xs text-purple-600 mt-1">
+                  📍 Reference point for duration-based windows (e.g., 0-120 minutes from this time)
                 </p>
               </div>
+              <div className="flex items-center">
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 w-full">
+                  <p className="text-sm text-purple-800">
+                    <strong>How it works:</strong> Duration-based windows like "0-120 min → $8/hr"
+                    will be calculated from the booking start time you set. Toggle this off to only see
+                    clock-based windows (e.g., "09:00-17:00 → $100/hr").
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

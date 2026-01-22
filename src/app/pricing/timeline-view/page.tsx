@@ -258,6 +258,14 @@ export default function TimelineViewPage() {
     }
   }, [selectedEventId]);
 
+  // Sync view window with booking start time when duration context is enabled
+  useEffect(() => {
+    if (useDurationContext) {
+      setViewStart(new Date(bookingStartTime));
+      setViewEnd(new Date(bookingStartTime.getTime() + selectedDuration * 60 * 60 * 1000));
+    }
+  }, [useDurationContext, bookingStartTime]);
+
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
@@ -628,9 +636,17 @@ export default function TimelineViewPage() {
 
   const setQuickRange = (hours: number) => {
     setSelectedDuration(hours);
-    // Keep current start time, just update the end based on new duration
-    const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
-    setViewEnd(newViewEnd);
+    // If duration context is enabled, calculate from booking start time
+    if (useDurationContext) {
+      const newViewStart = new Date(bookingStartTime);
+      const newViewEnd = new Date(bookingStartTime.getTime() + hours * 60 * 60 * 1000);
+      setViewStart(newViewStart);
+      setViewEnd(newViewEnd);
+    } else {
+      // Keep current start time, just update the end based on new duration
+      const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
+      setViewEnd(newViewEnd);
+    }
   };
 
   const getTotalHours = (): number => {
