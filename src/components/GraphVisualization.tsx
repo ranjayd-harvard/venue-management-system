@@ -362,7 +362,7 @@ export default function GraphVisualization() {
           label = (
             <div className="text-center px-4 py-3">
               <div className={`font-bold text-sm mb-1 ${textColorPrimary}`}>
-                {entity.name}
+                {entity.label || entity.name}
               </div>
               {slMetrics && (
                 <div className={`text-xs space-y-1 ${badgeColor}`}>
