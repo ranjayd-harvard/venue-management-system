@@ -162,6 +162,22 @@ export default function TimelineViewPage() {
 
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
 
+  // Event booking toggle
+  const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
+
+  // Save settings to localStorage whenever they change
+  useEffect(() => {
+    const settings = {
+      bookingStartTime: bookingStartTime.toISOString(),
+      useDurationContext,
+      isEventBooking,
+      selectedLocation,
+      selectedSubLocation,
+      selectedEventId,
+    };
+    localStorage.setItem('timelineViewSettings', JSON.stringify(settings));
+  }, [bookingStartTime, useDurationContext, isEventBooking, selectedLocation, selectedSubLocation, selectedEventId]);
+
   // Unique colors per ratesheet
   const ratesheetColors = useRef(new Map<string, string>()).current;
   const colorPalette = [
@@ -230,17 +246,54 @@ export default function TimelineViewPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      // Load all active events for filtering logic
-      fetch('/api/events')
+
+      // Load events that overlap with the date range AND belong to selected sublocation hierarchy
+      fetch(`/api/sublocations/${selectedSubLocation}`)
         .then(res => res.json())
-        .then(data => {
-          const activeEvents = data.filter((e: Event) => e.isActive);
-          setEvents(activeEvents);
+        .then(async (sublocation) => {
+          // Get location details
+          const locationRes = await fetch(`/api/locations/${sublocation.locationId}`);
+          const location = await locationRes.json();
+
+          // Fetch all events
+          const eventsRes = await fetch('/api/events');
+          const allEvents = await eventsRes.json();
+
+          const overlappingEvents = allEvents.filter((e: Event) => {
+            if (!e.isActive) return false;
+
+            const eventStart = new Date(e.startDate);
+            const eventEnd = new Date(e.endDate);
+
+            // Event must overlap with VIEW range (uses bookingStartTime)
+            const dateOverlap = eventEnd >= viewStart && eventStart <= viewEnd;
+            if (!dateOverlap) return false;
+
+            // Event must belong to this sublocation hierarchy
+            // Convert IDs to strings for comparison (in case they're ObjectIds)
+            const eventSubLocId = typeof e.subLocationId === 'object' ? (e.subLocationId as any)?.$oid || String(e.subLocationId) : e.subLocationId;
+            const eventLocId = typeof e.locationId === 'object' ? (e.locationId as any)?.$oid || String(e.locationId) : e.locationId;
+            const eventCustId = typeof e.customerId === 'object' ? (e.customerId as any)?.$oid || String(e.customerId) : e.customerId;
+
+            const matchesSubLocation = eventSubLocId === selectedSubLocation;
+            const matchesLocation = eventLocId === location._id && !eventSubLocId;
+            const matchesCustomer = eventCustId === location.customerId && !eventLocId && !eventSubLocId;
+
+            return matchesSubLocation || matchesLocation || matchesCustomer;
+          });
+
+          setEvents(overlappingEvents);
+
+          // Clear selected event if it no longer matches
+          if (selectedEventId && !overlappingEvents.find((e: Event) => e._id === selectedEventId)) {
+            setSelectedEventId('');
+          }
         })
         .catch(err => {
           console.error('Failed to load events:', err);
           setEvents([]);
         });
+
       // Fetch ratesheets whenever sublocation, event, or date range changes
       fetchRatesheets(selectedSubLocation);
     } else {
@@ -258,6 +311,20 @@ export default function TimelineViewPage() {
     }
   }, [selectedEventId]);
 
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
+
   // Sync view window with booking start time when duration context is enabled
   useEffect(() => {
     if (useDurationContext) {
@@ -270,7 +337,7 @@ export default function TimelineViewPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -329,11 +396,12 @@ export default function TimelineViewPage() {
       const activeEvents = allEvents.filter((e: Event) => e.isActive);
 
       // Find events that overlap with timeline range
+      // IMPORTANT: Use viewStart/viewEnd (which respect bookingStartTime) instead of rangeStart/rangeEnd
       const overlappingEvents = activeEvents.filter((event: Event) => {
         const eventStart = new Date(event.startDate);
         const eventEnd = new Date(event.endDate);
-        // Event overlaps if: event ends after range starts AND event starts before range ends
-        return eventEnd >= rangeStart && eventStart <= rangeEnd;
+        // Event overlaps if: event ends after view starts AND event starts before view ends
+        return eventEnd >= viewStart && eventStart <= viewEnd;
       });
 
       console.log('[Timeline] Found overlapping events:', {
@@ -410,6 +478,14 @@ export default function TimelineViewPage() {
   };
 
   const calculateTimeSlots = () => {
+    console.log('\n🔵 [TIMELINE] calculateTimeSlots() called');
+    console.log('[TIMELINE] viewStart:', viewStart.toISOString());
+    console.log('[TIMELINE] viewEnd:', viewEnd.toISOString());
+    console.log('[TIMELINE] bookingStartTime:', bookingStartTime.toISOString());
+    console.log('[TIMELINE] useDurationContext:', useDurationContext);
+    console.log('[TIMELINE] isEventBooking:', isEventBooking);
+    console.log('[TIMELINE] Active ratesheets:', ratesheets.length);
+
     const slots: TimeSlot[] = [];
     const currentTime = new Date(viewStart);
     const endTime = new Date(viewEnd);
@@ -434,22 +510,25 @@ export default function TimelineViewPage() {
         .map(rs => {
           if (rs.timeWindows && rs.timeWindows.length > 0) {
             const matchingWindow = rs.timeWindows.find(tw => {
+              // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+              // This allows event rates to apply but excludes free grace periods
+              if (!isEventBooking && tw.pricePerHour === 0 && rs.applyTo === 'EVENT') {
+                return false; // Skip this $0/hr grace period time window
+              }
+
               const windowType = tw.windowType || 'ABSOLUTE_TIME';
 
               if (windowType === 'DURATION_BASED') {
-                // Duration-based windows: only show if duration context is enabled
-                if (!useDurationContext) {
-                  return false; // Skip duration-based windows when context is disabled
-                }
-
-                // Calculate minutes from booking start
-                const minutesFromStart = Math.floor(
-                  (currentTime.getTime() - bookingStartTime.getTime()) / (1000 * 60)
+                // Duration-based windows: calculate minutes from ratesheet effectiveFrom
+                // For EVENT ratesheets, effectiveFrom is the event start minus grace period
+                const ratesheetStart = new Date(rs.effectiveFrom);
+                const minutesFromRatesheetStart = Math.floor(
+                  (currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60)
                 );
                 const startMinute = tw.startMinute ?? 0;
                 const endMinute = tw.endMinute ?? 0;
 
-                return minutesFromStart >= startMinute && minutesFromStart < endMinute;
+                return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
               } else {
                 // ABSOLUTE_TIME windows: match against hour time
                 if (!tw.startTime || !tw.endTime) {
@@ -777,8 +856,53 @@ export default function TimelineViewPage() {
           bookingStartTime={bookingStartTime}
           onUseDurationContextChange={setUseDurationContext}
           onBookingStartTimeChange={setBookingStartTime}
+          isEventBooking={isEventBooking}
+          onIsEventBookingChange={setIsEventBooking}
           eventCount={counts.event}
         />
+
+        {/* Debug Panel */}
+        {selectedSubLocation && (
+          <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-4 mb-6">
+            <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center gap-2">
+              🔵 Timeline View - Debug Info
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div>
+                <div className="text-blue-600 font-medium">Booking Start Time:</div>
+                <div className="text-blue-900 font-mono">{bookingStartTime.toISOString()}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">View Start:</div>
+                <div className="text-blue-900 font-mono">{viewStart.toISOString()}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Duration Context:</div>
+                <div className="text-blue-900 font-mono">{useDurationContext ? '✅ ON' : '❌ OFF'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Event Booking:</div>
+                <div className="text-blue-900 font-mono">{isEventBooking ? '✅ YES' : '❌ NO'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Selected Event:</div>
+                <div className="text-blue-900 font-mono">{selectedEventId || 'Auto-detect'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Active Ratesheets:</div>
+                <div className="text-blue-900 font-mono">{ratesheets.length} total</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Event Ratesheets:</div>
+                <div className="text-blue-900 font-mono">{counts.event} detected</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Total Hours:</div>
+                <div className="text-blue-900 font-mono">{getTotalHours()}h</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div className="flex items-center justify-center h-64">
@@ -899,14 +1023,23 @@ export default function TimelineViewPage() {
                           : 'bg-gray-100 border-gray-200'
                       }`}
                     >
-                      {slot.winningPrice && (
+                      {slot.winningPrice !== undefined && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                          <span className="text-xs font-bold">${slot.winningPrice}</span>
-                          <span className="text-[10px] opacity-90">/ hr</span>
-                          {slot.isDefaultRate && (
-                            <span className="text-[8px] opacity-75 mt-0.5">
-                              {slot.defaultType === 'SUBLOCATION' ? 'Sub' : slot.defaultType === 'LOCATION' ? 'Loc' : 'Cust'}
-                            </span>
+                          {slot.winningPrice === 0 ? (
+                            <>
+                              <span className="text-xs font-bold">Grace</span>
+                              <span className="text-[10px] opacity-90">$0/hr</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-xs font-bold">${slot.winningPrice}</span>
+                              <span className="text-[10px] opacity-90">/ hr</span>
+                              {slot.isDefaultRate && (
+                                <span className="text-[8px] opacity-75 mt-0.5">
+                                  {slot.defaultType === 'SUBLOCATION' ? 'Sub' : slot.defaultType === 'LOCATION' ? 'Loc' : 'Cust'}
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -931,7 +1064,11 @@ export default function TimelineViewPage() {
                               <div className="font-semibold">{slot.winningRatesheet.name}</div>
                               <div className="text-gray-300">Level: {slot.winningRatesheet.applyTo}</div>
                               <div className="text-gray-300">Priority: {slot.winningRatesheet.priority}</div>
-                              <div className="text-green-400">${slot.winningPrice}/hr</div>
+                              {slot.winningPrice === 0 ? (
+                                <div className="text-blue-400">Grace Period ($0/hr)</div>
+                              ) : (
+                                <div className="text-green-400">${slot.winningPrice}/hr</div>
+                              )}
                             </>
                           ) : (
                             <>

@@ -127,6 +127,8 @@ export interface Event {
   customerId?: ObjectId;
   startDate: Date;
   endDate: Date;
+  gracePeriodBefore?: number; // Grace period in minutes before event start
+  gracePeriodAfter?: number;  // Grace period in minutes after event end
   attendees?: number;
   attributes?: Attribute[];
   defaultHourlyRate?: number;

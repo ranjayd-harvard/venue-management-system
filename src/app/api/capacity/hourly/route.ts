@@ -38,6 +38,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get sublocation to validate against bounds
+    const sublocation = await SubLocationRepository.findById(new ObjectId(subLocationId));
+
+    if (!sublocation) {
+      return NextResponse.json(
+        { error: 'SubLocation not found' },
+        { status: 404 }
+      );
+    }
+
+    // Get sublocation's capacity bounds
+    const sublocationMaxCapacity = sublocation.capacityConfig?.maxCapacity || sublocation.maxCapacity || 100;
+    const sublocationMinCapacity = sublocation.capacityConfig?.minCapacity || sublocation.minCapacity || 0;
+
     // Build override object (only include provided fields)
     const override: {
       minCapacity?: number;
@@ -46,8 +60,32 @@ export async function POST(request: NextRequest) {
       allocatedCapacity?: number;
     } = {};
 
-    if (minCapacity !== undefined) override.minCapacity = minCapacity;
-    if (maxCapacity !== undefined) override.maxCapacity = maxCapacity;
+    if (minCapacity !== undefined) {
+      if (minCapacity < 0) {
+        return NextResponse.json(
+          { error: 'minCapacity cannot be negative' },
+          { status: 400 }
+        );
+      }
+      override.minCapacity = minCapacity;
+    }
+
+    if (maxCapacity !== undefined) {
+      if (maxCapacity > sublocationMaxCapacity) {
+        return NextResponse.json(
+          { error: `maxCapacity (${maxCapacity}) cannot exceed sublocation's max capacity (${sublocationMaxCapacity})` },
+          { status: 400 }
+        );
+      }
+      if (maxCapacity < 0) {
+        return NextResponse.json(
+          { error: 'maxCapacity cannot be negative' },
+          { status: 400 }
+        );
+      }
+      override.maxCapacity = maxCapacity;
+    }
+
     if (defaultCapacity !== undefined) override.defaultCapacity = defaultCapacity;
     if (allocatedCapacity !== undefined) override.allocatedCapacity = allocatedCapacity;
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Calendar, MapPin, Users, Plus, Edit, Trash2, Power } from 'lucide-react';
+import { Calendar, MapPin, Users, Plus, Edit, Trash2, Power, DollarSign } from 'lucide-react';
 import CreateEventModal from '@/components/CreateEventModal';
 import EditEventModal from '@/components/EditEventModal';
 
@@ -14,6 +14,8 @@ interface Event {
   customerId?: string;
   startDate: string;
   endDate: string;
+  gracePeriodBefore?: number;
+  gracePeriodAfter?: number;
   attendees?: number;
   defaultHourlyRate?: number;
   timezone?: string;
@@ -47,6 +49,7 @@ export default function AdminEventsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
+  const [ratesheetIds, setRatesheetIds] = useState<Record<string, string>>({});
 
   // Filter states
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'upcoming'>('all');
@@ -74,6 +77,23 @@ export default function AdminEventsPage() {
       if (eventsRes.ok) {
         const eventsData = await eventsRes.json();
         setEvents(eventsData);
+
+        // Load ratesheet IDs for all events
+        const ratesheetMap: Record<string, string> = {};
+        await Promise.all(
+          eventsData.map(async (event: Event) => {
+            try {
+              const res = await fetch(`/api/events/${event._id}/ratesheet`);
+              if (res.ok) {
+                const ratesheet = await res.json();
+                ratesheetMap[event._id] = ratesheet._id;
+              }
+            } catch (err) {
+              // Ignore errors for individual ratesheet fetches
+            }
+          })
+        );
+        setRatesheetIds(ratesheetMap);
       }
 
       if (customersRes.ok) {
@@ -314,6 +334,59 @@ export default function AdminEventsPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Grace Periods - Always show */}
+                    <div className="border-t border-gray-100 pt-4 mt-4">
+                      <span className="text-xs text-gray-500 font-semibold">Grace Periods:</span>
+                      <div className="flex gap-4 mt-2">
+                        <div className={`px-3 py-1 rounded-lg ${event.gracePeriodBefore ? 'bg-purple-50' : 'bg-gray-50'}`}>
+                          <span className={`text-xs ${event.gracePeriodBefore ? 'text-purple-700' : 'text-gray-500'}`}>
+                            Before: <span className="font-bold">{event.gracePeriodBefore || 0} min</span>
+                          </span>
+                        </div>
+                        <div className={`px-3 py-1 rounded-lg ${event.gracePeriodAfter ? 'bg-pink-50' : 'bg-gray-50'}`}>
+                          <span className={`text-xs ${event.gracePeriodAfter ? 'text-pink-700' : 'text-gray-500'}`}>
+                            After: <span className="font-bold">{event.gracePeriodAfter || 0} min</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Total Time with Grace Periods */}
+                      <div className="mt-3 pt-3 border-t border-gray-100">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-gradient-to-br from-purple-50 to-pink-50 px-3 py-2 rounded-lg">
+                            <span className="text-xs text-purple-600 font-semibold">When you come:</span>
+                            <p className="text-sm font-bold text-purple-900 mt-1">
+                              {(() => {
+                                const comeTime = new Date(event.startDate);
+                                comeTime.setMinutes(comeTime.getMinutes() - (event.gracePeriodBefore || 0));
+                                return comeTime.toLocaleString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                });
+                              })()}
+                            </p>
+                          </div>
+                          <div className="bg-gradient-to-br from-pink-50 to-purple-50 px-3 py-2 rounded-lg">
+                            <span className="text-xs text-pink-600 font-semibold">When you go:</span>
+                            <p className="text-sm font-bold text-pink-900 mt-1">
+                              {(() => {
+                                const goTime = new Date(event.endDate);
+                                goTime.setMinutes(goTime.getMinutes() + (event.gracePeriodAfter || 0));
+                                return goTime.toLocaleString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                });
+                              })()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Card Actions */}
@@ -338,6 +411,16 @@ export default function AdminEventsPage() {
                     </div>
 
                     <div className="flex gap-2">
+                      {ratesheetIds[event._id] && (
+                        <a
+                          href={`/admin/pricing?ratesheet=${ratesheetIds[event._id]}`}
+                          className="px-4 py-2 bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 rounded-lg hover:from-purple-200 hover:to-pink-200 transition-all font-medium flex items-center gap-2"
+                          title="View Auto-Ratesheet"
+                        >
+                          <DollarSign size={16} />
+                          Ratesheet
+                        </a>
+                      )}
                       <button
                         onClick={() => setEditingEvent(event)}
                         className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all font-medium flex items-center gap-2"

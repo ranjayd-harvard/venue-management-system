@@ -45,6 +45,8 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
   const [endDate, setEndDate] = useState('');
   const [attendees, setAttendees] = useState('');
   const [defaultHourlyRate, setDefaultHourlyRate] = useState('');
+  const [gracePeriodBefore, setGracePeriodBefore] = useState('');
+  const [gracePeriodAfter, setGracePeriodAfter] = useState('');
   const [timezone, setTimezone] = useState('');
   const [isActive, setIsActive] = useState(true);
 
@@ -160,6 +162,8 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
         endDate: new Date(endDate).toISOString(),
         attendees: attendees ? parseInt(attendees) : undefined,
         defaultHourlyRate: defaultHourlyRate ? parseFloat(defaultHourlyRate) : undefined,
+        gracePeriodBefore: gracePeriodBefore ? parseInt(gracePeriodBefore) : undefined,
+        gracePeriodAfter: gracePeriodAfter ? parseInt(gracePeriodAfter) : undefined,
         timezone: timezone || undefined,
         isActive,
       };
@@ -207,6 +211,8 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
     setEndDate('');
     setAttendees('');
     setDefaultHourlyRate('');
+    setGracePeriodBefore('');
+    setGracePeriodAfter('');
     setTimezone('');
     setIsActive(true);
     setError('');
@@ -403,6 +409,44 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
               </p>
             </div>
           )}
+
+          {/* Grace Periods */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-gray-900">Grace Periods (Optional)</h3>
+            <p className="text-xs text-gray-600">Extend the event time window for pricing and capacity calculations</p>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Grace Period Before (minutes)
+                </label>
+                <input
+                  type="number"
+                  value={gracePeriodBefore}
+                  onChange={(e) => setGracePeriodBefore(e.target.value)}
+                  min="0"
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 text-gray-900"
+                  placeholder="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Time added before event start</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Grace Period After (minutes)
+                </label>
+                <input
+                  type="number"
+                  value={gracePeriodAfter}
+                  onChange={(e) => setGracePeriodAfter(e.target.value)}
+                  min="0"
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 text-gray-900"
+                  placeholder="0"
+                />
+                <p className="text-xs text-gray-500 mt-1">Time added after event end</p>
+              </div>
+            </div>
+          </div>
 
           {/* Additional Details */}
           <div className="grid grid-cols-2 gap-4">

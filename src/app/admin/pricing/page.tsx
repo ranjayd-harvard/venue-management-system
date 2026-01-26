@@ -116,6 +116,12 @@ export default function AdminPricingPage() {
   };
 
   const deleteRatesheet = async (ratesheetId: string, name: string) => {
+    // Check if it's an auto-generated ratesheet
+    if (name && name.startsWith('Auto-')) {
+      alert('⚠️ Warning: This is an auto-generated ratesheet.\n\nIt is automatically managed and cannot be deleted directly.\n\nIt will be automatically deleted when the associated event is deleted.');
+      return;
+    }
+
     if (!confirm(`Are you sure you want to delete "${name}"?\n\nThis action cannot be undone.`)) return;
 
     try {
@@ -130,6 +136,11 @@ export default function AdminPricingPage() {
   };
 
   const handleEdit = (ratesheet: Ratesheet) => {
+    // Check if it's an auto-generated ratesheet
+    if (ratesheet.name && ratesheet.name.startsWith('Auto-')) {
+      alert('⚠️ Warning: This is an auto-generated ratesheet.\n\nIt is automatically managed from event settings and cannot be edited directly.\n\nTo modify this ratesheet, please edit the associated event instead.');
+      return;
+    }
     setSelectedRatesheet(ratesheet);
     setShowEditModal(true);
   };
@@ -280,6 +291,19 @@ export default function AdminPricingPage() {
                 >
                   {/* Card Header */}
                   <div className="p-6 pb-4">
+                    {/* Auto-generated warning banner */}
+                    {ratesheet.name && ratesheet.name.startsWith('Auto-') && (
+                      <div className="mb-4 p-3 bg-amber-50 border-l-4 border-amber-500 rounded-r-lg">
+                        <div className="flex items-start gap-2">
+                          <span className="text-amber-600 text-lg">⚠️</span>
+                          <div className="flex-1">
+                            <p className="text-xs font-semibold text-amber-800 mb-1">Auto-Generated Ratesheet</p>
+                            <p className="text-xs text-amber-700">This ratesheet is automatically managed from event settings. Edit the event to modify it.</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex-1">
                         <h3 className="text-xl font-bold text-gray-900 mb-1">{ratesheet.name}</h3>
@@ -336,14 +360,14 @@ export default function AdminPricingPage() {
                       <div>
                         <span className="text-gray-500">Effective From:</span>
                         <p className="font-semibold text-gray-900">
-                          {new Date(ratesheet.effectiveFrom).toLocaleDateString()}
+                          {new Date(ratesheet.effectiveFrom).toLocaleString()}
                         </p>
                       </div>
                       <div>
                         <span className="text-gray-500">Effective To:</span>
                         <p className="font-semibold text-gray-900">
-                          {ratesheet.effectiveTo 
-                            ? new Date(ratesheet.effectiveTo).toLocaleDateString()
+                          {ratesheet.effectiveTo
+                            ? new Date(ratesheet.effectiveTo).toLocaleString()
                             : 'Indefinite'}
                         </p>
                       </div>
@@ -382,13 +406,16 @@ export default function AdminPricingPage() {
                       {/* Expanded Details */}
                       {isExpanded && (
                         <div className="mt-3 space-y-2">
-                          {ratesheet.type === 'TIMING_BASED' && ratesheet.timeWindows?.map((tw, idx) => (
+                          {ratesheet.type === 'TIMING_BASED' && ratesheet.timeWindows?.map((tw: any, idx) => (
                             <div key={idx} className="p-3 bg-blue-50 rounded-lg border border-blue-200">
                               <div className="flex justify-between items-center">
                                 <div className="flex items-center gap-3">
                                   <Clock className="text-blue-600" size={16} />
                                   <span className="font-semibold text-blue-900">
-                                    {tw.startTime} - {tw.endTime}
+                                    {tw.windowType === 'DURATION_BASED' || tw.startMinute !== undefined
+                                      ? `${tw.startMinute || 0}min - ${tw.endMinute || 0}min`
+                                      : `${tw.startTime || '-'} - ${tw.endTime || '-'}`
+                                    }
                                   </span>
                                 </div>
                                 <div className="text-right">
@@ -446,14 +473,24 @@ export default function AdminPricingPage() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEdit(ratesheet)}
-                        className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-all font-medium flex items-center gap-2"
+                        className={`px-4 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${
+                          ratesheet.name && ratesheet.name.startsWith('Auto-')
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                        }`}
+                        title={ratesheet.name && ratesheet.name.startsWith('Auto-') ? 'Auto-generated ratesheets cannot be edited' : 'Edit ratesheet'}
                       >
                         <Edit size={16} />
                         Edit
                       </button>
                       <button
                         onClick={() => deleteRatesheet(ratesheet._id, ratesheet.name)}
-                        className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-all font-medium flex items-center gap-2"
+                        className={`px-4 py-2 rounded-lg transition-all font-medium flex items-center gap-2 ${
+                          ratesheet.name && ratesheet.name.startsWith('Auto-')
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-red-100 text-red-700 hover:bg-red-200'
+                        }`}
+                        title={ratesheet.name && ratesheet.name.startsWith('Auto-') ? 'Auto-generated ratesheets cannot be deleted' : 'Delete ratesheet'}
                       >
                         <Trash2 size={16} />
                         Delete

@@ -20,7 +20,8 @@ import {
   Calculator,
   Timer,
   Calendar,
-  TrendingUp
+  TrendingUp,
+  Zap
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -54,6 +55,18 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       icon: Calculator,
       label: 'Pricing Calculator',
       description: 'Calculate booking prices'
+    },
+    {
+      href: '/pricing/digital-ratesheet',
+      icon: DollarSign,
+      label: 'Digital Ratesheet',
+      description: 'Complete pricing ratecard'
+    },
+    {
+      href: '/pricing/digital-ratecard',
+      icon: Zap,
+      label: 'Digital Ratecard',
+      description: 'Modern live pricing display'
     },
     {
       href: '/pricing/timeline-view',

@@ -425,7 +425,8 @@ export function getWeeklyGoalTotal(
     return { setGoals: 0, calculatedGoals: 0, total: 0, daysWithSetGoals: 0, daysCalculated: 0 };
   }
 
-  const date = new Date(referenceDate);
+  // Parse the date in local timezone to avoid timezone offset issues
+  const date = new Date(referenceDate + 'T00:00:00');
   const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
 
   // Calculate week start (Sunday) and end (Saturday)
@@ -499,7 +500,8 @@ export function getMonthlyGoalTotal(
     return { setGoals: 0, calculatedGoals: 0, total: 0, daysWithSetGoals: 0, daysCalculated: 0 };
   }
 
-  const date = new Date(referenceDate);
+  // Parse the date in local timezone to avoid timezone offset issues
+  const date = new Date(referenceDate + 'T00:00:00');
   const year = date.getFullYear();
   const month = date.getMonth();
 
@@ -510,6 +512,24 @@ export function getMonthlyGoalTotal(
   // Last day of month
   const monthEnd = new Date(year, month + 1, 0);
   const monthEndStr = monthEnd.toISOString().split('T')[0];
+
+  // Validate dayCells are from the same month before using them
+  let validDayCells: typeof options.dayCells | undefined = undefined;
+  if (options?.dayCells && options.dayCells.length > 0) {
+    const firstCellMonth = options.dayCells[0].dateStr.substring(0, 7);
+    const referenceMonth = referenceDate.substring(0, 7);
+
+    if (firstCellMonth === referenceMonth) {
+      validDayCells = options.dayCells;
+    } else {
+      // dayCells are from a different month - ignore them to prevent stale data
+      console.log('[getMonthlyGoalTotal] Ignoring stale dayCells:', {
+        requestedMonth: referenceMonth,
+        dayCellsMonth: firstCellMonth,
+        dayCellsCount: options.dayCells.length
+      });
+    }
+  }
 
   let setGoals = 0;
   let calculatedGoals = 0;
@@ -522,12 +542,24 @@ export function getMonthlyGoalTotal(
 
     // Check if there's a set revenue goal
     const goal = getRevenueGoalsForDate(config, dateStr);
+
+    // Debug: Log first few iterations
+    if (d.getDate() <= 3) {
+      console.log(`[getMonthlyGoalTotal] Day ${dateStr}:`, {
+        foundGoal: !!goal,
+        hasDailyGoal: goal?.dailyGoal !== undefined,
+        dailyGoalValue: goal?.dailyGoal,
+        goalStartDate: goal?.startDate,
+        goalEndDate: goal?.endDate
+      });
+    }
+
     if (goal && goal.dailyGoal) {
       setGoals += goal.dailyGoal;
       daysWithSetGoals++;
-    } else if (options?.includeCalculated && options.hourlyRate && options.dayCells) {
-      // Calculate from allocated capacity if no goal is set
-      const cell = options.dayCells.find(c => c.dateStr === dateStr);
+    } else if (options?.includeCalculated && options.hourlyRate && validDayCells) {
+      // Calculate from allocated capacity if no goal is set (only if dayCells are valid)
+      const cell = validDayCells.find(c => c.dateStr === dateStr);
       if (cell?.hourlyBreakdown) {
         const totalAllocated = cell.hourlyBreakdown.reduce((sum, seg) => sum + seg.allocatedCapacity, 0);
         const allocatedGoal = Math.round(options.hourlyRate * totalAllocated);
@@ -574,7 +606,8 @@ export function getMonthlyOccupancyPercentage(
     return 0;
   }
 
-  const date = new Date(referenceDate);
+  // Parse the date in local timezone to avoid timezone offset issues
+  const date = new Date(referenceDate + 'T00:00:00');
   const year = date.getFullYear();
   const month = date.getMonth();
 
@@ -582,14 +615,32 @@ export function getMonthlyOccupancyPercentage(
   const monthStart = new Date(year, month, 1);
   const monthEnd = new Date(year, month + 1, 0);
 
+  // Validate dayCells are from the same month before using them
+  let validDayCells: typeof dayCells | undefined = undefined;
+  if (dayCells && dayCells.length > 0) {
+    const firstCellMonth = dayCells[0].dateStr.substring(0, 7);
+    const referenceMonth = referenceDate.substring(0, 7);
+
+    if (firstCellMonth === referenceMonth) {
+      validDayCells = dayCells;
+    } else {
+      // dayCells are from a different month - ignore them to prevent stale data
+      console.log('[getMonthlyOccupancyPercentage] Ignoring stale dayCells:', {
+        requestedMonth: referenceMonth,
+        dayCellsMonth: firstCellMonth,
+        dayCellsCount: dayCells.length
+      });
+    }
+  }
+
   let totalAllocated = 0;
   let totalMax = 0;
 
-  // If dayCells are provided, use hourly breakdowns for accurate calculation
-  if (dayCells && dayCells.length > 0) {
+  // If dayCells are provided and valid, use hourly breakdowns for accurate calculation
+  if (validDayCells && validDayCells.length > 0) {
     for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
-      const cell = dayCells.find(c => c.dateStr === dateStr);
+      const cell = validDayCells.find(c => c.dateStr === dateStr);
 
       if (cell?.hourlyBreakdown) {
         const dayMax = cell.hourlyBreakdown.reduce((sum, seg) => sum + seg.maxCapacity, 0);
@@ -756,4 +807,149 @@ export function getHourlyCapacityOverridesForDate(
   return config.hourlyCapacities
     .filter((hc) => hc.date === date)
     .sort((a, b) => a.hour - b.hour);
+}
+
+// ===== WEEK PROGRESS CALCULATION =====
+
+/**
+ * Gets the current week's progress (actual revenue vs goal)
+ * Returns week boundaries, progress percentage, and completion info
+ *
+ * NOTE: This function ALWAYS calculates for the actual current week (based on today),
+ * regardless of what month is being viewed in the calendar.
+ */
+export function getCurrentWeekProgress(
+  config: CapacityConfig | undefined,
+  referenceDate: string, // YYYY-MM-DD (not used - kept for backward compatibility)
+  options?: {
+    includeCalculated?: boolean;
+    hourlyRate?: number;
+    dayCells?: Array<{
+      dateStr: string;
+      revenueGoal?: { dailyGoal?: number };
+      hourlyBreakdown?: Array<{ allocatedCapacity: number }>;
+    }>;
+  }
+): {
+  weekStart: string;
+  weekEnd: string;
+  totalGoal: number;
+  actualRevenue: number;
+  progressPercentage: number;
+  daysComplete: number;
+  totalDays: number;
+} {
+  // ALWAYS use today's date for current week calculation
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const dayOfWeek = today.getDay(); // 0 = Sunday
+
+  // Calculate week start (Sunday)
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - dayOfWeek);
+
+  // Calculate week end (Saturday)
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+
+  const weekStartStr = weekStart.toISOString().split('T')[0];
+  const weekEndStr = weekEnd.toISOString().split('T')[0];
+
+  // Get the weekly goal using the week start date
+  const goalResult = getWeeklyGoalTotal(config, weekStartStr, options);
+  const totalGoal = goalResult.setGoals + (options?.includeCalculated ? goalResult.calculatedGoals : 0);
+
+  // Calculate actual revenue (for completed days only)
+  let actualRevenue = 0;
+  let daysComplete = 0;
+
+  for (let d = new Date(weekStart); d <= weekEnd; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split('T')[0];
+
+    // Only count days that have passed
+    if (d > today) break;
+
+    daysComplete++;
+
+    // Find the day cell
+    const dayCell = options?.dayCells?.find(dc => dc.dateStr === dateStr);
+
+    // Get set goal for this date
+    const revenueGoal = getRevenueGoalsForDate(config, dateStr);
+    if (revenueGoal?.dailyGoal) {
+      actualRevenue += revenueGoal.dailyGoal;
+    } else if (options?.includeCalculated && dayCell?.hourlyBreakdown && options?.hourlyRate) {
+      // Calculate from allocated capacity
+      const dailyAllocated = dayCell.hourlyBreakdown.reduce(
+        (sum, hour) => sum + hour.allocatedCapacity,
+        0
+      );
+      actualRevenue += dailyAllocated * options.hourlyRate;
+    }
+  }
+
+  const progressPercentage = totalGoal > 0 ? Math.round((actualRevenue / totalGoal) * 100) : 0;
+
+  return {
+    weekStart: weekStartStr,
+    weekEnd: weekEndStr,
+    totalGoal,
+    actualRevenue,
+    progressPercentage,
+    daysComplete,
+    totalDays: 7,
+  };
+}
+
+// ===== PLANNING COVERAGE CALCULATION =====
+
+/**
+ * Calculates planning coverage - how many days in the month have revenue goals set
+ */
+export function getPlanningCoverage(
+  config: CapacityConfig | undefined,
+  referenceDate: string, // YYYY-MM-DD
+  dayCells?: Array<{ dateStr: string; revenueGoal?: { dailyGoal?: number } }>
+): {
+  daysWithGoals: number;
+  totalDays: number;
+  percentage: number;
+  datesWithoutGoals: string[];
+} {
+  const refDate = new Date(referenceDate + 'T00:00:00');
+  const year = refDate.getFullYear();
+  const month = refDate.getMonth();
+
+  // Get first and last day of the month
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0); // Day 0 of next month = last day of current month
+
+  const totalDays = lastDay.getDate();
+  let daysWithGoals = 0;
+  const datesWithoutGoals: string[] = [];
+
+  // Check each day of the month
+  for (let day = 1; day <= totalDays; day++) {
+    const date = new Date(year, month, day);
+    const dateStr = date.toISOString().split('T')[0];
+
+    // Check if this date has a revenue goal set
+    const revenueGoal = getRevenueGoalsForDate(config, dateStr);
+
+    if (revenueGoal?.dailyGoal && revenueGoal.dailyGoal > 0) {
+      daysWithGoals++;
+    } else {
+      datesWithoutGoals.push(dateStr);
+    }
+  }
+
+  const percentage = totalDays > 0 ? Math.round((daysWithGoals / totalDays) * 100) : 0;
+
+  return {
+    daysWithGoals,
+    totalDays,
+    percentage,
+    datesWithoutGoals,
+  };
 }

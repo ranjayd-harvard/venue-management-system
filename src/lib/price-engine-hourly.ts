@@ -55,6 +55,9 @@ export interface PricingContext {
   subLocationId: string;
   eventId?: string;
 
+  // Booking type flag
+  isEventBooking?: boolean; // If true, apply event ratesheets (with grace periods); if false, skip event ratesheets
+
   // Ratesheets (all levels)
   customerRatesheets: RateSheet[];
   locationRatesheets: RateSheet[];
@@ -246,6 +249,12 @@ export class HourlyPricingEngine {
       // Check time windows for TIMING_BASED ratesheets
       if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
         for (const tw of rs.timeWindows) {
+          // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+          // This allows event rates to apply but excludes free grace periods
+          if (context.isEventBooking === false && tw.pricePerHour === 0 && level === 'EVENT') {
+            continue; // Skip this $0/hr grace period time window
+          }
+
           const windowType = tw.windowType || 'ABSOLUTE_TIME';
           let matches = false;
 
@@ -258,12 +267,30 @@ export class HourlyPricingEngine {
 
             matches = hourMinutes >= startMinutes && hourMinutes < endMinutes;
           } else {
-            // Duration-based logic: match against minutes from booking start
-            const minutesFromStart = Math.floor((hourStart.getTime() - context.bookingStart.getTime()) / (1000 * 60));
+            // Duration-based logic: match against minutes from ratesheet effectiveFrom
+            // For EVENT ratesheets, this is the event start minus grace period before
+
+            // CRITICAL: Check if effectiveFrom is a Date object
+            const effectiveFromType = typeof rs.effectiveFrom;
+            const effectiveFromIsDate = rs.effectiveFrom instanceof Date;
+
+            console.log(`\n🔍 [DURATION_BASED] Checking ${rs.name} (${level})`);
+            console.log(`[DURATION_BASED]   effectiveFrom type: ${effectiveFromType}, isDate: ${effectiveFromIsDate}`);
+            console.log(`[DURATION_BASED]   effectiveFrom value:`, rs.effectiveFrom);
+            console.log(`[DURATION_BASED]   hourStart:`, hourStart.toISOString());
+
+            const minutesFromRatesheetStart = Math.floor((hourStart.getTime() - rs.effectiveFrom.getTime()) / (1000 * 60));
             const startMinute = tw.startMinute ?? 0;
             const endMinute = tw.endMinute ?? 0;
 
-            matches = minutesFromStart >= startMinute && minutesFromStart < endMinute;
+            console.log(`[DURATION_BASED]   MinutesFromStart: ${minutesFromRatesheetStart}`);
+            console.log(`[DURATION_BASED]   Window: ${startMinute}-${endMinute}min`);
+            console.log(`[DURATION_BASED]   Rate: $${tw.pricePerHour}/hr`);
+            console.log(`[DURATION_BASED]   isEventBooking: ${context.isEventBooking}`);
+
+            matches = minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
+
+            console.log(`[DURATION_BASED]   ✓ Matches: ${matches}\n`);
           }
 
           if (matches) {

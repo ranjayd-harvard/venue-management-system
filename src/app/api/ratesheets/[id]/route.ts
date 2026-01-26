@@ -50,6 +50,17 @@ export async function PUT(
       return NextResponse.json({ error: 'Ratesheet not found' }, { status: 404 });
     }
 
+    // Prevent modification of auto-generated ratesheets
+    if (existing.name && existing.name.startsWith('Auto-')) {
+      return NextResponse.json(
+        {
+          error: 'Cannot modify auto-generated ratesheet',
+          message: 'This ratesheet is automatically generated from an event. To modify it, edit the event details instead.'
+        },
+        { status: 403 }
+      );
+    }
+
     // Determine ratesheet type
     let ratesheetType: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
     if (existing.subLocationId) {
@@ -129,6 +140,17 @@ export async function PATCH(
       return NextResponse.json({ error: 'Ratesheet not found' }, { status: 404 });
     }
 
+    // Prevent modification of auto-generated ratesheets
+    if (existing.name && existing.name.startsWith('Auto-')) {
+      return NextResponse.json(
+        {
+          error: 'Cannot modify auto-generated ratesheet',
+          message: 'This ratesheet is automatically generated from an event. To modify it, edit the event details instead.'
+        },
+        { status: 403 }
+      );
+    }
+
     // Determine ratesheet type
     let ratesheetType: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION';
     if (existing.subLocationId) {
@@ -190,6 +212,23 @@ export async function DELETE(
   try {
     const db = await getDb();
     const collection = db.collection('ratesheets');
+
+    // Check if ratesheet is auto-generated
+    const existing = await collection.findOne({ _id: new ObjectId(params.id) });
+    if (!existing) {
+      return NextResponse.json({ error: 'Ratesheet not found' }, { status: 404 });
+    }
+
+    // Prevent deletion of auto-generated ratesheets
+    if (existing.name && existing.name.startsWith('Auto-')) {
+      return NextResponse.json(
+        {
+          error: 'Cannot delete auto-generated ratesheet',
+          message: 'This ratesheet is automatically managed. It will be deleted when the associated event is deleted.'
+        },
+        { status: 403 }
+      );
+    }
 
     const result = await collection.deleteOne({ _id: new ObjectId(params.id) });
 

@@ -133,6 +133,9 @@ export default function PricingTimeSeriesPage() {
   const [allRateKeys, setAllRateKeys] = useState<string[]>([]);
   const [visibleRates, setVisibleRates] = useState<Set<string>>(new Set());
 
+  // Event booking toggle
+  const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
+
   useEffect(() => {
     if (selectedLocation) {
       fetchLocationDetails(selectedLocation);
@@ -155,6 +158,20 @@ export default function PricingTimeSeriesPage() {
     }
   }, [selectedSubLocation, selectedEventId]);
 
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
+
   // Sync view window with booking start time when duration context is enabled
   useEffect(() => {
     if (useDurationContext) {
@@ -174,7 +191,7 @@ export default function PricingTimeSeriesPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       generateTimeSeriesData();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
 
   const fetchLocationDetails = async (locationId: string) => {
     try {
@@ -210,18 +227,75 @@ export default function PricingTimeSeriesPage() {
       const startStr = rangeStart.toISOString().split('T')[0];
       const endStr = rangeEnd.toISOString().split('T')[0];
 
+      // Step 1: Find all active events that overlap with the view date range
+      const eventsResponse = await fetch('/api/events');
+      const allEvents = await eventsResponse.json();
+      const activeEvents = allEvents.filter((e: Event) => e.isActive);
+
+      // Find events that overlap with view range
+      const overlappingEvents = activeEvents.filter((event: Event) => {
+        const eventStart = new Date(event.startDate);
+        const eventEnd = new Date(event.endDate);
+        // Event overlaps if: event ends after range starts AND event starts before range ends
+        return eventEnd >= rangeStart && eventStart <= rangeEnd;
+      });
+
+      console.log('[TimeSeries] Found overlapping events:', {
+        total: activeEvents.length,
+        overlapping: overlappingEvents.length,
+        events: overlappingEvents.map((e: Event) => ({
+          name: e.name,
+          start: e.startDate,
+          end: e.endDate
+        }))
+      });
+
+      // Step 2: Fetch ratesheets for the hierarchy
       const url = new URL('/api/ratesheets', window.location.origin);
       url.searchParams.set('subLocationId', subLocationId);
       url.searchParams.set('startDate', startStr);
       url.searchParams.set('endDate', endStr);
       url.searchParams.set('resolveHierarchy', 'true');
 
+      // Step 3: If manual event is selected, only include that event
+      // Otherwise, fetch ratesheets for ALL overlapping events
       if (selectedEventId) {
         url.searchParams.set('eventId', selectedEventId);
       }
 
       const response = await fetch(url.toString());
-      const allRatesheets = await response.json();
+      let allRatesheets = await response.json();
+
+      // Step 4: If no manual event selected, fetch ratesheets for ALL overlapping events
+      if (!selectedEventId && overlappingEvents.length > 0) {
+        // Fetch event ratesheets separately for each overlapping event
+        const eventRatesheetPromises = overlappingEvents.map((event: Event) => {
+          const eventUrl = new URL('/api/ratesheets', window.location.origin);
+          eventUrl.searchParams.set('eventId', event._id);
+          eventUrl.searchParams.set('startDate', startStr);
+          eventUrl.searchParams.set('endDate', endStr);
+          return fetch(eventUrl.toString()).then(res => res.json());
+        });
+
+        const eventRatesheetsArrays = await Promise.all(eventRatesheetPromises);
+        const eventRatesheets = eventRatesheetsArrays.flat();
+
+        // Merge event ratesheets with hierarchy ratesheets (avoid duplicates)
+        const existingIds = new Set(allRatesheets.map((rs: any) => rs._id));
+        const newEventRatesheets = eventRatesheets.filter((rs: any) => !existingIds.has(rs._id));
+        allRatesheets = [...allRatesheets, ...newEventRatesheets];
+      }
+
+      console.log('[TimeSeries] Loaded ratesheets:', {
+        total: allRatesheets.length,
+        active: allRatesheets.filter((rs: any) => rs.isActive).length,
+        byLevel: {
+          event: allRatesheets.filter((rs: any) => rs.applyTo === 'EVENT').length,
+          sublocation: allRatesheets.filter((rs: any) => rs.applyTo === 'SUBLOCATION').length,
+          location: allRatesheets.filter((rs: any) => rs.applyTo === 'LOCATION').length,
+          customer: allRatesheets.filter((rs: any) => rs.applyTo === 'CUSTOMER').length,
+        }
+      });
 
       const activeRatesheets = allRatesheets.filter((rs: Ratesheet) => rs.isActive);
       setRatesheets(activeRatesheets.sort((a: Ratesheet, b: Ratesheet) => b.priority - a.priority));
@@ -282,6 +356,12 @@ export default function PricingTimeSeriesPage() {
           // Check time windows
           if (rs.timeWindows) {
             rs.timeWindows.forEach((tw) => {
+              // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+              // This allows event rates to apply but excludes free grace periods
+              if (!isEventBooking && tw.pricePerHour === 0 && rs.applyTo === 'EVENT') {
+                return; // Skip this $0/hr grace period time window
+              }
+
               const windowType = tw.windowType || 'ABSOLUTE_TIME';
               let matches = false;
               let windowLabel = '';
@@ -293,23 +373,23 @@ export default function PricingTimeSeriesPage() {
                   windowLabel = `${tw.startTime}-${tw.endTime}`;
                 }
               } else if (windowType === 'DURATION_BASED') {
-                // Duration-based matching (only if context is enabled)
-                if (useDurationContext) {
-                  const minutesFromStart = Math.floor((currentTime.getTime() - bookingStartTime.getTime()) / (1000 * 60));
-                  const startMinute = tw.startMinute ?? 0;
-                  const endMinute = tw.endMinute ?? 0;
+                // Duration-based windows: calculate minutes from ratesheet effectiveFrom
+                // For EVENT ratesheets, effectiveFrom is the event start minus grace period
+                const ratesheetStart = new Date(rs.effectiveFrom);
+                const minutesFromRatesheetStart = Math.floor((currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60));
+                const startMinute = tw.startMinute ?? 0;
+                const endMinute = tw.endMinute ?? 0;
 
-                  if (minutesFromStart >= startMinute && minutesFromStart < endMinute) {
-                    matches = true;
-                    windowLabel = `${startMinute}-${endMinute}min`;
-                  }
+                if (minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute) {
+                  matches = true;
+                  windowLabel = `${startMinute}-${endMinute}min`;
                 }
               }
 
               if (matches) {
                 const key = `${rs.name} (${windowLabel})`;
                 point[key] = tw.pricePerHour;
-                rateKeysSet.add(key);
+                rateKeysSet.add(key);make 
               }
             });
           }
@@ -456,6 +536,8 @@ export default function PricingTimeSeriesPage() {
           bookingStartTime={bookingStartTime}
           onUseDurationContextChange={setUseDurationContext}
           onBookingStartTimeChange={setBookingStartTime}
+          isEventBooking={isEventBooking}
+          onIsEventBookingChange={setIsEventBooking}
         />
 
         {loading && (

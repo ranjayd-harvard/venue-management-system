@@ -154,6 +154,9 @@ export default function TimelineTilesPage() {
   const [decisionPanelData, setDecisionPanelData] = useState<any>(null);
   const [showWaterfall, setShowWaterfall] = useState(false);
 
+  // Event booking toggle
+  const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
+
   useEffect(() => {
     fetchPricingConfig();
   }, []);
@@ -167,6 +170,20 @@ export default function TimelineTilesPage() {
       setCurrentCustomer(null);
     }
   }, [selectedLocation]);
+
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
 
   useEffect(() => {
     if (selectedSubLocation) {
@@ -197,7 +214,7 @@ export default function TimelineTilesPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -416,20 +433,23 @@ export default function TimelineTilesPage() {
               // Check time windows
               if (ratesheet.timeWindows && ratesheet.timeWindows.length > 0) {
                 const matchingWindow = ratesheet.timeWindows.find(tw => {
+                  // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+                  // This allows event rates to apply but excludes free grace periods
+                  if (!isEventBooking && tw.pricePerHour === 0 && ratesheet.applyTo === 'EVENT') {
+                    return false; // Skip this $0/hr grace period time window
+                  }
+
                   const windowType = tw.windowType || 'ABSOLUTE_TIME';
 
                   if (windowType === 'DURATION_BASED') {
-                    // Duration-based windows: only show if duration context is enabled
-                    if (!useDurationContext) {
-                      return false; // Skip duration-based windows when context is disabled
-                    }
-
-                    // Calculate minutes from booking start
-                    const minutesFromStart = Math.floor((currentTime.getTime() - bookingStartTime.getTime()) / (1000 * 60));
+                    // Duration-based windows: calculate minutes from ratesheet effectiveFrom
+                    // For EVENT ratesheets, effectiveFrom is the event start minus grace period
+                    const ratesheetStart = new Date(ratesheet.effectiveFrom);
+                    const minutesFromRatesheetStart = Math.floor((currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60));
                     const startMinute = tw.startMinute ?? 0;
                     const endMinute = tw.endMinute ?? 0;
 
-                    return minutesFromStart >= startMinute && minutesFromStart < endMinute;
+                    return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
                   } else {
                     // ABSOLUTE_TIME windows: match against hour time
                     if (!tw.startTime || !tw.endTime) {
@@ -666,6 +686,8 @@ export default function TimelineTilesPage() {
           bookingStartTime={bookingStartTime}
           onUseDurationContextChange={setUseDurationContext}
           onBookingStartTimeChange={setBookingStartTime}
+          isEventBooking={isEventBooking}
+          onIsEventBookingChange={setIsEventBooking}
           eventCount={counts.event}
         />
 

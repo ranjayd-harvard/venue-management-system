@@ -47,6 +47,10 @@ interface PricingFiltersProps {
   onUseDurationContextChange?: (enabled: boolean) => void;
   onBookingStartTimeChange?: (time: Date) => void;
 
+  // Event booking toggle (optional)
+  isEventBooking?: boolean;
+  onIsEventBookingChange?: (isEventBooking: boolean) => void;
+
   // Event counts (for auto-detect message)
   eventCount?: number;
 }
@@ -64,6 +68,8 @@ export default function PricingFilters({
   bookingStartTime,
   onUseDurationContextChange,
   onBookingStartTimeChange,
+  isEventBooking,
+  onIsEventBookingChange,
   eventCount = 0,
 }: PricingFiltersProps) {
   const [locations, setLocations] = useState<Location[]>([]);
@@ -115,10 +121,36 @@ export default function PricingFilters({
 
   const fetchEvents = async () => {
     try {
+      // Get sublocation details to know its location and customer
+      const sublocationRes = await fetch(`/api/sublocations/${selectedSubLocation}`);
+      const sublocation = await sublocationRes.json();
+
+      // Get location details
+      const locationRes = await fetch(`/api/locations/${sublocation.locationId}`);
+      const location = await locationRes.json();
+
+      // Fetch all events
       const res = await fetch('/api/events');
-      const data = await res.json();
-      const activeEvents = data.filter((e: Event) => e.isActive);
-      setEvents(activeEvents);
+      const allEvents = await res.json();
+
+      // Filter events by hierarchy: must be active AND belong to this sublocation/location/customer
+      const filteredEvents = allEvents.filter((e: Event) => {
+        if (!e.isActive) return false;
+
+        // Event must belong to this sublocation hierarchy
+        // Convert IDs to strings for comparison (in case they're ObjectIds)
+        const eventSubLocId = typeof e.subLocationId === 'object' ? (e.subLocationId as any)?.$oid || String(e.subLocationId) : e.subLocationId;
+        const eventLocId = typeof e.locationId === 'object' ? (e.locationId as any)?.$oid || String(e.locationId) : e.locationId;
+        const eventCustId = typeof e.customerId === 'object' ? (e.customerId as any)?.$oid || String(e.customerId) : e.customerId;
+
+        const matchesSubLocation = eventSubLocId === selectedSubLocation;
+        const matchesLocation = eventLocId === location._id && !eventSubLocId;
+        const matchesCustomer = eventCustId === location.customerId && !eventLocId && !eventSubLocId;
+
+        return matchesSubLocation || matchesLocation || matchesCustomer;
+      });
+
+      setEvents(filteredEvents);
     } catch (error) {
       console.error('Failed to fetch events:', error);
     }
@@ -314,6 +346,40 @@ export default function PricingFilters({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Event Booking Toggle (Optional - only show if props provided) */}
+      {onIsEventBookingChange && isEventBooking !== undefined && selectedSubLocation && (
+        <div className="border-t border-gray-200 pt-4 mt-4">
+          <div className="bg-gradient-to-r from-pink-50 to-purple-50 border-2 border-pink-200 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label htmlFor="isEventBookingFilter" className="text-sm font-semibold text-gray-800 cursor-pointer">
+                  Is this an event booking?
+                </label>
+                <p className="text-xs text-gray-600 mt-1">
+                  {isEventBooking
+                    ? '✅ Event pricing with grace periods will apply (free grace periods)'
+                    : '❌ Regular walk-in pricing (no free grace periods)'}
+                </p>
+              </div>
+              <button
+                id="isEventBookingFilter"
+                type="button"
+                onClick={() => onIsEventBookingChange(!isEventBooking)}
+                className={`relative inline-flex h-8 w-14 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 ${
+                  isEventBooking ? 'bg-pink-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    isEventBooking ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

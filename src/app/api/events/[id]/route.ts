@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { EventRepository } from '@/models/Event';
+import { generateEventRatesheet } from '@/lib/event-ratesheet-utils';
 
 export async function GET(
   request: Request,
@@ -54,6 +55,14 @@ export async function PATCH(
       );
     }
 
+    // Regenerate auto-ratesheet for the event
+    try {
+      await generateEventRatesheet(event);
+    } catch (error) {
+      console.error('Error regenerating auto-ratesheet:', error);
+      // Don't fail the event update if ratesheet generation fails
+    }
+
     return NextResponse.json(event);
   } catch (error) {
     console.error('Error updating event:', error);
@@ -69,6 +78,47 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
+    // Get event details before deleting
+    const event = await EventRepository.findById(params.id);
+
+    if (!event) {
+      return NextResponse.json(
+        { error: 'Event not found' },
+        { status: 404 }
+      );
+    }
+
+    // Mark associated auto-ratesheet as deleted and inactive
+    try {
+      const { getDb } = await import('@/lib/mongodb');
+      const db = await getDb();
+      const ratesheetName = `Auto-${event.name}`;
+
+      const ratesheet = await db.collection('ratesheets').findOne({
+        name: ratesheetName,
+        'appliesTo.level': 'EVENT',
+        'appliesTo.entityId': event._id,
+      });
+
+      if (ratesheet) {
+        await db.collection('ratesheets').updateOne(
+          { _id: ratesheet._id },
+          {
+            $set: {
+              name: `DELETED-${ratesheetName}`,
+              isActive: false,
+              updatedAt: new Date(),
+              deletionReason: `Event "${event.name}" was deleted`,
+            }
+          }
+        );
+        console.log(`[deleteEvent] Marked ratesheet as DELETED for event: ${event.name}`);
+      }
+    } catch (error) {
+      console.error('Error marking ratesheet as deleted:', error);
+      // Don't fail the event deletion if ratesheet update fails
+    }
+
     const deleted = await EventRepository.delete(params.id);
 
     if (!deleted) {

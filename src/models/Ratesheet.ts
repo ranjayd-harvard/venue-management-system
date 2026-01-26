@@ -45,10 +45,10 @@ export interface Ratesheet {
   // Type and Scope
   type: RatesheetType;
   
-  // Hierarchy application (can be Location or SubLocation level)
+  // Hierarchy application (can be Location, SubLocation, or Event level)
   appliesTo: {
-    level: 'LOCATION' | 'SUBLOCATION';
-    entityId: ObjectId; // Location._id or SubLocation._id
+    level: 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    entityId: ObjectId; // Location._id or SubLocation._id or Event._id
   };
   
   // Priority and Conflicts

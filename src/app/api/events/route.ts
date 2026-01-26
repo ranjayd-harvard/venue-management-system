@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { EventRepository } from '@/models/Event';
+import { generateEventRatesheet } from '@/lib/event-ratesheet-utils';
 
 export async function GET(request: Request) {
   try {
@@ -64,6 +65,14 @@ export async function POST(request: Request) {
       endDate,
       isActive: body.isActive !== undefined ? body.isActive : true,
     });
+
+    // Generate auto-ratesheet for the event
+    try {
+      await generateEventRatesheet(event);
+    } catch (error) {
+      console.error('Error generating auto-ratesheet:', error);
+      // Don't fail the event creation if ratesheet generation fails
+    }
 
     return NextResponse.json(event, { status: 201 });
   } catch (error) {

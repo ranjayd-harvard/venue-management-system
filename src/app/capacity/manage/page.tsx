@@ -1,21 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Calendar,
   Users,
   Building2,
-  MapPin,
   TrendingUp,
   DollarSign,
-  ChevronDown,
-  ChevronUp,
   Edit,
   Target,
   Percent,
-  X
+  X,
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
-import { getWeeklyGoalTotal, getMonthlyGoalTotal, getMonthlyOccupancyPercentage } from '@/lib/capacity-utils';
+import { getMonthlyGoalTotal, getMonthlyOccupancyPercentage, getCurrentWeekProgress, getPlanningCoverage } from '@/lib/capacity-utils';
 import HourlyBreakdownTable from '@/components/HourlyBreakdownTable';
 
 interface Customer {
@@ -131,6 +130,64 @@ export default function CapacityManagementPage() {
   const [showAggregation, setShowAggregation] = useState(false);
   const [aggregationData, setAggregationData] = useState<any>(null);
 
+  // Computed dashboard tile values - recalculate when dayCells, currentEntity, or viewDate changes
+  const selectedDateStr = useMemo(() => viewDate.toISOString().split('T')[0], [viewDate]);
+
+  const hourlyRate = useMemo(() =>
+    entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
+    [entityType, currentEntity]
+  );
+
+  const currentWeekProgress = useMemo(() => {
+    if (!currentEntity) {
+      return { weekStart: '', weekEnd: '', totalGoal: 0, actualRevenue: 0, progressPercentage: 0, daysComplete: 0, totalDays: 7 };
+    }
+    return getCurrentWeekProgress(
+      currentEntity.capacityConfig,
+      selectedDateStr,
+      { includeCalculated: true, hourlyRate, dayCells }
+    );
+  }, [currentEntity, selectedDateStr, hourlyRate, dayCells]);
+
+  const monthlyGoal = useMemo(() => {
+    if (!currentEntity) {
+      console.log('[MonthlyGoal] No currentEntity, returning zeros');
+      return { setGoals: 0, calculatedGoals: 0, total: 0, daysWithSetGoals: 0, daysCalculated: 0 };
+    }
+
+    console.log('[MonthlyGoal] Calculating for:', {
+      month: selectedDateStr.substring(0, 7),
+      entityId: currentEntity._id,
+      revenueGoalsInConfig: currentEntity.capacityConfig?.revenueGoals?.length || 0,
+      revenueGoals: currentEntity.capacityConfig?.revenueGoals,
+      dayCellsCount: dayCells.length,
+      hourlyRate
+    });
+
+    const result = getMonthlyGoalTotal(
+      currentEntity.capacityConfig,
+      selectedDateStr,
+      { includeCalculated: true, hourlyRate, dayCells }
+    );
+
+    console.log('[MonthlyGoal] Result:', result);
+    return result;
+  }, [currentEntity, selectedDateStr, hourlyRate, dayCells]);
+
+  const monthlyOccupancy = useMemo(() => {
+    if (!currentEntity) {
+      return 0;
+    }
+    return getMonthlyOccupancyPercentage(currentEntity, selectedDateStr, dayCells);
+  }, [currentEntity, selectedDateStr, dayCells]);
+
+  const planningCoverage = useMemo(() => {
+    if (!currentEntity) {
+      return { daysWithGoals: 0, totalDays: 0, percentage: 0, datesWithoutGoals: [] };
+    }
+    return getPlanningCoverage(currentEntity.capacityConfig, selectedDateStr, dayCells);
+  }, [currentEntity, selectedDateStr, dayCells]);
+
   useEffect(() => {
     fetchCustomers();
   }, []);
@@ -171,8 +228,15 @@ export default function CapacityManagementPage() {
     }
   }, [selectedEvent]);
 
+  // When currentEntity or viewDate changes, regenerate the calendar
   useEffect(() => {
     if (currentEntity) {
+      console.log('[Calendar] Regenerating calendar for:', {
+        entityType,
+        entityId: currentEntity._id,
+        month: viewDate.toISOString().split('T')[0].substring(0, 7),
+        revenueGoalsCount: currentEntity.capacityConfig?.revenueGoals?.length || 0
+      });
       generateCalendar();
     }
   }, [currentEntity, viewDate]);
@@ -236,8 +300,17 @@ export default function CapacityManagementPage() {
           break;
       }
 
+      console.log('[LoadEntity] Fetching:', { type, id, endpoint });
       const response = await fetch(endpoint);
       const data = await response.json();
+
+      console.log('[LoadEntity] Received data:', {
+        entityId: data._id,
+        hasCapacityConfig: !!data.capacityConfig,
+        revenueGoalsCount: data.capacityConfig?.revenueGoals?.length || 0,
+        revenueGoals: data.capacityConfig?.revenueGoals
+      });
+
       setCurrentEntity(data);
       setEntityType(type);
 
@@ -276,12 +349,28 @@ export default function CapacityManagementPage() {
         break;
     }
 
+    console.log('[ReloadEntity] Reloading:', { entityType, id });
+
     if (id) {
       await loadEntity(entityType, id);
+      console.log('[ReloadEntity] Completed. New revenue goals count:',
+        currentEntity?.capacityConfig?.revenueGoals?.length || 0
+      );
     }
   };
 
   const generateCalendar = async () => {
+    console.log('[GenerateCalendar] Starting for:', {
+      month: viewDate.toISOString().split('T')[0].substring(0, 7),
+      entityId: currentEntity?._id,
+      entityType,
+      configExists: !!currentEntity?.capacityConfig,
+      revenueGoalsCount: currentEntity?.capacityConfig?.revenueGoals?.length || 0,
+      revenueGoals: currentEntity?.capacityConfig?.revenueGoals
+    });
+
+    setDayCells([]); // Clear stale data immediately when month changes
+    setLoading(true); // Set loading state at the start
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
     const firstDay = new Date(year, month, 1);
@@ -371,6 +460,13 @@ export default function CapacityManagementPage() {
     }
 
     setDayCells(cells);
+    setLoading(false); // Clear loading state when done
+
+    console.log('[GenerateCalendar] Completed. Created cells:', {
+      cellCount: cells.length,
+      cellsWithRevenueGoals: cells.filter(c => c.revenueGoal).length,
+      cellsWithCalculatedGoals: cells.filter(c => c.calculatedGoal).length
+    });
   };
 
   const handleUpdateBounds = async () => {
@@ -542,18 +638,33 @@ export default function CapacityManagementPage() {
   };
 
   const previousMonth = () => {
-    setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1));
+    const newDate = new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1);
+    console.log('[Navigation] Previous month clicked. New month:', newDate.toISOString().split('T')[0].substring(0, 7));
+    setViewDate(newDate);
   };
 
   const nextMonth = () => {
-    setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1));
+    const newDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1);
+    console.log('[Navigation] Next month clicked. New month:', newDate.toISOString().split('T')[0].substring(0, 7));
+    setViewDate(newDate);
   };
 
-  const getCapacityColor = (capacity: number, max: number) => {
-    const ratio = capacity / max;
-    if (ratio >= 0.8) return 'bg-green-100 text-green-800';
-    if (ratio >= 0.5) return 'bg-yellow-100 text-yellow-800';
-    return 'bg-red-100 text-red-800';
+  const getCapacityColor = (cell: DayCell) => {
+    // Use occupancy percentage (allocated / max) from hourly breakdown if available
+    if (cell.hourlyBreakdown && cell.hourlyBreakdown.length > 0) {
+      const totalMax = cell.hourlyBreakdown.reduce((sum, seg) => sum + seg.maxCapacity, 0);
+      const totalAllocated = cell.hourlyBreakdown.reduce((sum, seg) => sum + seg.allocatedCapacity, 0);
+
+      if (totalMax === 0) return 'bg-gray-100 text-gray-800';
+
+      const occupancyRatio = totalAllocated / totalMax;
+      if (occupancyRatio >= 0.8) return 'bg-green-100 text-green-800';
+      if (occupancyRatio >= 0.5) return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-800';
+    }
+
+    // Fallback: no color for cells without hourly breakdown
+    return 'bg-gray-100 text-gray-800';
   };
 
   return (
@@ -802,12 +913,20 @@ export default function CapacityManagementPage() {
               ))}
 
               {/* Padding for first week */}
-              {Array.from({ length: dayCells[0]?.date.getDay() || 0 }).map((_, i) => (
+              {!loading && Array.from({ length: dayCells[0]?.date.getDay() || 0 }).map((_, i) => (
                 <div key={`padding-${i}`} className="p-2"></div>
               ))}
 
               {/* Calendar Days */}
-              {dayCells.map((cell) => {
+              {loading || dayCells.length === 0 ? (
+                // Show loading skeleton for calendar
+                <div className="col-span-7 flex items-center justify-center py-20">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                    <p className="text-gray-600">Loading calendar data...</p>
+                  </div>
+                </div>
+              ) : dayCells.map((cell) => {
                 // Determine if there's a revenue goal override
                 const hasRevenueGoalOverride = cell.revenueGoal && cell.revenueGoal.dailyGoal !== undefined;
 
@@ -819,7 +938,7 @@ export default function CapacityManagementPage() {
                 return (
                   <div
                     key={cell.dateStr}
-                    className={`p-3 rounded-md cursor-pointer hover:shadow-md transition-shadow relative ${borderStyle} ${getCapacityColor(cell.capacity, maxCapacity)}`}
+                    className={`p-3 rounded-md cursor-pointer hover:shadow-md transition-shadow relative ${borderStyle} ${getCapacityColor(cell)}`}
                     onClick={() => {
                       setSelectedDate(cell.dateStr);
                       setSelectedCell(cell);
@@ -886,99 +1005,54 @@ export default function CapacityManagementPage() {
           </div>
 
           {/* Dashboard Tiles */}
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Weekly Goal Tile */}
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Current Week Progress Tile */}
             <div
               className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white shadow-lg cursor-help"
-              title={(() => {
-                const selectedDateStr = viewDate.toISOString().split('T')[0];
-                const result = getWeeklyGoalTotal(
-                  currentEntity?.capacityConfig,
-                  selectedDateStr,
-                  {
-                    includeCalculated: true,
-                    hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                    dayCells: dayCells
-                  }
-                );
-                return `${result.daysWithSetGoals} days with set goals, ${result.daysCalculated} days calculated from allocated capacity`;
-              })()}
+              title={`Week ${currentWeekProgress.weekStart} to ${currentWeekProgress.weekEnd}\nActual: $${currentWeekProgress.actualRevenue.toLocaleString()} / Goal: $${currentWeekProgress.totalGoal.toLocaleString()}`}
             >
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <Calendar className="w-5 h-5" />
-                  <h3 className="text-sm font-medium opacity-90">Weekly Goal</h3>
+                  <h3 className="text-sm font-medium opacity-90">Current Week</h3>
                 </div>
                 <Target className="w-8 h-8 opacity-20" />
               </div>
-              <div className="text-3xl font-bold mb-1">
-                ${(() => {
-                  const selectedDateStr = viewDate.toISOString().split('T')[0];
-                  const result = getWeeklyGoalTotal(
-                    currentEntity?.capacityConfig,
-                    selectedDateStr,
-                    {
-                      includeCalculated: true,
-                      hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                      dayCells: dayCells
-                    }
-                  );
-                  return result.setGoals.toLocaleString();
-                })()}
-              </div>
-              <p className="text-xs opacity-75">
-                {(() => {
-                  const selectedDateStr = viewDate.toISOString().split('T')[0];
-                  const result = getWeeklyGoalTotal(
-                    currentEntity?.capacityConfig,
-                    selectedDateStr,
-                    {
-                      includeCalculated: true,
-                      hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                      dayCells: dayCells
-                    }
-                  );
-                  return `${result.daysWithSetGoals} days set`;
-                })()}
-              </p>
-              {(() => {
-                const selectedDateStr = viewDate.toISOString().split('T')[0];
-                const result = getWeeklyGoalTotal(
-                  currentEntity?.capacityConfig,
-                  selectedDateStr,
-                  {
-                    includeCalculated: true,
-                    hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                    dayCells: dayCells
-                  }
-                );
-                if (result.calculatedGoals > 0) {
-                  return (
-                    <p className="text-xs opacity-60 mt-1">
-                      + ${(result.calculatedGoals / 1000).toFixed(1)}k potential
+              {loading || dayCells.length === 0 ? (
+                <div className="flex items-center justify-center h-32">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              ) : (() => {
+                const weekStartDate = new Date(currentWeekProgress.weekStart);
+                const weekEndDate = new Date(currentWeekProgress.weekEnd);
+                const monthStart = weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const monthEnd = weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+                return (
+                  <>
+                    <div className="text-xs opacity-75 mb-2">{monthStart} - {monthEnd}</div>
+                    <div className="text-3xl font-bold mb-2">{currentWeekProgress.progressPercentage}%</div>
+                    <div className="w-full bg-white bg-opacity-20 rounded-full h-2 mb-2">
+                      <div
+                        className="bg-white rounded-full h-2 transition-all duration-300"
+                        style={{ width: `${Math.min(currentWeekProgress.progressPercentage, 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-xs opacity-75">
+                      ${currentWeekProgress.actualRevenue.toLocaleString()} / ${currentWeekProgress.totalGoal.toLocaleString()}
                     </p>
-                  );
-                }
-                return null;
+                    <p className="text-xs opacity-60 mt-1">
+                      {currentWeekProgress.daysComplete} of {currentWeekProgress.totalDays} days complete
+                    </p>
+                  </>
+                );
               })()}
             </div>
 
             {/* Monthly Goal Tile */}
             <div
               className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white shadow-lg cursor-help"
-              title={(() => {
-                const selectedDateStr = viewDate.toISOString().split('T')[0];
-                const result = getMonthlyGoalTotal(
-                  currentEntity?.capacityConfig,
-                  selectedDateStr,
-                  {
-                    includeCalculated: true,
-                    hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                    dayCells: dayCells
-                  }
-                );
-                return `${result.daysWithSetGoals} days with set goals, ${result.daysCalculated} days calculated from allocated capacity`;
-              })()}
+              title={`${monthlyGoal.daysWithSetGoals} days with set goals, ${monthlyGoal.daysCalculated} days calculated from allocated capacity`}
             >
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
@@ -987,56 +1061,39 @@ export default function CapacityManagementPage() {
                 </div>
                 <Target className="w-8 h-8 opacity-20" />
               </div>
-              <div className="text-3xl font-bold mb-1">
-                ${(() => {
-                  const selectedDateStr = viewDate.toISOString().split('T')[0];
-                  const result = getMonthlyGoalTotal(
-                    currentEntity?.capacityConfig,
-                    selectedDateStr,
-                    {
-                      includeCalculated: true,
-                      hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                      dayCells: dayCells
-                    }
-                  );
-                  return result.setGoals.toLocaleString();
-                })()}
-              </div>
-              <p className="text-xs opacity-75">
-                {(() => {
-                  const selectedDateStr = viewDate.toISOString().split('T')[0];
-                  const result = getMonthlyGoalTotal(
-                    currentEntity?.capacityConfig,
-                    selectedDateStr,
-                    {
-                      includeCalculated: true,
-                      hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                      dayCells: dayCells
-                    }
-                  );
-                  return `${result.daysWithSetGoals} days set`;
-                })()}
-              </p>
-              {(() => {
-                const selectedDateStr = viewDate.toISOString().split('T')[0];
-                const result = getMonthlyGoalTotal(
-                  currentEntity?.capacityConfig,
-                  selectedDateStr,
-                  {
-                    includeCalculated: true,
-                    hourlyRate: entityType === 'sublocation' ? currentEntity?.defaultHourlyRate : undefined,
-                    dayCells: dayCells
-                  }
-                );
-                if (result.calculatedGoals > 0) {
-                  return (
-                    <p className="text-xs opacity-60 mt-1">
-                      + ${(result.calculatedGoals / 1000).toFixed(1)}k potential
+              {loading || dayCells.length === 0 ? (
+                <div className="flex items-center justify-center h-20">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-3xl font-bold mb-1">
+                    ${monthlyGoal.total.toLocaleString()}
+                  </div>
+                  {monthlyGoal.daysWithSetGoals > 0 && monthlyGoal.daysCalculated > 0 ? (
+                    <>
+                      <p className="text-xs opacity-75">
+                        ${monthlyGoal.setGoals.toLocaleString()} set + ${monthlyGoal.calculatedGoals.toLocaleString()} calculated
+                      </p>
+                      <p className="text-xs opacity-60 mt-1">
+                        {monthlyGoal.daysWithSetGoals} days set, {monthlyGoal.daysCalculated} days calculated
+                      </p>
+                    </>
+                  ) : monthlyGoal.daysWithSetGoals > 0 ? (
+                    <p className="text-xs opacity-75">
+                      {monthlyGoal.daysWithSetGoals} days with set goals
                     </p>
-                  );
-                }
-                return null;
-              })()}
+                  ) : monthlyGoal.daysCalculated > 0 ? (
+                    <p className="text-xs opacity-75">
+                      {monthlyGoal.daysCalculated} days calculated from capacity
+                    </p>
+                  ) : (
+                    <p className="text-xs opacity-75">
+                      No goals set
+                    </p>
+                  )}
+                </>
+              )}
             </div>
 
             {/* Occupancy Percentage Tile */}
@@ -1051,14 +1108,69 @@ export default function CapacityManagementPage() {
                 </div>
                 <Percent className="w-8 h-8 opacity-20" />
               </div>
-              <div className="text-3xl font-bold mb-1">
-                {(() => {
-                  const selectedDateStr = viewDate.toISOString().split('T')[0];
-                  const occupancy = getMonthlyOccupancyPercentage(currentEntity, selectedDateStr, dayCells);
-                  return `${occupancy}%`;
-                })()}
+              {loading || dayCells.length === 0 ? (
+                <div className="flex items-center justify-center h-20">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-3xl font-bold mb-1">
+                    {monthlyOccupancy}%
+                  </div>
+                  <p className="text-xs opacity-75">Allocated vs Max for the month</p>
+                </>
+              )}
+            </div>
+
+            {/* Planning Coverage Tile */}
+            <div
+              className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-lg p-6 text-white shadow-lg cursor-help"
+              title={
+                planningCoverage.datesWithoutGoals.length === 0
+                  ? 'All days have revenue goals set!'
+                  : `Days without goals:\n${planningCoverage.datesWithoutGoals.slice(0, 10).join(', ')}${planningCoverage.datesWithoutGoals.length > 10 ? '...' : ''}`
+              }
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5" />
+                  <h3 className="text-sm font-medium opacity-90">Planning Coverage</h3>
+                </div>
+                {planningCoverage.percentage === 100 ? (
+                  <CheckCircle className="w-8 h-8 opacity-20" />
+                ) : (
+                  <AlertCircle className="w-8 h-8 opacity-20" />
+                )}
               </div>
-              <p className="text-xs opacity-75">Allocated vs Max for the month</p>
+              {loading || dayCells.length === 0 ? (
+                <div className="flex items-center justify-center h-32">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-3xl font-bold mb-2">
+                    {planningCoverage.daysWithGoals} / {planningCoverage.totalDays}
+                  </div>
+                  <div className="w-full bg-white bg-opacity-20 rounded-full h-2 mb-2">
+                    <div
+                      className="bg-white rounded-full h-2 transition-all duration-300"
+                      style={{ width: `${planningCoverage.percentage}%` }}
+                    />
+                  </div>
+                  <p className="text-xs opacity-75">
+                    {planningCoverage.percentage}% of days planned
+                  </p>
+                  {planningCoverage.datesWithoutGoals.length > 0 ? (
+                    <p className="text-xs opacity-60 mt-1">
+                      {planningCoverage.datesWithoutGoals.length} day{planningCoverage.datesWithoutGoals.length !== 1 ? 's' : ''} need goals
+                    </p>
+                  ) : (
+                    <p className="text-xs opacity-60 mt-1 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> All days planned!
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
@@ -1307,7 +1419,62 @@ export default function CapacityManagementPage() {
                     subLocationId={currentEntity?._id}
                     editable={entityType === 'sublocation'}
                     onHourlyCapacityUpdate={async () => {
+                      // Reload entity and regenerate calendar
                       await reloadCurrentEntity();
+
+                      // Manually recalculate capacity for the selected date to get fresh data
+                      const startTime = new Date(selectedDate + 'T00:00:00');
+                      const endTime = new Date(selectedDate + 'T23:59:59');
+
+                      try {
+                        const response = await fetch('/api/capacity/calculate', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            subLocationId: currentEntity._id,
+                            startTime: startTime.toISOString(),
+                            endTime: endTime.toISOString(),
+                          }),
+                        });
+
+                        if (response.ok) {
+                          const result = await response.json();
+
+                          // Build fresh hourly breakdown
+                          if (result.segments && result.segments.length > 0) {
+                            const freshBreakdown = result.segments.map((seg: any) => ({
+                              hour: new Date(seg.startTime).getHours(),
+                              startTime: new Date(seg.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                              endTime: new Date(seg.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                              minCapacity: seg.minCapacity,
+                              maxCapacity: seg.maxCapacity,
+                              defaultCapacity: seg.defaultCapacity,
+                              allocatedCapacity: seg.allocatedCapacity,
+                              source: seg.source,
+                              capacitySheetName: seg.capacitySheet?.name,
+                            }));
+
+                            // Calculate fresh capacity values
+                            const calculatedCapacity = freshBreakdown.reduce((sum: number, seg: any) => sum + seg.maxCapacity, 0);
+                            const calculatedGoal = currentEntity.defaultHourlyRate
+                              ? Math.round(currentEntity.defaultHourlyRate * calculatedCapacity)
+                              : undefined;
+
+                            // Update selected cell with fresh data
+                            setSelectedCell({
+                              ...selectedCell,
+                              calculatedCapacity,
+                              calculatedGoal,
+                              hourlyBreakdown: freshBreakdown,
+                            });
+                          }
+                        }
+                      } catch (error) {
+                        console.error('Failed to refresh cell data:', error);
+                      }
+
+                      // Regenerate calendar in background (for dashboard tiles and calendar display)
+                      generateCalendar();
                     }}
                   />
                 </div>
