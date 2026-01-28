@@ -122,6 +122,10 @@ export interface Event {
   _id?: ObjectId;
   name: string;
   description?: string;
+  // Event association: Indicates which level this event is primarily associated with
+  eventAssociatedTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'VENUE';
+  // Hierarchy fields: Preserved for context and filtering
+  venueId?: ObjectId;        // Venue where event takes place
   subLocationId?: ObjectId;
   locationId?: ObjectId;
   customerId?: ObjectId;

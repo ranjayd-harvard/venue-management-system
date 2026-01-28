@@ -22,6 +22,14 @@ interface SubLocation {
   locationId?: string;
 }
 
+interface Venue {
+  _id: string;
+  name: string;
+  description?: string;
+  capacity?: number;
+  venueType: string;
+}
+
 interface CreateEventModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -32,15 +40,19 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
   const [filteredLocations, setFilteredLocations] = useState<Location[]>([]);
   const [filteredSublocations, setFilteredSublocations] = useState<SubLocation[]>([]);
+  const [filteredVenues, setFilteredVenues] = useState<Venue[]>([]);
 
   // Form state
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [associationLevel, setAssociationLevel] = useState<'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'VENUE'>('VENUE');
   const [selectedCustomer, setSelectedCustomer] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('');
   const [selectedSubLocation, setSelectedSubLocation] = useState('');
+  const [selectedVenue, setSelectedVenue] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [attendees, setAttendees] = useState('');
@@ -59,42 +71,21 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
     }
   }, [isOpen]);
 
+  // Reset selections when association level changes
   useEffect(() => {
-    if (selectedCustomer) {
-      const filtered = locations.filter(l => l.customerId === selectedCustomer);
-      setFilteredLocations(filtered);
-      // Reset location and sublocation if current selection is invalid
-      if (selectedLocation && !filtered.find(l => l._id === selectedLocation)) {
-        setSelectedLocation('');
-        setSelectedSubLocation('');
-      }
-    } else {
-      setFilteredLocations([]);
-      setSelectedLocation('');
-      setSelectedSubLocation('');
-    }
-  }, [selectedCustomer, locations]);
-
-  useEffect(() => {
-    if (selectedLocation) {
-      const filtered = sublocations.filter(s => s.locationId === selectedLocation);
-      setFilteredSublocations(filtered);
-      // Reset sublocation if current selection is invalid
-      if (selectedSubLocation && !filtered.find(s => s._id === selectedSubLocation)) {
-        setSelectedSubLocation('');
-      }
-    } else {
-      setFilteredSublocations([]);
-      setSelectedSubLocation('');
-    }
-  }, [selectedLocation, sublocations]);
+    setSelectedCustomer('');
+    setSelectedLocation('');
+    setSelectedSubLocation('');
+    setSelectedVenue('');
+  }, [associationLevel]);
 
   const loadData = async () => {
     try {
-      const [customersRes, locationsRes, sublocationsRes] = await Promise.all([
+      const [customersRes, locationsRes, sublocationsRes, venuesRes] = await Promise.all([
         fetch('/api/customers'),
         fetch('/api/locations'),
         fetch('/api/sublocations'),
+        fetch('/api/venues'),
       ]);
 
       if (customersRes.ok) {
@@ -110,6 +101,11 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
       if (sublocationsRes.ok) {
         const data = await sublocationsRes.json();
         setSublocations(data);
+      }
+
+      if (venuesRes.ok) {
+        const data = await venuesRes.json();
+        setVenues(data);
       }
     } catch (err) {
       console.error('Failed to load data:', err);
@@ -168,15 +164,38 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
         isActive,
       };
 
-      // Add entity associations
-      if (selectedSubLocation) {
+      // Add entity associations based on association level
+      payload.eventAssociatedTo = associationLevel;
+
+      if (associationLevel === 'VENUE' && selectedVenue) {
+        payload.venueId = selectedVenue;
+        // Fetch venue details to get parent hierarchy
+        const venueResponse = await fetch(`/api/venues/${selectedVenue}`);
+        if (venueResponse.ok) {
+          const venue = await venueResponse.json();
+          // Venues may be associated with sublocations or locations
+          // We'll need to query the junction tables to get parent IDs
+          // For now, just set the venueId
+        }
+      } else if (associationLevel === 'SUBLOCATION' && selectedSubLocation) {
         payload.subLocationId = selectedSubLocation;
+        // Get parent location and customer from sublocation
+        const sublocation = sublocations.find(s => s._id === selectedSubLocation);
+        if (sublocation?.locationId) {
+          payload.locationId = sublocation.locationId;
+          const location = locations.find(l => l._id === sublocation.locationId);
+          if (location?.customerId) {
+            payload.customerId = location.customerId;
+          }
+        }
+      } else if (associationLevel === 'LOCATION' && selectedLocation) {
         payload.locationId = selectedLocation;
-        payload.customerId = selectedCustomer;
-      } else if (selectedLocation) {
-        payload.locationId = selectedLocation;
-        payload.customerId = selectedCustomer;
-      } else if (selectedCustomer) {
+        // Get parent customer from location
+        const location = locations.find(l => l._id === selectedLocation);
+        if (location?.customerId) {
+          payload.customerId = location.customerId;
+        }
+      } else if (associationLevel === 'CUSTOMER' && selectedCustomer) {
         payload.customerId = selectedCustomer;
       }
 
@@ -207,6 +226,7 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
     setSelectedCustomer('');
     setSelectedLocation('');
     setSelectedSubLocation('');
+    setSelectedVenue('');
     setStartDate('');
     setEndDate('');
     setAttendees('');
@@ -301,42 +321,72 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
             />
           </div>
 
-          {/* Entity Selection */}
+          {/* Event Association */}
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-900">Location Association (Optional)</h3>
+            <h3 className="text-sm font-bold text-gray-900">Event Association (Optional)</h3>
+            <p className="text-xs text-gray-600">Associate this event with a specific customer, location, sublocation, or venue</p>
 
-            {/* Customer Selection */}
+            {/* Association Level Selector */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Customer
+                Association Level
               </label>
-              <select
-                value={selectedCustomer}
-                onChange={(e) => setSelectedCustomer(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-pink-500 focus:ring-2 focus:ring-pink-200 text-gray-900 bg-white cursor-pointer"
-              >
-                <option value="">Select customer (optional)...</option>
-                {customers.map((c) => (
-                  <option key={c._id} value={c._id}>
-                    {c.name}
-                  </option>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { value: 'CUSTOMER', label: '👤 Customer', color: 'blue' },
+                  { value: 'LOCATION', label: '📍 Location', color: 'green' },
+                  { value: 'SUBLOCATION', label: '🏢 Sublocation', color: 'orange' },
+                  { value: 'VENUE', label: '🏛️ Venue', color: 'purple' },
+                ].map((level) => (
+                  <button
+                    key={level.value}
+                    type="button"
+                    onClick={() => setAssociationLevel(level.value as any)}
+                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                      associationLevel === level.value
+                        ? `bg-${level.color}-100 text-${level.color}-700 border-2 border-${level.color}-400`
+                        : 'bg-gray-100 text-gray-600 border-2 border-gray-300 hover:bg-gray-200'
+                    }`}
+                  >
+                    {level.label}
+                  </button>
                 ))}
-              </select>
+              </div>
             </div>
 
-            {/* Location Selection */}
-            {selectedCustomer && (
+            {/* Entity Selection based on level */}
+            {associationLevel === 'CUSTOMER' && (
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Location
+                  Select Customer
+                </label>
+                <select
+                  value={selectedCustomer}
+                  onChange={(e) => setSelectedCustomer(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-gray-900 bg-white cursor-pointer"
+                >
+                  <option value="">Choose a customer...</option>
+                  {customers.map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {associationLevel === 'LOCATION' && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Location
                 </label>
                 <select
                   value={selectedLocation}
                   onChange={(e) => setSelectedLocation(e.target.value)}
-                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-pink-500 focus:ring-2 focus:ring-pink-200 text-gray-900 bg-white cursor-pointer"
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 text-gray-900 bg-white cursor-pointer"
                 >
-                  <option value="">Select location (optional)...</option>
-                  {filteredLocations.map((l) => (
+                  <option value="">Choose a location...</option>
+                  {locations.map((l) => (
                     <option key={l._id} value={l._id}>
                       {l.name} ({l.city})
                     </option>
@@ -345,21 +395,40 @@ export default function CreateEventModal({ isOpen, onClose, onSuccess }: CreateE
               </div>
             )}
 
-            {/* SubLocation Selection */}
-            {selectedLocation && (
+            {associationLevel === 'SUBLOCATION' && (
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Sub-Location
+                  Select SubLocation
                 </label>
                 <select
                   value={selectedSubLocation}
                   onChange={(e) => setSelectedSubLocation(e.target.value)}
-                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-pink-500 focus:ring-2 focus:ring-pink-200 text-gray-900 bg-white cursor-pointer"
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 text-gray-900 bg-white cursor-pointer"
                 >
-                  <option value="">Select sub-location (optional)...</option>
-                  {filteredSublocations.map((s) => (
+                  <option value="">Choose a sublocation...</option>
+                  {sublocations.map((s) => (
                     <option key={s._id} value={s._id}>
                       {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {associationLevel === 'VENUE' && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Venue
+                </label>
+                <select
+                  value={selectedVenue}
+                  onChange={(e) => setSelectedVenue(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border-2 border-gray-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-gray-900 bg-white cursor-pointer"
+                >
+                  <option value="">Choose a venue...</option>
+                  {venues.map((v) => (
+                    <option key={v._id} value={v._id}>
+                      {v.name} {v.capacity ? `(${v.capacity} capacity)` : ''} - {v.venueType}
                     </option>
                   ))}
                 </select>

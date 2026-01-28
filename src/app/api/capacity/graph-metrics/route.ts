@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import { CustomerRepository } from '@/models/Customer';
 import { LocationRepository } from '@/models/Location';
 import { SubLocationRepository } from '@/models/SubLocation';
+import { EventRepository } from '@/models/Event';
 
 interface CapacityMetrics {
   minCapacity: number;
@@ -19,6 +20,7 @@ interface CapacityMetrics {
  * - SubLocations: Own capacity config
  * - Locations: Aggregated from sublocations + own config
  * - Customers: Aggregated from locations + own config
+ * - Events: Own capacity config
  */
 export async function GET(request: NextRequest) {
   try {
@@ -26,16 +28,18 @@ export async function GET(request: NextRequest) {
     const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
 
     // Fetch all entities
-    const [customers, locations, sublocations] = await Promise.all([
+    const [customers, locations, sublocations, events] = await Promise.all([
       CustomerRepository.findAll(),
       LocationRepository.findAll(),
       SubLocationRepository.findAll(),
+      EventRepository.findAll(),
     ]);
 
     // Calculate metrics for each entity type
     const sublocationMetrics = new Map<string, CapacityMetrics>();
     const locationMetrics = new Map<string, CapacityMetrics>();
     const customerMetrics = new Map<string, CapacityMetrics>();
+    const eventMetrics = new Map<string, CapacityMetrics>();
 
     // 1. SubLocation metrics (base level - own config only)
     // Note: SubLocations have both top-level capacity fields AND capacityConfig
@@ -126,12 +130,25 @@ export async function GET(request: NextRequest) {
       });
     });
 
+    // 4. Event metrics (own capacity config only)
+    // Events have their own capacity configuration
+    events.forEach((event) => {
+      const metrics: CapacityMetrics = {
+        minCapacity: event.capacityConfig?.minCapacity ?? 0,
+        maxCapacity: event.capacityConfig?.maxCapacity ?? 0,
+        defaultCapacity: event.capacityConfig?.maxCapacity ?? 0,
+        allocatedCapacity: 0, // Events don't track allocated capacity
+      };
+      eventMetrics.set(event._id!.toString(), metrics);
+    });
+
     // Convert Maps to objects for JSON response
     const response = {
       date,
       customers: Object.fromEntries(customerMetrics),
       locations: Object.fromEntries(locationMetrics),
       sublocations: Object.fromEntries(sublocationMetrics),
+      events: Object.fromEntries(eventMetrics),
     };
 
     return NextResponse.json(response);

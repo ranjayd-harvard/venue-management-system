@@ -30,6 +30,9 @@ export default function GraphPage() {
             <p>
               <strong>Hierarchy:</strong> Customer → Location → Sub-Location → Venue
             </p>
+            <p className="mt-2">
+              <strong>Events:</strong> Events connect to their associated entity (Customer, Location, Sub-Location, or Venue)
+            </p>
             <p className="mt-3">
               <strong>Capacity Attributes Shown:</strong>
             </p>
@@ -37,7 +40,7 @@ export default function GraphPage() {
               <li><strong>Min:</strong> Minimum capacity threshold</li>
               <li><strong>Max:</strong> Maximum capacity limit</li>
               <li><strong>Default:</strong> Default operating capacity</li>
-              <li><strong>Allocated:</strong> Currently allocated capacity</li>
+              <li><strong>Allocated:</strong> Currently allocated capacity (not shown for events)</li>
             </ul>
             <p className="mt-3">
               <strong>Blue nodes:</strong> Customers (aggregated from all child locations)
@@ -50,6 +53,9 @@ export default function GraphPage() {
             </p>
             <p>
               <strong>Purple nodes:</strong> Venues with individual capacity shown
+            </p>
+            <p>
+              <strong>Rose/Pink nodes:</strong> Events with their own capacity configuration
             </p>
             <p>
               <strong>Edge labels:</strong> Show capacity values being transferred through the hierarchy

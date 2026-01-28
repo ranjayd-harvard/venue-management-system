@@ -88,15 +88,17 @@ export async function syncToNeo4j() {
       );
 
       // Create relationship to customer
-      await session.run(
-        `MATCH (c:Customer {id: $customerId})
-         MATCH (l:Location {id: $locationId})
-         CREATE (c)-[:HAS_LOCATION]->(l)`,
-        {
-          customerId: location.customerId.toString(),
-          locationId: location._id!.toString(),
-        }
-      );
+      if (location.customerId) {
+        await session.run(
+          `MATCH (c:Customer {id: $customerId})
+           MATCH (l:Location {id: $locationId})
+           CREATE (c)-[:HAS_LOCATION]->(l)`,
+          {
+            customerId: location.customerId.toString(),
+            locationId: location._id!.toString(),
+          }
+        );
+      }
     }
 
     // Create SubLocation nodes and relationships
@@ -120,15 +122,17 @@ export async function syncToNeo4j() {
       );
 
       // Create relationship to location
-      await session.run(
-        `MATCH (l:Location {id: $locationId})
-         MATCH (sl:SubLocation {id: $subLocationId})
-         CREATE (l)-[:HAS_SUBLOCATION]->(sl)`,
-        {
-          locationId: sublocation.locationId.toString(),
-          subLocationId: sublocation._id!.toString(),
-        }
-      );
+      if (sublocation.locationId) {
+        await session.run(
+          `MATCH (l:Location {id: $locationId})
+           MATCH (sl:SubLocation {id: $subLocationId})
+           CREATE (l)-[:HAS_SUBLOCATION]->(sl)`,
+          {
+            locationId: sublocation.locationId.toString(),
+            subLocationId: sublocation._id!.toString(),
+          }
+        );
+      }
     }
 
     // Create Venue nodes
@@ -154,16 +158,22 @@ export async function syncToNeo4j() {
 
     // Create SubLocation-Venue relationships
     const slVenues = await SubLocationVenueRepository.findAll();
+    console.log(`Creating ${slVenues.length} SubLocation-Venue relationships...`);
     for (const slv of slVenues) {
-      await session.run(
-        `MATCH (sl:SubLocation {id: $subLocationId})
-         MATCH (v:Venue {id: $venueId})
-         CREATE (sl)-[:HAS_VENUE]->(v)`,
-        {
-          subLocationId: slv.subLocationId.toString(),
-          venueId: slv.venueId.toString(),
-        }
-      );
+      if (slv.subLocationId && slv.venueId) {
+        console.log(`Creating relationship: SubLocation ${slv.subLocationId} -> Venue ${slv.venueId}`);
+        await session.run(
+          `MATCH (sl:SubLocation {id: $subLocationId})
+           MATCH (v:Venue {id: $venueId})
+           CREATE (sl)-[:HAS_VENUE]->(v)`,
+          {
+            subLocationId: slv.subLocationId.toString(),
+            venueId: slv.venueId.toString(),
+          }
+        );
+      } else {
+        console.log(`Skipping relationship due to missing IDs:`, { subLocationId: slv.subLocationId, venueId: slv.venueId });
+      }
     }
 
     // Create Event nodes and relationships
@@ -190,8 +200,19 @@ export async function syncToNeo4j() {
         }
       );
 
-      // Create relationships
-      if (event.subLocationId) {
+      // Create relationships based on event association
+      // Priority: venue > sublocation > location > customer
+      if (event.venueId) {
+        await session.run(
+          `MATCH (v:Venue {id: $venueId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (v)-[:HAS_EVENT]->(e)`,
+          {
+            venueId: event.venueId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.subLocationId) {
         await session.run(
           `MATCH (sl:SubLocation {id: $subLocationId})
            MATCH (e:Event {id: $eventId})

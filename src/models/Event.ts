@@ -16,8 +16,23 @@ export class EventRepository {
     const db = await getDb();
     const now = new Date();
 
+    // Auto-determine eventAssociatedTo if not provided
+    let eventAssociatedTo = event.eventAssociatedTo;
+    if (!eventAssociatedTo) {
+      if (event.venueId) {
+        eventAssociatedTo = 'VENUE';
+      } else if (event.subLocationId) {
+        eventAssociatedTo = 'SUBLOCATION';
+      } else if (event.locationId) {
+        eventAssociatedTo = 'LOCATION';
+      } else {
+        eventAssociatedTo = 'CUSTOMER';
+      }
+    }
+
     const newEvent: Omit<Event, '_id'> = {
       ...event,
+      eventAssociatedTo,
       startDate: new Date(event.startDate),
       endDate: new Date(event.endDate),
       createdAt: now,
@@ -37,6 +52,75 @@ export class EventRepository {
   static async findAll(): Promise<Event[]> {
     const db = await getDb();
     return db.collection<Event>(this.COLLECTION).find({}).sort({ startDate: -1 }).toArray();
+  }
+
+  static async findAllWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: -1 }
+      }
+    ]).toArray();
   }
 
   static async findByCustomer(customerId: string | ObjectId): Promise<Event[]> {
@@ -66,6 +150,15 @@ export class EventRepository {
       .toArray();
   }
 
+  static async findByVenue(venueId: string | ObjectId): Promise<Event[]> {
+    const db = await getDb();
+    const objectId = typeof venueId === 'string' ? new ObjectId(venueId) : venueId;
+    return db.collection<Event>(this.COLLECTION)
+      .find({ venueId: objectId })
+      .sort({ startDate: -1 })
+      .toArray();
+  }
+
   static async findActiveEvents(): Promise<Event[]> {
     const db = await getDb();
     const now = new Date();
@@ -79,6 +172,83 @@ export class EventRepository {
       .toArray();
   }
 
+  static async findActiveEventsWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    const now = new Date();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $match: {
+          isActive: true,
+          startDate: { $lte: now },
+          endDate: { $gte: now }
+        }
+      },
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: -1 }
+      }
+    ]).toArray();
+  }
+
   static async findUpcomingEvents(): Promise<Event[]> {
     const db = await getDb();
     const now = new Date();
@@ -89,6 +259,82 @@ export class EventRepository {
       })
       .sort({ startDate: 1 })
       .toArray();
+  }
+
+  static async findUpcomingEventsWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    const now = new Date();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $match: {
+          isActive: true,
+          startDate: { $gt: now }
+        }
+      },
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: 1 }
+      }
+    ]).toArray();
   }
 
   static async update(id: string | ObjectId, updates: Partial<Event>): Promise<Event | null> {

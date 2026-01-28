@@ -862,7 +862,7 @@ export default function TimelineViewPage() {
         />
 
         {/* Debug Panel */}
-        {selectedSubLocation && (
+        {false && selectedSubLocation && (
           <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-4 mb-6">
             <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center gap-2">
               🔵 Timeline View - Debug Info

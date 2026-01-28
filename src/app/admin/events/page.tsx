@@ -9,6 +9,8 @@ interface Event {
   _id: string;
   name: string;
   description?: string;
+  eventAssociatedTo?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'VENUE';
+  venueId?: string;
   subLocationId?: string;
   locationId?: string;
   customerId?: string;
@@ -23,6 +25,7 @@ interface Event {
   customer?: { _id: string; name: string };
   location?: { _id: string; name: string; city: string };
   sublocation?: { _id: string; label: string };
+  venue?: { _id: string; name: string; capacity?: number; venueType: string };
 }
 
 interface Customer {
@@ -76,6 +79,11 @@ export default function AdminEventsPage() {
 
       if (eventsRes.ok) {
         const eventsData = await eventsRes.json();
+        const firstEvent = eventsData[0];
+        console.log('[Events] First event keys:', Object.keys(firstEvent));
+        console.log('[Events] Has venue?', 'venue' in firstEvent, firstEvent.venue);
+        console.log('[Events] Has customer?', 'customer' in firstEvent, firstEvent.customer);
+        console.log('[Events] Has venueId?', 'venueId' in firstEvent, firstEvent.venueId);
         setEvents(eventsData);
 
         // Load ratesheet IDs for all events
@@ -155,6 +163,16 @@ export default function AdminEventsPage() {
     }
 
     return { text: 'Completed', color: 'bg-purple-100 text-purple-800 border-purple-300' };
+  };
+
+  const getAssociationBadge = (eventAssociatedTo?: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'VENUE') => {
+    const badges = {
+      CUSTOMER: { text: '👤 Customer', color: 'bg-blue-50 text-blue-700 border-blue-200' },
+      LOCATION: { text: '📍 Location', color: 'bg-green-50 text-green-700 border-green-200' },
+      SUBLOCATION: { text: '🏢 Sublocation', color: 'bg-orange-50 text-orange-700 border-orange-200' },
+      VENUE: { text: '🏛️ Venue', color: 'bg-purple-50 text-purple-700 border-purple-200' },
+    };
+    return eventAssociatedTo ? badges[eventAssociatedTo] : null;
   };
 
   const getCounts = () => ({
@@ -252,6 +270,7 @@ export default function AdminEventsPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {events.map((event) => {
               const statusBadge = getStatusBadge(event);
+              const associationBadge = getAssociationBadge(event.eventAssociatedTo);
 
               return (
                 <div
@@ -269,8 +288,15 @@ export default function AdminEventsPage() {
                           <p className="text-sm text-gray-600">{event.description}</p>
                         )}
                       </div>
-                      <div className={`px-3 py-1 rounded-full text-xs font-bold border ${statusBadge.color}`}>
-                        {statusBadge.text}
+                      <div className="flex flex-col gap-2 items-end">
+                        <div className={`px-3 py-1 rounded-full text-xs font-bold border ${statusBadge.color}`}>
+                          {statusBadge.text}
+                        </div>
+                        {associationBadge && (
+                          <div className={`px-3 py-1 rounded-full text-xs font-semibold border ${associationBadge.color}`}>
+                            {associationBadge.text}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -295,6 +321,18 @@ export default function AdminEventsPage() {
                             <span className="font-medium text-orange-600">{event.sublocation.label}</span>
                           </>
                         )}
+                      </div>
+                    )}
+
+                    {/* Venue Information */}
+                    {event.venue && (
+                      <div className="text-sm text-gray-600 mb-3 flex items-center gap-2 bg-purple-50 px-3 py-2 rounded-lg">
+                        <span className="text-purple-600">🏛️</span>
+                        <span className="font-semibold text-purple-800">{event.venue.name}</span>
+                        {event.venue.capacity && (
+                          <span className="text-purple-600 text-xs">• {event.venue.capacity} capacity</span>
+                        )}
+                        <span className="text-purple-600 text-xs">• {event.venue.venueType}</span>
                       </div>
                     )}
 

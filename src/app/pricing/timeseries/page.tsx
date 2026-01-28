@@ -389,7 +389,7 @@ export default function PricingTimeSeriesPage() {
               if (matches) {
                 const key = `${rs.name} (${windowLabel})`;
                 point[key] = tw.pricePerHour;
-                rateKeysSet.add(key);make 
+                rateKeysSet.add(key); 
               }
             });
           }

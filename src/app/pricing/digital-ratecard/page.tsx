@@ -691,7 +691,7 @@ export default function DigitalRatecardPage() {
           />
 
           {/* Debug Panel */}
-          {selectedSubLocation && (
+          {false && selectedSubLocation && (
             <div className="bg-green-50 border-2 border-green-300 rounded-xl p-4 mt-6">
               <h3 className="text-sm font-bold text-green-900 mb-3 flex items-center gap-2">
                 🟢 Digital Ratecard - Debug Info

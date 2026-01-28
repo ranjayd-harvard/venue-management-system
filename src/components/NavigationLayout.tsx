@@ -57,12 +57,6 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       description: 'Calculate booking prices'
     },
     {
-      href: '/pricing/digital-ratesheet',
-      icon: DollarSign,
-      label: 'Digital Ratesheet',
-      description: 'Complete pricing ratecard'
-    },
-    {
       href: '/pricing/digital-ratecard',
       icon: Zap,
       label: 'Digital Ratecard',
