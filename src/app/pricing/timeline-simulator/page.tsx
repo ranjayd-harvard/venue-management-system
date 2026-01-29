@@ -185,8 +185,9 @@ export default function TimelineSimulatorPage() {
   const [scenarios, setScenarios] = useState<PricingScenario[]>([]);
   const [currentScenarioId, setCurrentScenarioId] = useState<string | null>(null);
 
-  // Mode toggle: 'simulation' or 'planning'
-  const [mode, setMode] = useState<'simulation' | 'planning'>('simulation');
+  // Mode toggles: independent simulation and planning flags
+  const [isSimulationEnabled, setIsSimulationEnabled] = useState(false);
+  const [isPlanningEnabled, setIsPlanningEnabled] = useState(false);
 
   useEffect(() => {
     fetchPricingConfig();
@@ -403,8 +404,12 @@ export default function TimelineSimulatorPage() {
   // Clear/reset current scenario
   const clearScenario = () => {
     setCurrentScenarioId(null);
-    // Reset to default state
-    setEnabledLayers(new Set());
+
+    // Reset to default state - enable ALL layers (default simulation state)
+    const allLayerIds = getPricingLayers().map(layer => layer.id);
+    setEnabledLayers(new Set(allLayerIds));
+
+    // Clear pricing coefficients
     setPricingCoefficientsUp(undefined);
     setPricingCoefficientsDown(undefined);
     setBias(undefined);
@@ -1011,35 +1016,59 @@ export default function TimelineSimulatorPage() {
             </div>
 
             <div className="flex flex-col gap-3 items-end">
-              {/* Mode Toggle */}
-              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-1 flex gap-1 border border-white/20">
+              {/* Mode Toggles - Checkboxes */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 flex gap-4 border border-white/20">
+                {/* Simulation Toggle */}
                 <button
-                  onClick={() => setMode('simulation')}
-                  className={`px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 ${
-                    mode === 'simulation'
-                      ? 'bg-white text-purple-600 shadow-md'
-                      : 'text-white hover:bg-white/10'
-                  }`}
+                  onClick={() => setIsSimulationEnabled(!isSimulationEnabled)}
+                  className="flex items-center gap-2 group"
                 >
-                  <Zap className="w-4 h-4" />
-                  Simulation
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                    isSimulationEnabled
+                      ? 'bg-white border-white'
+                      : 'border-white/50 group-hover:border-white/70'
+                  }`}>
+                    {isSimulationEnabled && (
+                      <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <Zap className="w-4 h-4 text-white" />
+                  <span className="text-white font-semibold text-sm">Simulation</span>
                 </button>
+
+                {/* Planning Toggle - Only enabled when Simulation is ON */}
                 <button
-                  onClick={() => setMode('planning')}
-                  className={`px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 ${
-                    mode === 'planning'
-                      ? 'bg-white text-purple-600 shadow-md'
-                      : 'text-white hover:bg-white/10'
+                  onClick={() => {
+                    if (isSimulationEnabled) {
+                      setIsPlanningEnabled(!isPlanningEnabled);
+                    }
+                  }}
+                  disabled={!isSimulationEnabled}
+                  className={`flex items-center gap-2 group ${
+                    !isSimulationEnabled ? 'opacity-40 cursor-not-allowed' : ''
                   }`}
                 >
-                  <FileText className="w-4 h-4" />
-                  Planning
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                    isPlanningEnabled && isSimulationEnabled
+                      ? 'bg-white border-white'
+                      : 'border-white/50 group-hover:border-white/70'
+                  }`}>
+                    {isPlanningEnabled && isSimulationEnabled && (
+                      <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <FileText className="w-4 h-4 text-white" />
+                  <span className="text-white font-semibold text-sm">Planning</span>
                 </button>
               </div>
 
               <div className="flex gap-3">
                 {/* Planning Mode: Show scenario controls */}
-                {mode === 'planning' && selectedSubLocation && (
+                {isPlanningEnabled && isSimulationEnabled && selectedSubLocation && (
                   <>
                     {/* Save Scenario Button */}
                     <button
@@ -1823,11 +1852,16 @@ export default function TimelineSimulatorPage() {
                     <div className="flex items-center gap-2 mb-1">
                       {/* Toggle switch */}
                       <button
-                        onClick={() => toggleLayer(layer.id)}
+                        onClick={() => isSimulationEnabled && toggleLayer(layer.id)}
+                        disabled={!isSimulationEnabled}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                          !isSimulationEnabled ? 'bg-gray-200 opacity-40 cursor-not-allowed' :
                           isLayerEnabled ? 'bg-blue-600' : 'bg-gray-300'
                         }`}
-                        title={isLayerEnabled ? 'Click to disable this layer' : 'Click to enable this layer'}
+                        title={
+                          !isSimulationEnabled ? 'Enable Simulation mode to toggle layers' :
+                          isLayerEnabled ? 'Click to disable this layer' : 'Click to enable this layer'
+                        }
                       >
                         <span
                           className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
