@@ -580,42 +580,57 @@ export default function TimelineSimulatorPage() {
         return eventStart < slotEnd && eventEnd > slotStart;
       });
 
-      // Get event priorities from ratesheets
-      const eventsWithPriority = activeEvents.map(event => {
-        // Find the ratesheet for this event to get its priority
-        // Try multiple matching strategies: eventId, event._id, or event.name
-        const eventRatesheet = ratesheets.find(rs => {
-          if (rs.applyTo !== 'EVENT') return false;
+      // Get event priorities from ratesheets and filter by enabled layers and sublocation
+      const eventsWithPriority = activeEvents
+        .map(event => {
+          // Find the ratesheet for this event to get its priority
+          // Try multiple matching strategies: eventId, event._id, or event.name
+          const eventRatesheet = ratesheets.find(rs => {
+            if (rs.applyTo !== 'EVENT') return false;
 
-          // Strategy 1: Match by eventId field
-          if (rs.eventId && rs.eventId === event._id.toString()) {
-            return true;
+            // Strategy 1: Match by eventId field
+            if (rs.eventId && rs.eventId === event._id.toString()) {
+              return true;
+            }
+
+            // Strategy 2: Match by nested event._id
+            if (rs.event?._id && rs.event._id.toString() === event._id.toString()) {
+              return true;
+            }
+
+            // Strategy 3: Match by event name (fallback for auto-generated ratesheets like "Auto-event7")
+            if (rs.event?.name === event.name) {
+              return true;
+            }
+
+            return false;
+          });
+
+          if (eventRatesheet) {
+            console.log(`✅ Found ratesheet for ${event.name}: ${eventRatesheet.name} (priority: ${eventRatesheet.priority}), sublocation: ${eventRatesheet.subLocationId}`);
+          } else {
+            console.log(`⚠️  No ratesheet found for event: ${event.name} (_id: ${event._id})`);
           }
 
-          // Strategy 2: Match by nested event._id
-          if (rs.event?._id && rs.event._id.toString() === event._id.toString()) {
-            return true;
+          return {
+            name: event.name,
+            priority: eventRatesheet?.priority || 0,
+            ratesheetId: eventRatesheet?._id?.toString(),
+            subLocationId: eventRatesheet?.subLocationId?.toString() || event.subLocationId?.toString()
+          };
+        })
+        // Filter by sublocation, enabled layers, and ratesheet availability
+        .filter(event => {
+          if (!event.ratesheetId) return false;
+          if (!enabledLayers.has(event.ratesheetId)) return false;
+
+          // Only include events that belong to the selected sublocation
+          if (event.subLocationId && selectedSubLocation) {
+            return event.subLocationId === selectedSubLocation;
           }
 
-          // Strategy 3: Match by event name (fallback for auto-generated ratesheets like "Auto-event7")
-          if (rs.event?.name === event.name) {
-            return true;
-          }
-
-          return false;
+          return true;
         });
-
-        if (eventRatesheet) {
-          console.log(`✅ Found ratesheet for ${event.name}: ${eventRatesheet.name} (priority: ${eventRatesheet.priority})`);
-        } else {
-          console.log(`⚠️  No ratesheet found for event: ${event.name} (_id: ${event._id})`);
-        }
-
-        return {
-          name: event.name,
-          priority: eventRatesheet?.priority || 0
-        };
-      });
 
       // Sort events by priority (descending - highest priority first)
       eventsWithPriority.sort((a, b) => b.priority - a.priority);
@@ -628,7 +643,7 @@ export default function TimelineSimulatorPage() {
         date: new Date(currentTime),
         layers: layerPrices,
         winningLayer: winner?.layer,
-        winningPrice: winner?.price || undefined,
+        winningPrice: winner?.price !== undefined && winner?.price !== null ? winner.price : undefined,
         capacity: capacityForHour,
         eventNames: eventNames.length > 0 ? eventNames : undefined,
         events: eventsWithPriority.length > 0 ? eventsWithPriority : undefined,
@@ -1004,6 +1019,302 @@ export default function TimelineSimulatorPage() {
                 </div>
               </div>
 
+              {/* Hourly Rate Breakdown Chart */}
+              {timeSlots.length > 0 && (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6">
+                  {/* Header with Stats */}
+                  <div className="flex items-start justify-between mb-6">
+                    <div className="flex-1">
+                      <h3 className="text-xl font-bold text-gray-900 mb-1">
+                        Hourly Rate Breakdown
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        Next {timeSlots.length} hours starting from {formatDateTime(viewStart)}
+                      </p>
+                    </div>
+
+                    {/* Min/Avg/Max Stats */}
+                    <div className="flex items-center gap-6">
+                      {(() => {
+                        const prices = timeSlots.filter(s => s.winningPrice).map(s => s.winningPrice!);
+                        if (prices.length === 0) return null;
+
+                        const min = Math.min(...prices);
+                        const avg = prices.reduce((sum, p) => sum + p, 0) / prices.length;
+                        const max = Math.max(...prices);
+
+                        return (
+                          <>
+                            <div className="text-center">
+                              <div className="text-blue-600 text-xl font-bold">${min.toFixed(2)}</div>
+                              <div className="text-xs text-gray-500">Min</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-blue-600 text-2xl font-bold">${avg.toFixed(2)}</div>
+                              <div className="text-xs text-gray-500">Avg</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-red-600 text-xl font-bold">${max.toFixed(2)}</div>
+                              <div className="text-xs text-gray-500">Max</div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Duration Toggle */}
+                    <div className="flex gap-2 ml-6">
+                      <button
+                        onClick={() => setQuickRange(12)}
+                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                          selectedDuration === 12
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        12h
+                      </button>
+                      <button
+                        onClick={() => setQuickRange(24)}
+                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                          selectedDuration === 24
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        24h
+                      </button>
+                      <button
+                        onClick={() => setQuickRange(48)}
+                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                          selectedDuration === 48
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        48h
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SVG Chart */}
+                  <div className="relative w-full" style={{ height: '320px' }}>
+                    <svg className="w-full h-full" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid meet">
+                      {/* Gradients */}
+                      <defs>
+                        <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#3b82f6" />
+                          <stop offset="50%" stopColor="#8b5cf6" />
+                          <stop offset="100%" stopColor="#ec4899" />
+                        </linearGradient>
+                        <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
+                          <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0.1" />
+                        </linearGradient>
+                        <linearGradient id="eventIconGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#ec4899" />
+                          <stop offset="100%" stopColor="#a855f7" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Grid lines */}
+                      {[0, 1, 2, 3, 4].map(i => (
+                        <line
+                          key={`grid-${i}`}
+                          x1="40"
+                          y1={40 + i * 50}
+                          x2="980"
+                          y2={40 + i * 50}
+                          stroke="#e5e7eb"
+                          strokeWidth="0.5"
+                          opacity="0.5"
+                        />
+                      ))}
+
+                      {/* Chart calculation and rendering */}
+                      {(() => {
+                        const prices = timeSlots.map(s => s.winningPrice || 0);
+                        const maxPrice = Math.max(...prices);
+                        const minPrice = Math.min(...prices.filter(p => p > 0));
+                        const range = maxPrice - minPrice || 1;
+                        const padding = range * 0.15;
+
+                        const chartHeight = 180;
+                        const chartBaseline = 240;
+                        const leftMargin = 40;
+                        const rightMargin = 20;
+                        const chartWidth = 1000 - leftMargin - rightMargin;
+
+                        const points = timeSlots.map((slot, i) => {
+                          const x = leftMargin + (i / (timeSlots.length - 1)) * chartWidth;
+                          const normalizedPrice = ((slot.winningPrice || 0) - minPrice + padding) / (range + 2 * padding);
+                          const y = chartBaseline - (normalizedPrice * chartHeight);
+                          return { x, y, slot };
+                        });
+
+                        const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
+
+                        return (
+                          <>
+                            {/* Area fill */}
+                            <polygon
+                              points={`${leftMargin},${chartBaseline} ${pointsStr} ${leftMargin + chartWidth},${chartBaseline}`}
+                              fill="url(#areaGradient)"
+                            />
+
+                            {/* Glow effect under the line */}
+                            <polyline
+                              points={pointsStr}
+                              fill="none"
+                              stroke="url(#lineGradient)"
+                              strokeWidth="6"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              opacity="0.2"
+                              filter="blur(4px)"
+                            />
+
+                            {/* Main line */}
+                            <polyline
+                              points={pointsStr}
+                              fill="none"
+                              stroke="url(#lineGradient)"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+
+                            {/* Data points */}
+                            {points.map(({ x, y, slot }, i) => {
+                              const hasEvents = slot.events && slot.events.length > 0;
+                              const eventCount = slot.events?.length || 0;
+
+                              return (
+                                <g key={i}>
+                                  {/* Concentric circles for each event - rendered from outside to inside */}
+                                  {hasEvents && slot.events!.map((event, eventIdx) => {
+                                    // Each event gets a larger concentric circle
+                                    // Start from outer ring and work inward
+                                    const ringRadius = 10 + ((eventCount - eventIdx - 1) * 4);
+
+                                    return (
+                                      <g key={`event-circle-${i}-${eventIdx}`}>
+                                        {/* Subtle glow effect for each event ring */}
+                                        <circle
+                                          cx={x}
+                                          cy={y}
+                                          r={ringRadius + 2}
+                                          fill="none"
+                                          stroke="url(#lineGradient)"
+                                          strokeWidth="4"
+                                          opacity="0.15"
+                                        />
+
+                                        {/* Event circle ring - styled to match chart */}
+                                        <circle
+                                          cx={x}
+                                          cy={y}
+                                          r={ringRadius}
+                                          fill="rgba(255, 255, 255, 0.95)"
+                                          stroke="url(#lineGradient)"
+                                          strokeWidth="2"
+                                          opacity="0.9"
+                                        />
+                                        {/* Tooltip for this event */}
+                                        <title>{event.name} (Priority: {event.priority})</title>
+                                      </g>
+                                    );
+                                  })}
+
+                                  {/* Main dot */}
+                                  <circle
+                                    cx={x}
+                                    cy={y}
+                                    r="5"
+                                    fill="#ffffff"
+                                    stroke="url(#lineGradient)"
+                                    strokeWidth="3"
+                                  />
+
+                                  {/* Tooltip for main dot */}
+                                  <title>
+                                    {slot.label} - ${slot.winningPrice?.toFixed(2) || '0.00'}/hr
+                                    {hasEvents && `\n\n🗓️ ${eventCount} Event${eventCount > 1 ? 's' : ''}:\n${slot.events!.map(e => `• ${e.name} (Priority: ${e.priority})`).join('\n')}`}
+                                  </title>
+                                </g>
+                              );
+                            })}
+
+                            {/* X-axis labels */}
+                            {points.map(({ x, slot }, i) => {
+                              const labelInterval = timeSlots.length <= 12 ? 2 : timeSlots.length <= 24 ? 4 : 8;
+                              if (i % labelInterval !== 0 && i !== points.length - 1) return null;
+
+                              const showDayLabel = i === 0 || slot.date.getDate() !== points[i - 1]?.slot.date.getDate();
+
+                              return (
+                                <g key={`label-${i}`}>
+                                  <line
+                                    x1={x}
+                                    y1={chartBaseline}
+                                    x2={x}
+                                    y2={chartBaseline + 6}
+                                    stroke="#cbd5e1"
+                                    strokeWidth="1.5"
+                                  />
+                                  <text
+                                    x={x}
+                                    y={chartBaseline + 20}
+                                    textAnchor="middle"
+                                    fill="#64748b"
+                                    fontSize="11"
+                                    fontWeight="600"
+                                  >
+                                    {slot.label}
+                                  </text>
+                                  {showDayLabel && (
+                                    <text
+                                      x={x}
+                                      y={chartBaseline + 34}
+                                      textAnchor="middle"
+                                      fill="#94a3b8"
+                                      fontSize="9"
+                                      fontWeight="500"
+                                    >
+                                      {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+
+                            {/* Y-axis labels */}
+                            {[0, 1, 2, 3, 4].map(i => {
+                              const price = maxPrice - (i * maxPrice / 4);
+                              const y = 40 + i * 50;
+
+                              return (
+                                <text
+                                  key={`y-${i}`}
+                                  x="30"
+                                  y={y + 5}
+                                  textAnchor="end"
+                                  fill="#64748b"
+                                  fontSize="11"
+                                  fontWeight="600"
+                                >
+                                  ${price.toFixed(0)}
+                                </text>
+                              );
+                            })}
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  </div>
+                </div>
+              )}
+
               {/* Time markers in grid with winning prices */}
               <div className="mt-4">
                 <div className="grid grid-cols-12 gap-1">
@@ -1019,7 +1330,7 @@ export default function TimelineSimulatorPage() {
                     return (
                       <div
                         key={idx}
-                        className={`relative bg-white border rounded-xl overflow-hidden cursor-pointer transition-all ${
+                        className={`relative bg-gradient-to-br from-silver-500 via-silver-50 to-silver-100 border rounded-xl overflow-hidden cursor-pointer transition-all ${
                           isSelected
                             ? 'border-blue-600 border-2 shadow-xl ring-2 ring-blue-300'
                             : isHovered
@@ -1031,22 +1342,22 @@ export default function TimelineSimulatorPage() {
                         onMouseLeave={handleTileLeave}
                       >
                         {/* Header with time */}
-                        <div className="bg-gradient-to-r from-gray-700 to-gray-800 px-2 py-1 text-center">
-                          <div className="text-[10px] font-bold text-white">{slot.label}</div>
-                          <div className="text-[8px] text-gray-300">
+                        <div className="bg-gradient-to-r from-slate-600 to-slate-700 px-2 py-1.5 text-center">
+                          <div className="text-[11px] font-bold text-white tracking-tight">{slot.label}</div>
+                          <div className="text-[9px] text-slate-300 font-medium">
                             {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </div>
                         </div>
 
                         {/* Pricing Section */}
-                        <div className="bg-gradient-to-br from-blue-400 to-blue-300 px-2 py-2 border-b border-dotted border-yellow-900">
-                          <div className="text-[7px] uppercase font-light text-gray-900 mb-0.5 tracking-wide">Price</div>
-                          {slot.winningPrice ? (
-                            <div className="text-xl font-extrabold text-gray-900">
+                        <div className="bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 px-2 py-3 border-b border-gray-100">
+                          <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Price</div>
+                          {slot.winningPrice !== undefined && slot.winningPrice !== null ? (
+                            <div className="text-2xl font-black bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
                               ${slot.winningPrice}
                             </div>
                           ) : (
-                            <div className="text-base font-extrabold text-gray-400">
+                            <div className="text-base font-extrabold text-gray-300">
                               -
                             </div>
                           )}
@@ -1054,17 +1365,17 @@ export default function TimelineSimulatorPage() {
 
                         {/* Capacity Section */}
                         {slot.capacity && (
-                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 px-2 py-2 border-b border-gray-200">
-                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">Capacity</div>
-                            <div className="flex items-baseline justify-center gap-0.5">
-                              <span className="text-sm font-extrabold text-gray-700">{slot.capacity.allocated}</span>
-                              <span className="text-[8px] text-gray-500 font-medium">/</span>
-                              <span className="text-xs font-semibold text-gray-600">{slot.capacity.max}</span>
+                          <div className="bg-white px-2 py-2.5 border-b border-gray-100">
+                            <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Capacity</div>
+                            <div className="flex items-baseline justify-center gap-1">
+                              <span className="text-base font-black text-slate-700">{slot.capacity.allocated}</span>
+                              <span className="text-[10px] text-gray-400 font-bold">/</span>
+                              <span className="text-sm font-bold text-slate-600">{slot.capacity.max}</span>
                             </div>
                             {/* Capacity bar */}
-                            <div className="mt-1 h-1 bg-gray-300 rounded-full overflow-hidden">
+                            <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                               <div
-                                className="h-full bg-gradient-to-r from-gray-600 to-gray-700"
+                                className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full transition-all"
                                 style={{
                                   width: `${Math.min((slot.capacity.allocated / slot.capacity.max) * 100, 100)}%`
                                 }}
@@ -1074,11 +1385,11 @@ export default function TimelineSimulatorPage() {
                         )}
 
                         {/* Revenue Section */}
-                        {slot.capacity && slot.winningPrice && (
-                          <div className="bg-gradient-to-br from-zinc-50 to-silver-900 px-2 py-2 border-b border-gray-200">
-                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">Revenue Max</div>
+                        {slot.capacity && (slot.winningPrice !== undefined && slot.winningPrice !== null) && (
+                          <div className="bg-gradient-to-br from-red-50 to-orange-50 px-2 py-2.5 border-b-2 border-silver-900 border-dashed">
+                            <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Revenue Max</div>
                             <div className="flex items-baseline justify-center gap-0.5">
-                              <span className="text-md font-extrabold text-red-400">
+                              <span className="text-lg font-black bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
                                 ${(slot.capacity.max * slot.winningPrice).toLocaleString()}
                               </span>
                             </div>
@@ -1087,13 +1398,13 @@ export default function TimelineSimulatorPage() {
 
                         {/* Event Section */}
                         {slot.eventNames && slot.eventNames.length > 0 && (
-                          <div className="bg-gradient-to-br from-purple-50 to-purple-100 px-2 py-2">
-                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">
+                          <div className="bg-gradient-to-br from-zinc-50 via-silver-50 to-silver-100 px-2 py-2.5">
+                            <div className="text-[8px] uppercase font-thin text-black mb-1 tracking-wider">
                               {slot.eventNames.length > 1 ? 'Events' : 'Event'}
                             </div>
-                            <div className="text-[9px] font-semibold text-purple-700 text-center space-y-0.5">
+                            <div className="text-[10px] font-light text-gray-700 text-left space-y-1">
                               {slot.eventNames.map((eventName, eventIdx) => (
-                                <div key={eventIdx} className="line-clamp-1">
+                                <div key={eventIdx} className="line-clamp-1 bg-white/40 rounded px-1 py-0.5">
                                   {eventName}
                                 </div>
                               ))}
