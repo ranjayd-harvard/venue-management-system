@@ -42,6 +42,14 @@ interface Customer {
   defaultHourlyRate?: number;
 }
 
+interface Venue {
+  _id: string;
+  name: string;
+  venueType?: string;
+  capacity?: number;
+  description?: string;
+}
+
 interface Event {
   _id: string;
   name: string;
@@ -51,6 +59,10 @@ interface Event {
   isActive: boolean;
   gracePeriodBefore?: number;
   gracePeriodAfter?: number;
+  venueId?: string;
+  subLocationId?: string;
+  locationId?: string;
+  customerId?: string;
 }
 
 interface PricingResult {
@@ -69,9 +81,18 @@ interface RateCard {
 }
 
 export default function DigitalRatecardPage() {
+  // Filter view mode (sublocation vs venue)
+  const [filterMode, setFilterMode] = useState<'sublocation' | 'venue'>('sublocation');
+
+  // SubLocation mode state
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
   const [selectedEventId, setSelectedEventId] = useState<string>('');
+
+  // Venue mode state
+  const [selectedVenue, setSelectedVenue] = useState<string>('');
+  const [currentVenue, setCurrentVenue] = useState<Venue | null>(null);
+  const [autoDetectedSubLocation, setAutoDetectedSubLocation] = useState<string | null>(null);
 
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
@@ -175,15 +196,32 @@ export default function DigitalRatecardPage() {
     { hours: 24, badge: 'Full Day', isPopular: true },
   ];
 
+  // Check URL query parameter for mode on mount
   useEffect(() => {
-    if (selectedLocation) {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode');
+    if (mode === 'venue') {
+      setFilterMode('venue');
+    }
+  }, []);
+
+  // Handle venue selection in venue mode
+  useEffect(() => {
+    if (filterMode === 'venue' && selectedVenue) {
+      fetchVenueAndSubLocation(selectedVenue);
+    }
+  }, [selectedVenue, filterMode]);
+
+  // Handle location selection in sublocation mode
+  useEffect(() => {
+    if (filterMode === 'sublocation' && selectedLocation) {
       fetchLocationDetails(selectedLocation);
-    } else {
+    } else if (filterMode === 'sublocation') {
       setSelectedSubLocation('');
       setCurrentLocation(null);
       setCurrentCustomer(null);
     }
-  }, [selectedLocation]);
+  }, [selectedLocation, filterMode]);
 
   useEffect(() => {
     if (selectedSubLocation) {
@@ -197,10 +235,12 @@ export default function DigitalRatecardPage() {
 
   // Fetch events after we have all the hierarchy data
   useEffect(() => {
-    if (currentSubLocation && currentLocation && currentCustomer) {
+    if (filterMode === 'sublocation' && currentSubLocation && currentLocation && currentCustomer) {
+      fetchActiveEvents();
+    } else if (filterMode === 'venue' && currentVenue) {
       fetchActiveEvents();
     }
-  }, [currentSubLocation, currentLocation, currentCustomer]);
+  }, [currentSubLocation, currentLocation, currentCustomer, currentVenue, filterMode]);
 
   useEffect(() => {
     if (currentSubLocation) {
@@ -241,9 +281,34 @@ export default function DigitalRatecardPage() {
     }
   };
 
-  const fetchActiveEvents = async () => {
-    if (!currentSubLocation || !currentLocation || !currentCustomer) return;
+  const fetchVenueAndSubLocation = async (venueId: string) => {
+    try {
+      // Fetch venue details
+      const venueRes = await fetch(`/api/venues/${venueId}`);
+      const venue = await venueRes.json();
+      setCurrentVenue(venue);
 
+      // Look up sublocation assignment
+      const relationshipsRes = await fetch('/api/sublocation-venues');
+      const relationships = await relationshipsRes.json();
+
+      const assignment = relationships.find((rel: any) => rel.venueId === venueId);
+
+      if (assignment) {
+        setAutoDetectedSubLocation(assignment.subLocationId);
+        // Automatically set the sublocation for pricing calculations
+        setSelectedSubLocation(assignment.subLocationId);
+      } else {
+        setAutoDetectedSubLocation(null);
+        setSelectedSubLocation('');
+        // Show warning that venue is not assigned
+      }
+    } catch (error) {
+      console.error('Failed to fetch venue and sublocation:', error);
+    }
+  };
+
+  const fetchActiveEvents = async () => {
     try {
       const now = new Date();
       const futureDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // Next 7 days
@@ -251,33 +316,54 @@ export default function DigitalRatecardPage() {
       const response = await fetch('/api/events');
       const allEvents = await response.json();
 
-      const overlapping = allEvents.filter((event: Event) => {
-        if (!event.isActive) return false;
+      let overlapping: Event[] = [];
 
-        // Check date overlap
-        const eventStart = new Date(event.startDate);
-        const eventEnd = new Date(event.endDate);
-        const dateOverlap = eventEnd >= now && eventStart <= futureDate;
-        if (!dateOverlap) return false;
+      if (filterMode === 'venue' && currentVenue) {
+        // Venue mode: Filter by venueId
+        overlapping = allEvents.filter((event: Event) => {
+          if (!event.isActive) return false;
 
-        // Filter by hierarchy: event must belong to this sublocation/location/customer
-        // Convert IDs to strings for comparison (in case they're ObjectIds)
-        const eventSubLocId = typeof event.subLocationId === 'object'
-          ? (event.subLocationId as any)?.$oid || String(event.subLocationId)
-          : event.subLocationId;
-        const eventLocId = typeof event.locationId === 'object'
-          ? (event.locationId as any)?.$oid || String(event.locationId)
-          : event.locationId;
-        const eventCustId = typeof event.customerId === 'object'
-          ? (event.customerId as any)?.$oid || String(event.customerId)
-          : event.customerId;
+          const eventVenueId = typeof event.venueId === 'object'
+            ? (event.venueId as any)?.$oid || String(event.venueId)
+            : event.venueId;
 
-        const matchesSubLocation = eventSubLocId === currentSubLocation._id;
-        const matchesLocation = eventLocId === currentLocation._id && !eventSubLocId;
-        const matchesCustomer = eventCustId === currentCustomer._id && !eventLocId && !eventSubLocId;
+          const eventStart = new Date(event.startDate);
+          const eventEnd = new Date(event.endDate);
 
-        return matchesSubLocation || matchesLocation || matchesCustomer;
-      });
+          return eventVenueId === currentVenue._id &&
+                 eventEnd >= now &&
+                 eventStart <= futureDate;
+        });
+      } else if (filterMode === 'sublocation' && currentSubLocation && currentLocation && currentCustomer) {
+        // SubLocation mode: Filter by hierarchy
+        overlapping = allEvents.filter((event: Event) => {
+          if (!event.isActive) return false;
+
+          // Check date overlap
+          const eventStart = new Date(event.startDate);
+          const eventEnd = new Date(event.endDate);
+          const dateOverlap = eventEnd >= now && eventStart <= futureDate;
+          if (!dateOverlap) return false;
+
+          // Filter by hierarchy: event must belong to this sublocation/location/customer
+          // Convert IDs to strings for comparison (in case they're ObjectIds)
+          const eventSubLocId = typeof event.subLocationId === 'object'
+            ? (event.subLocationId as any)?.$oid || String(event.subLocationId)
+            : event.subLocationId;
+          const eventLocId = typeof event.locationId === 'object'
+            ? (event.locationId as any)?.$oid || String(event.locationId)
+            : event.locationId;
+          const eventCustId = typeof event.customerId === 'object'
+            ? (event.customerId as any)?.$oid || String(event.customerId)
+            : event.customerId;
+
+          const matchesSubLocation = eventSubLocId === currentSubLocation._id;
+          const matchesLocation = eventLocId === currentLocation._id && !eventSubLocId;
+          const matchesCustomer = eventCustId === currentCustomer._id && !eventLocId && !eventSubLocId;
+
+          return matchesSubLocation || matchesLocation || matchesCustomer;
+        });
+      }
 
       setActiveEvents(overlapping);
 
@@ -663,22 +749,31 @@ export default function DigitalRatecardPage() {
             Live Pricing
           </div>
           <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent mb-3">
-            Smart Parking Rates
+            Digital Ratecard
           </h1>
           <p className="text-gray-600 text-lg">
-            Dynamic pricing updated in real-time • Pay only for what you need
+            {filterMode === 'venue' && currentVenue
+              ? `Dynamic pricing for ${currentVenue.name}`
+              : filterMode === 'sublocation' && currentSubLocation
+              ? `Dynamic pricing for ${currentSubLocation.label}`
+              : 'Select a location or venue to view live pricing'}
           </p>
         </div>
 
         {/* Filters - Modern card style */}
         <div className="mb-8">
           <PricingFilters
+            viewMode={filterMode}
+            onViewModeChange={setFilterMode}
             selectedLocation={selectedLocation}
             selectedSubLocation={selectedSubLocation}
             selectedEventId={selectedEventId}
             onLocationChange={setSelectedLocation}
             onSubLocationChange={setSelectedSubLocation}
             onEventChange={setSelectedEventId}
+            selectedVenue={selectedVenue}
+            onVenueChange={setSelectedVenue}
+            autoDetectedSubLocation={autoDetectedSubLocation}
             selectedDuration={12}
             onDurationChange={() => {}}
             useDurationContext={useDurationContext}
@@ -750,9 +845,9 @@ export default function DigitalRatecardPage() {
           </div>
         )}
 
-        {!loading && selectedSubLocation && currentLocation && currentSubLocation && (
+        {!loading && ((filterMode === 'sublocation' && selectedSubLocation && currentLocation && currentSubLocation) || (filterMode === 'venue' && currentVenue)) && (
           <>
-            {/* Location Info Card - Modern glassmorphism style */}
+            {/* Location/Venue Info Card - Modern glassmorphism style */}
             <div className="bg-white/70 backdrop-blur-lg rounded-3xl shadow-xl border border-white/20 p-8 mb-8">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div className="flex items-center gap-4">
@@ -760,8 +855,22 @@ export default function DigitalRatecardPage() {
                     <MapPin className="w-8 h-8 text-white" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">{currentLocation.name}</h2>
-                    <p className="text-gray-600">{currentSubLocation.label}</p>
+                    <h2 className="text-2xl font-bold text-gray-900">
+                      {filterMode === 'venue' ? currentVenue?.name : currentLocation?.name}
+                    </h2>
+                    <p className="text-gray-600">
+                      {filterMode === 'venue' ? currentVenue?.venueType : currentSubLocation?.label}
+                    </p>
+
+                    {/* Show auto-detected sublocation in venue mode */}
+                    {filterMode === 'venue' && autoDetectedSubLocation && (
+                      <div className="flex items-center gap-2 mt-2 text-sm">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <span className="text-green-700 font-medium">
+                          ✓ Assigned to SubLocation (pricing available)
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 mt-2">
                       <div className="flex items-center gap-1 text-sm text-blue-600">
                         <Clock className="w-4 h-4" />
@@ -968,6 +1077,23 @@ export default function DigitalRatecardPage() {
                 </div>
               )}
             </div>
+
+            {/* Warning when venue is not assigned to sublocation */}
+            {filterMode === 'venue' && currentVenue && !autoDetectedSubLocation && (
+              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-3xl p-6 mb-8">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="text-yellow-600 flex-shrink-0 mt-0.5" size={24} />
+                  <div className="text-sm text-yellow-800">
+                    <p className="font-semibold mb-1 text-lg">Pricing Features Unavailable</p>
+                    <p>
+                      This venue (<strong>{currentVenue.name}</strong>) is not currently assigned to any sublocation.
+                      To view detailed pricing, assign it to a sublocation via the{' '}
+                      <a href="/relationships" className="underline font-semibold">Relationships</a> page.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Hourly Rate Chart */}
             {hourlyBreakdown.length > 0 && (

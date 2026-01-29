@@ -316,7 +316,7 @@ export class HourlyPricingEngine {
       }
     }
     
-    // Sort by hierarchy then priority
+    // Sort by hierarchy then priority, then prefer non-zero rates
     return applicable.sort((a, b) => {
       // Level hierarchy: EVENT (4) > SUBLOCATION (3) > LOCATION (2) > CUSTOMER (1)
       const levelA = a.level === 'EVENT' ? 4 : a.level === 'SUBLOCATION' ? 3 : a.level === 'LOCATION' ? 2 : 1;
@@ -327,7 +327,22 @@ export class HourlyPricingEngine {
       }
 
       // Same level: higher priority first
-      return b.ratesheet.priority - a.ratesheet.priority;
+      if (b.ratesheet.priority !== a.ratesheet.priority) {
+        return b.ratesheet.priority - a.ratesheet.priority;
+      }
+
+      // Same priority: prefer non-zero rates over grace periods ($0/hr)
+      // This ensures that when events overlap at the same priority,
+      // actual event rates take precedence over grace periods from other events
+      if (a.pricePerHour === 0 && b.pricePerHour > 0) {
+        return 1; // b comes first (non-zero rate wins)
+      }
+      if (b.pricePerHour === 0 && a.pricePerHour > 0) {
+        return -1; // a comes first (non-zero rate wins)
+      }
+
+      // Both zero or both non-zero: maintain insertion order (stable sort)
+      return 0;
     });
   }
 

@@ -21,7 +21,8 @@ import {
   Timer,
   Calendar,
   TrendingUp,
-  Zap
+  Zap,
+  SatelliteIcon,
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -59,8 +60,14 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
     {
       href: '/pricing/digital-ratecard',
       icon: Zap,
-      label: 'Digital Ratecard',
-      description: 'Modern live pricing display'
+      label: 'Digital Ratecard (SubLocation)',
+      description: 'SubLocation-based pricing view'
+    },
+    {
+      href: '/pricing/digital-ratecard?mode=venue',
+      icon: Users,
+      label: 'Digital Ratecard (Venue)',
+      description: 'Venue-based pricing view'
     },
     {
       href: '/pricing/timeline-view',
@@ -80,6 +87,12 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       label: 'Pricing Tiles',
       description: 'Sublocations Pricing Tiles'
     },
+    {
+      href: '/pricing/timeline-simulator',
+      icon: SatelliteIcon,
+      label: 'Pricing Simulator',
+      description: 'Simulate Pricing ratesheets'
+    },    
     {
       href: '/pricing/timeline-all-sublocations',
       icon: Timer,

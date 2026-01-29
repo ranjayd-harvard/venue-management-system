@@ -136,6 +136,7 @@ export interface Event {
   attendees?: number;
   attributes?: Attribute[];
   defaultHourlyRate?: number;
+  customPriority?: number;    // Optional: 4000-4999 for manual priority control (defaults to 4900)
   timezone?: string;
   isActive: boolean;
   capacityConfig?: CapacityConfig;

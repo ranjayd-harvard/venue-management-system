@@ -73,7 +73,8 @@ export async function generateEventRatesheet(event: Event): Promise<ObjectId | n
   });
 
   // Auto-generated event ratesheets use priority 4900-4999
-  const autoEventPriority = 4900;
+  // If event has customPriority set, use it; otherwise default to 4900
+  const autoEventPriority = event.customPriority || 4900;
 
   // Calculate effective dates including grace periods
   // Use milliseconds for accurate date arithmetic

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import TimezoneSelector from './TimezoneSelector';
+import ConflictDetectionPanel from './ConflictDetectionPanel';
 
 interface Customer {
   _id: string;
@@ -45,6 +46,7 @@ interface Event {
   gracePeriodAfter?: number;
   attendees?: number;
   defaultHourlyRate?: number;
+  customPriority?: number;
   timezone?: string;
   isActive: boolean;
 }
@@ -77,6 +79,7 @@ export default function EditEventModal({ isOpen, event, onClose, onSuccess }: Ed
   const [endDate, setEndDate] = useState('');
   const [attendees, setAttendees] = useState('');
   const [defaultHourlyRate, setDefaultHourlyRate] = useState('');
+  const [customPriority, setCustomPriority] = useState('');
   const [gracePeriodBefore, setGracePeriodBefore] = useState('');
   const [gracePeriodAfter, setGracePeriodAfter] = useState('');
   const [timezone, setTimezone] = useState('');
@@ -116,6 +119,7 @@ export default function EditEventModal({ isOpen, event, onClose, onSuccess }: Ed
       setEndDate(isoToDateTimeLocal(event.endDate));
       setAttendees(event.attendees ? event.attendees.toString() : '');
       setDefaultHourlyRate(event.defaultHourlyRate ? event.defaultHourlyRate.toString() : '');
+      setCustomPriority(event.customPriority ? event.customPriority.toString() : '');
       setGracePeriodBefore(event.gracePeriodBefore ? event.gracePeriodBefore.toString() : '');
       setGracePeriodAfter(event.gracePeriodAfter ? event.gracePeriodAfter.toString() : '');
       setTimezone(event.timezone || '');
@@ -213,6 +217,7 @@ export default function EditEventModal({ isOpen, event, onClose, onSuccess }: Ed
         endDate: new Date(endDate).toISOString(),
         attendees: attendees ? parseInt(attendees) : undefined,
         defaultHourlyRate: defaultHourlyRate ? parseFloat(defaultHourlyRate) : undefined,
+        customPriority: customPriority ? parseInt(customPriority) : undefined,
         gracePeriodBefore: gracePeriodBefore ? parseInt(gracePeriodBefore) : undefined,
         gracePeriodAfter: gracePeriodAfter ? parseInt(gracePeriodAfter) : undefined,
         timezone: timezone || undefined,
@@ -582,6 +587,41 @@ export default function EditEventModal({ isOpen, event, onClose, onSuccess }: Ed
                 className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 text-gray-900"
               />
             </div>
+
+            {/* Priority Override (Advanced) */}
+            <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4">
+              <label className="block text-sm font-semibold text-purple-900 mb-1">
+                Custom Priority (Optional)
+              </label>
+              <p className="text-xs text-purple-700 mb-3">
+                Control which event wins during overlaps. Higher number = higher priority. Leave empty for default (4900).
+              </p>
+              <input
+                type="number"
+                value={customPriority}
+                onChange={(e) => setCustomPriority(e.target.value)}
+                min="4000"
+                max="4999"
+                className="w-full px-4 py-3 border-2 border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white"
+                placeholder="4900 (default)"
+              />
+              <p className="text-xs text-purple-600 mt-2">
+                💡 Range: 4000-4999 (EVENT level). Default: 4900 for auto-generated ratesheets.
+              </p>
+            </div>
+
+            {/* Conflict Detection */}
+            {event && event.subLocationId && startDate && endDate && (
+              <ConflictDetectionPanel
+                subLocationId={event.subLocationId}
+                startDate={new Date(startDate).toISOString()}
+                endDate={new Date(endDate).toISOString()}
+                excludeEventId={event._id}
+                currentEventName={name || event.name}
+                currentPriority={customPriority ? parseInt(customPriority) : 4900}
+                onPriorityRecommendation={(suggested) => setCustomPriority(suggested.toString())}
+              />
+            )}
           </div>
 
           {/* Timezone */}

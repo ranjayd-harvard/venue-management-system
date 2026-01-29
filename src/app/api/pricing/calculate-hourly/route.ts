@@ -170,22 +170,64 @@ export async function POST(request: NextRequest) {
       console.log(`\n🔍 [API] Auto-fetching overlapping events for sublocation ${sublocation._id}`);
       console.log(`[API] Booking range: ${bookingStartDate.toISOString()} - ${bookingEndDate.toISOString()}`);
 
-      overlappingEvents = await db.collection('events').find({
-        isActive: true,
-        // Event must not end before booking starts AND must not start after booking ends
-        endDate: { $gte: bookingStartDate },
-        startDate: { $lte: bookingEndDate },
-        // Event must belong to this sublocation (or location/customer hierarchy)
-        // Handle both string and ObjectId formats for IDs
+      // Step 1: Find venues assigned to this sublocation
+      const sublocationVenueRelationships = await db.collection('sublocation_venues').find({
         $or: [
           { subLocationId: sublocation._id.toString() },
+          { subLocationId: new ObjectId(sublocation._id) }
+        ]
+      }).toArray();
+
+      const assignedVenueIds = sublocationVenueRelationships.map(rel => {
+        // Handle both string and ObjectId formats
+        const venueId = rel.venueId;
+        return typeof venueId === 'string' ? venueId : venueId.toString();
+      });
+
+      console.log(`[API] Found ${assignedVenueIds.length} venues assigned to this sublocation`);
+
+      // Step 2: Build query to include both:
+      // 1. Events directly linked to this sublocation/location/customer
+      // 2. Venue-only events (venueId set, but subLocationId null) where venue is assigned to this sublocation
+      const eventQuery: any = {
+        isActive: true,
+        endDate: { $gte: bookingStartDate },
+        startDate: { $lte: bookingEndDate },
+        $or: [
+          // Direct sublocation events
+          { subLocationId: sublocation._id.toString() },
           { subLocationId: new ObjectId(sublocation._id) },
+          // Location-level events (no sublocation specified)
           { locationId: location._id.toString(), subLocationId: { $exists: false } },
           { locationId: new ObjectId(location._id), subLocationId: { $exists: false } },
+          // Customer-level events (no location/sublocation specified)
           { customerId: customer._id.toString(), locationId: { $exists: false }, subLocationId: { $exists: false } },
           { customerId: new ObjectId(customer._id), locationId: { $exists: false }, subLocationId: { $exists: false } }
         ]
-      }).toArray();
+      };
+
+      // Add venue-only events if there are assigned venues
+      if (assignedVenueIds.length > 0) {
+        // Convert venue IDs to both string and ObjectId formats for comparison
+        const venueIdConditions = assignedVenueIds.flatMap(id => [
+          { venueId: id },
+          { venueId: new ObjectId(id) }
+        ]);
+
+        eventQuery.$or.push({
+          // Venue-only events: has venueId, but no subLocationId/locationId/customerId
+          $and: [
+            { $or: venueIdConditions },
+            { subLocationId: { $in: [null, undefined] } },
+            { locationId: { $in: [null, undefined] } },
+            { customerId: { $in: [null, undefined] } }
+          ]
+        });
+
+        console.log(`[API] Including venue-only events for venues: ${assignedVenueIds.join(', ')}`);
+      }
+
+      overlappingEvents = await db.collection('events').find(eventQuery).toArray();
 
       console.log(`[API] Found ${overlappingEvents.length} overlapping events:`);
       overlappingEvents.forEach(e => {

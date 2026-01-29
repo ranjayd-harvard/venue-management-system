@@ -105,9 +105,16 @@ interface TimeSlot {
   winningPrice?: number;
   decisionLog?: any;
   pricingData?: any;
+  capacity?: {
+    allocated: number;
+    max: number;
+    available: number;
+  };
+  eventNames?: string[]; // Changed from eventName to eventNames array
+  events?: Array<{ name: string; priority: number }>; // Store events with priority for sorting
 }
 
-export default function TimelineTilesPage() {
+export default function TimelineSimulatorPage() {
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
   const [selectedEventId, setSelectedEventId] = useState<string>('');
@@ -118,6 +125,7 @@ export default function TimelineTilesPage() {
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
+  const [currentEvent, setCurrentEvent] = useState<Event | null>(null);
 
   // Initialize all dates from the same timestamp
   // Range covers 60 days in past to 60 days in future
@@ -157,6 +165,9 @@ export default function TimelineTilesPage() {
   // Event booking toggle
   const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
 
+  // Layer enable/disable state (tracks which layers are enabled)
+  const [enabledLayers, setEnabledLayers] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     fetchPricingConfig();
   }, []);
@@ -193,12 +204,20 @@ export default function TimelineTilesPage() {
       setRatesheets([]);
       setCurrentSubLocation(null);
       setSelectedEventId('');
+      setCurrentEvent(null);
     }
   }, [selectedSubLocation]); // Only refetch when sublocation changes, not when range changes
 
   useEffect(() => {
+    console.log('🎯 selectedEventId changed:', selectedEventId);
     if (selectedSubLocation) {
       fetchRatesheets(selectedSubLocation);
+    }
+    if (selectedEventId) {
+      fetchEventDetails(selectedEventId);
+    } else {
+      setCurrentEvent(null);
+      console.log('⚠️  No event selected, cleared currentEvent');
     }
   }, [selectedEventId]);
 
@@ -210,11 +229,20 @@ export default function TimelineTilesPage() {
     }
   }, [useDurationContext, bookingStartTime]);
 
+  // Initialize all layers as enabled when layers change
+  useEffect(() => {
+    const allLayers = getPricingLayers();
+    const allLayerIds = new Set(allLayers.map(l => l.id));
+    setEnabledLayers(allLayerIds);
+  }, [ratesheets, currentSubLocation, currentLocation, currentCustomer]);
+
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
-      calculateTimeSlots();
+      calculateTimeSlots().catch(error => {
+        console.error('Error calculating time slots:', error);
+      });
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -249,6 +277,18 @@ export default function TimelineTilesPage() {
       setCurrentSubLocation(subloc);
     } catch (error) {
       console.error('Failed to fetch sublocation details:', error);
+    }
+  };
+
+  const fetchEventDetails = async (eventId: string) => {
+    try {
+      console.log('🔍 Fetching event details for eventId:', eventId);
+      const response = await fetch(`/api/events/${eventId}`);
+      const event = await response.json();
+      console.log('✅ Event fetched:', event);
+      setCurrentEvent(event);
+    } catch (error) {
+      console.error('Failed to fetch event details:', error);
     }
   };
 
@@ -405,11 +445,45 @@ export default function TimelineTilesPage() {
     }
   };
 
-  const calculateTimeSlots = () => {
+  const calculateTimeSlots = async () => {
     const slots: TimeSlot[] = [];
     const currentTime = new Date(viewStart);
     const endTime = new Date(viewEnd);
     const allLayers = getPricingLayers();
+
+    // Fetch all active events to determine which event is active for each hour
+    let allEvents: Event[] = [];
+    try {
+      const eventsResponse = await fetch('/api/events');
+      if (eventsResponse.ok) {
+        allEvents = await eventsResponse.json();
+        console.log('📅 Fetched all events:', allEvents.length);
+      }
+    } catch (error) {
+      console.error('Failed to fetch events:', error);
+    }
+
+    // Fetch capacity data for the entire time range
+    let capacityData: any = null;
+    if (selectedSubLocation) {
+      try {
+        const response = await fetch('/api/capacity/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subLocationId: selectedSubLocation,
+            startTime: viewStart.toISOString(),
+            endTime: viewEnd.toISOString(),
+            eventId: selectedEventId || undefined,
+          }),
+        });
+        if (response.ok) {
+          capacityData = await response.json();
+        }
+      } catch (error) {
+        console.error('Failed to fetch capacity data:', error);
+      }
+    }
 
     while (currentTime < endTime) {
       // Use UTC hours for consistent timezone handling
@@ -475,8 +549,78 @@ export default function TimelineTilesPage() {
         return { layer, price, isActive };
       });
 
-      // Winner is the first active layer (highest priority)
-      const winner = layerPrices.find(lp => lp.isActive);
+      // Winner is the first active layer (highest priority) that is also enabled
+      const winner = layerPrices.find(lp => lp.isActive && enabledLayers.has(lp.layer.id));
+
+      // Find capacity for this hour
+      let capacityForHour = undefined;
+      if (capacityData?.segments) {
+        const segment = capacityData.segments.find((seg: any) => {
+          const segStart = new Date(seg.startTime);
+          const segEnd = new Date(seg.endTime);
+          return currentTime >= segStart && currentTime < segEnd;
+        });
+        if (segment) {
+          capacityForHour = {
+            allocated: segment.allocatedCapacity,
+            max: segment.maxCapacity,
+            available: segment.availableCapacity,
+          };
+        }
+      }
+
+      // Find all events that are active during this hour
+      const slotStart = new Date(currentTime);
+      const slotEnd = new Date(currentTime.getTime() + 60 * 60 * 1000); // +1 hour
+      const activeEvents = allEvents.filter(event => {
+        if (!event.isActive) return false;
+        const eventStart = new Date(event.startDate);
+        const eventEnd = new Date(event.endDate);
+        // Check if the event overlaps with this hour slot
+        return eventStart < slotEnd && eventEnd > slotStart;
+      });
+
+      // Get event priorities from ratesheets
+      const eventsWithPriority = activeEvents.map(event => {
+        // Find the ratesheet for this event to get its priority
+        // Try multiple matching strategies: eventId, event._id, or event.name
+        const eventRatesheet = ratesheets.find(rs => {
+          if (rs.applyTo !== 'EVENT') return false;
+
+          // Strategy 1: Match by eventId field
+          if (rs.eventId && rs.eventId === event._id.toString()) {
+            return true;
+          }
+
+          // Strategy 2: Match by nested event._id
+          if (rs.event?._id && rs.event._id.toString() === event._id.toString()) {
+            return true;
+          }
+
+          // Strategy 3: Match by event name (fallback for auto-generated ratesheets like "Auto-event7")
+          if (rs.event?.name === event.name) {
+            return true;
+          }
+
+          return false;
+        });
+
+        if (eventRatesheet) {
+          console.log(`✅ Found ratesheet for ${event.name}: ${eventRatesheet.name} (priority: ${eventRatesheet.priority})`);
+        } else {
+          console.log(`⚠️  No ratesheet found for event: ${event.name} (_id: ${event._id})`);
+        }
+
+        return {
+          name: event.name,
+          priority: eventRatesheet?.priority || 0
+        };
+      });
+
+      // Sort events by priority (descending - highest priority first)
+      eventsWithPriority.sort((a, b) => b.priority - a.priority);
+
+      const eventNames = eventsWithPriority.map(e => e.name);
 
       slots.push({
         hour,
@@ -484,8 +628,17 @@ export default function TimelineTilesPage() {
         date: new Date(currentTime),
         layers: layerPrices,
         winningLayer: winner?.layer,
-        winningPrice: winner?.price || undefined
+        winningPrice: winner?.price || undefined,
+        capacity: capacityForHour,
+        eventNames: eventNames.length > 0 ? eventNames : undefined,
+        events: eventsWithPriority.length > 0 ? eventsWithPriority : undefined,
       });
+
+      // Debug log for event names with priority
+      if (eventsWithPriority.length > 0) {
+        const eventInfo = eventsWithPriority.map(e => `${e.name}(${e.priority})`).join(', ');
+        console.log(`📌 Slot ${slots.length - 1} (${formatHour(hour)}): events = [${eventInfo}]`);
+      }
 
       currentTime.setHours(currentTime.getHours() + 1);
     }
@@ -610,6 +763,18 @@ export default function TimelineTilesPage() {
     setHoveredSlot(null);
   };
 
+  const toggleLayer = (layerId: string) => {
+    setEnabledLayers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(layerId)) {
+        newSet.delete(layerId);
+      } else {
+        newSet.add(layerId);
+      }
+      return newSet;
+    });
+  };
+
   const allLayers = getPricingLayers();
   const counts = {
     event: ratesheets.filter(rs => rs.applyTo === 'EVENT').length,
@@ -618,7 +783,7 @@ export default function TimelineTilesPage() {
 
   // Debug logging
   useEffect(() => {
-    console.log('[Timeline Tiles] Data:', {
+    console.log('[Timeline Simulator] Data:', {
       ratesheets: ratesheets.length,
       allLayers: allLayers.length,
       timeSlots: timeSlots.length,
@@ -636,7 +801,7 @@ export default function TimelineTilesPage() {
           <div className="flex items-start justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                Pricing Timeline - Waterfall View
+                Pricing Timeline Simulator
               </h1>
               <p className="text-gray-600">
                 Visual waterfall showing pricing hierarchy and winning rates for each hour
@@ -845,36 +1010,96 @@ export default function TimelineTilesPage() {
                   {timeSlots.map((slot, idx) => {
                     const isSelected = selectedSlot?.slotIdx === idx;
                     const isHovered = hoveredSlot?.slotIdx === idx;
+
+                    // Debug log for rendering
+                    if (slot.eventNames && slot.eventNames.length > 0) {
+                      console.log(`🎨 Rendering slot ${idx} with eventNames: [${slot.eventNames.join(', ')}]`);
+                    }
+
                     return (
                       <div
                         key={idx}
-                        className={`bg-gray-50 border rounded-lg p-2 text-center cursor-pointer transition-all ${
+                        className={`relative bg-white border rounded-xl overflow-hidden cursor-pointer transition-all ${
                           isSelected
-                            ? 'border-blue-600 border-2 shadow-xl bg-blue-50'
+                            ? 'border-blue-600 border-2 shadow-xl ring-2 ring-blue-300'
                             : isHovered
                             ? 'border-blue-400 border-2 shadow-lg'
-                            : 'border-gray-300'
+                            : 'border-gray-200 shadow-sm'
                         }`}
                         onClick={() => handleTileClick(idx, 'pricing-tile', slot)}
                         onMouseEnter={() => handleTileHover(idx, 'pricing-tile')}
                         onMouseLeave={handleTileLeave}
                       >
-                        {/* Winning price - prominent */}
-                        {slot.winningPrice ? (
-                          <div className="text-xl font-extrabold text-gray-900 text-pink-500 mb-0">
-                            ${slot.winningPrice}
+                        {/* Header with time */}
+                        <div className="bg-gradient-to-r from-gray-700 to-gray-800 px-2 py-1 text-center">
+                          <div className="text-[10px] font-bold text-white">{slot.label}</div>
+                          <div className="text-[8px] text-gray-300">
+                            {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </div>
-                        ) : (
-                          <div className="text-lg font-extrabold text-gray-400 mb-0">
-                            -
+                        </div>
+
+                        {/* Pricing Section */}
+                        <div className="bg-gradient-to-br from-blue-400 to-blue-300 px-2 py-2 border-b border-dotted border-yellow-900">
+                          <div className="text-[7px] uppercase font-light text-gray-900 mb-0.5 tracking-wide">Price</div>
+                          {slot.winningPrice ? (
+                            <div className="text-xl font-extrabold text-gray-900">
+                              ${slot.winningPrice}
+                            </div>
+                          ) : (
+                            <div className="text-base font-extrabold text-gray-400">
+                              -
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Capacity Section */}
+                        {slot.capacity && (
+                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 px-2 py-2 border-b border-gray-200">
+                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">Capacity</div>
+                            <div className="flex items-baseline justify-center gap-0.5">
+                              <span className="text-sm font-extrabold text-gray-700">{slot.capacity.allocated}</span>
+                              <span className="text-[8px] text-gray-500 font-medium">/</span>
+                              <span className="text-xs font-semibold text-gray-600">{slot.capacity.max}</span>
+                            </div>
+                            {/* Capacity bar */}
+                            <div className="mt-1 h-1 bg-gray-300 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-gradient-to-r from-gray-600 to-gray-700"
+                                style={{
+                                  width: `${Math.min((slot.capacity.allocated / slot.capacity.max) * 100, 100)}%`
+                                }}
+                              />
+                            </div>
                           </div>
                         )}
-                        {/* Hour label */}
-                        <div className="text-xs font-semibold text-gray-700 mt-1">{slot.label}</div>
-                        {/* Date */}
-                        <div className="text-[10px] text-gray-500 mt-0.5">
-                          {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </div>
+
+                        {/* Revenue Section */}
+                        {slot.capacity && slot.winningPrice && (
+                          <div className="bg-gradient-to-br from-zinc-50 to-silver-900 px-2 py-2 border-b border-gray-200">
+                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">Revenue Max</div>
+                            <div className="flex items-baseline justify-center gap-0.5">
+                              <span className="text-md font-extrabold text-red-400">
+                                ${(slot.capacity.max * slot.winningPrice).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Event Section */}
+                        {slot.eventNames && slot.eventNames.length > 0 && (
+                          <div className="bg-gradient-to-br from-purple-50 to-purple-100 px-2 py-2">
+                            <div className="text-[7px] uppercase font-light text-gray-400 mb-0.5 tracking-wide">
+                              {slot.eventNames.length > 1 ? 'Events' : 'Event'}
+                            </div>
+                            <div className="text-[9px] font-semibold text-purple-700 text-center space-y-0.5">
+                              {slot.eventNames.map((eventName, eventIdx) => (
+                                <div key={eventIdx} className="line-clamp-1">
+                                  {eventName}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -927,12 +1152,30 @@ export default function TimelineTilesPage() {
                     return null;
                   }
 
+                  const isLayerEnabled = enabledLayers.has(layer.id);
+
                   return (
                   <div key={layer.id}>
-                    {/* Layer label */}
-                    <div className="text-xs font-medium text-gray-700 mb-1" title={layer.name}>
-                      <span className="font-semibold">{layer.name}</span>
-                      <span className="text-[10px] text-gray-500 ml-2">Priority: {layer.priority}</span>
+                    {/* Layer label with toggle */}
+                    <div className="flex items-center gap-2 mb-1">
+                      {/* Toggle switch */}
+                      <button
+                        onClick={() => toggleLayer(layer.id)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                          isLayerEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                        }`}
+                        title={isLayerEnabled ? 'Click to disable this layer' : 'Click to enable this layer'}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            isLayerEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                      <div className="text-xs font-medium text-gray-700" title={layer.name}>
+                        <span className="font-semibold">{layer.name}</span>
+                        <span className="text-[10px] text-gray-500 ml-2">Priority: {layer.priority}</span>
+                      </div>
                     </div>
 
                     {/* Tiles for each time slot in a grid */}
@@ -948,22 +1191,32 @@ export default function TimelineTilesPage() {
                           const layerData = slot.layers.find(l => l.layer.id === layer.id);
                           const isWinner = slot.winningLayer?.id === layer.id;
                           const isHovered = hoveredSlot?.slotIdx === slotIdx && hoveredSlot?.layerId === layer.id;
-
                           const isSelected = selectedSlot?.slotIdx === slotIdx && selectedSlot?.layerId === layer.id;
+
+                          // Determine if this tile should be grayed out (active but layer is disabled)
+                          const isDisabled = !isLayerEnabled && layerData?.isActive;
 
                           return (
                             <div
                               key={slotIdx}
-                              onClick={() => layerData?.isActive && handleTileClick(slotIdx, layer.id, slot)}
+                              onClick={() => layerData?.isActive && isLayerEnabled && handleTileClick(slotIdx, layer.id, slot)}
                               onMouseEnter={() => handleTileHover(slotIdx, layer.id)}
                               onMouseLeave={handleTileLeave}
-                              title={layerData?.isActive ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})` : 'Not active for this time'}
+                              title={
+                                isDisabled
+                                  ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority}) - DISABLED`
+                                  : layerData?.isActive
+                                    ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})`
+                                    : 'Not active for this time'
+                              }
                               className={`rounded-lg transition-all cursor-pointer ${
-                                layerData?.isActive
-                                  ? isWinner
-                                    ? `${layer.color} border-black shadow-xl`
-                                    : `${layer.color} border-gray-400 opacity-70 shadow-sm`
-                                  : 'bg-gray-100 border-gray-300 opacity-30'
+                                isDisabled
+                                  ? 'bg-gray-400 border-gray-500 opacity-40'
+                                  : layerData?.isActive
+                                    ? isWinner
+                                      ? `${layer.color} border-black shadow-xl`
+                                      : `${layer.color} border-gray-400 opacity-70 shadow-sm`
+                                    : 'bg-gray-100 border-gray-300 opacity-30'
                               }`}
                               style={{
                                 height: '60px',
@@ -979,8 +1232,36 @@ export default function TimelineTilesPage() {
                               }}
                             >
                               {layerData?.isActive && layerData.price !== null && (
-                                <div className="text-white font-bold text-sm drop-shadow-md">
-                                  ${layerData.price}/hr
+                                <div className="flex flex-col items-center justify-center gap-0.5 px-1">
+                                  {/* Price */}
+                                  <div className={`font-bold text-sm drop-shadow-md ${
+                                    isDisabled ? 'text-gray-600 line-through' : 'text-white'
+                                  }`}>
+                                    ${layerData.price}
+                                  </div>
+                                  {/* Capacity */}
+                                  {slot.capacity && (
+                                    <div className="flex flex-col items-center gap-0.5 w-full">
+                                      <div className={`text-[8px] font-semibold flex items-baseline gap-0.5 ${
+                                        isDisabled ? 'text-gray-500' : 'text-white'
+                                      }`}>
+                                        <span className="opacity-90">{slot.capacity.allocated}</span>
+                                        <span className="opacity-60 text-[7px]">/</span>
+                                        <span className="opacity-70 text-[7px]">{slot.capacity.max}</span>
+                                      </div>
+                                      {/* Mini capacity bar */}
+                                      {!isDisabled && (
+                                        <div className="w-full h-0.5 bg-white bg-opacity-30 rounded-full overflow-hidden">
+                                          <div
+                                            className="h-full bg-white"
+                                            style={{
+                                              width: `${Math.min((slot.capacity.allocated / slot.capacity.max) * 100, 100)}%`
+                                            }}
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>

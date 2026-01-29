@@ -16,6 +16,14 @@ interface SubLocation {
   defaultHourlyRate?: number;
 }
 
+interface Venue {
+  _id: string;
+  name: string;
+  venueType?: string;
+  capacity?: number;
+  description?: string;
+}
+
 interface Event {
   _id: string;
   name: string;
@@ -29,6 +37,10 @@ interface Event {
 }
 
 interface PricingFiltersProps {
+  // View mode toggle (NEW)
+  viewMode?: 'sublocation' | 'venue';
+  onViewModeChange?: (mode: 'sublocation' | 'venue') => void;
+
   // Location/SubLocation/Event selection
   selectedLocation: string;
   selectedSubLocation: string;
@@ -36,6 +48,11 @@ interface PricingFiltersProps {
   onLocationChange: (locationId: string) => void;
   onSubLocationChange: (subLocationId: string) => void;
   onEventChange: (eventId: string) => void;
+
+  // Venue selection (NEW - for venue mode)
+  selectedVenue?: string;
+  onVenueChange?: (venueId: string) => void;
+  autoDetectedSubLocation?: string | null;
 
   // Duration selection
   selectedDuration: number;
@@ -56,12 +73,17 @@ interface PricingFiltersProps {
 }
 
 export default function PricingFilters({
+  viewMode = 'sublocation',
+  onViewModeChange,
   selectedLocation,
   selectedSubLocation,
   selectedEventId,
   onLocationChange,
   onSubLocationChange,
   onEventChange,
+  selectedVenue,
+  onVenueChange,
+  autoDetectedSubLocation,
   selectedDuration,
   onDurationChange,
   useDurationContext,
@@ -74,12 +96,22 @@ export default function PricingFilters({
 }: PricingFiltersProps) {
   const [locations, setLocations] = useState<Location[]>([]);
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
 
-  // Fetch locations on mount
+  // Fetch locations on mount (sublocation mode)
   useEffect(() => {
-    fetchLocations();
-  }, []);
+    if (viewMode === 'sublocation') {
+      fetchLocations();
+    }
+  }, [viewMode]);
+
+  // Fetch venues on mount (venue mode)
+  useEffect(() => {
+    if (viewMode === 'venue') {
+      fetchVenues();
+    }
+  }, [viewMode]);
 
   // Fetch sublocations when location changes
   useEffect(() => {
@@ -116,6 +148,16 @@ export default function PricingFilters({
       setSublocations(data);
     } catch (error) {
       console.error('Failed to fetch sublocations:', error);
+    }
+  };
+
+  const fetchVenues = async () => {
+    try {
+      const res = await fetch('/api/venues');
+      const data = await res.json();
+      setVenues(data);
+    } catch (error) {
+      console.error('Failed to fetch venues:', error);
     }
   };
 
@@ -167,45 +209,118 @@ export default function PricingFilters({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-        {/* Location */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Location
-          </label>
-          <select
-            value={selectedLocation}
-            onChange={(e) => onLocationChange(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+      {/* View Mode Toggle (only show if onViewModeChange is provided) */}
+      {onViewModeChange && (
+        <div className="flex gap-2 mb-6 pb-4 border-b border-gray-200">
+          <button
+            onClick={() => onViewModeChange('sublocation')}
+            className={`flex-1 px-4 py-3 text-sm font-semibold rounded-lg transition-all duration-200 ${
+              viewMode === 'sublocation'
+                ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
           >
-            <option value="">Select location...</option>
-            {locations.map((loc) => (
-              <option key={loc._id} value={loc._id}>
-                {loc.name}
-              </option>
-            ))}
-          </select>
+            📍 SubLocation View
+          </button>
+          <button
+            onClick={() => onViewModeChange('venue')}
+            className={`flex-1 px-4 py-3 text-sm font-semibold rounded-lg transition-all duration-200 ${
+              viewMode === 'venue'
+                ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            🏢 Venue View
+          </button>
         </div>
+      )}
 
-        {/* Sub-Location */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Sub-Location
-          </label>
-          <select
-            value={selectedSubLocation}
-            onChange={(e) => onSubLocationChange(e.target.value)}
-            disabled={!selectedLocation}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-          >
-            <option value="">Select sub-location...</option>
-            {sublocations.map((subloc) => (
-              <option key={subloc._id} value={subloc._id}>
-                {subloc.label}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        {/* SubLocation Mode: Location → SubLocation */}
+        {viewMode === 'sublocation' && (
+          <>
+            {/* Location */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Location
+              </label>
+              <select
+                value={selectedLocation}
+                onChange={(e) => onLocationChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+              >
+                <option value="">Select location...</option>
+                {locations.map((loc) => (
+                  <option key={loc._id} value={loc._id}>
+                    {loc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Sub-Location */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Sub-Location
+              </label>
+              <select
+                value={selectedSubLocation}
+                onChange={(e) => onSubLocationChange(e.target.value)}
+                disabled={!selectedLocation}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
+              >
+                <option value="">Select sub-location...</option>
+                {sublocations.map((subloc) => (
+                  <option key={subloc._id} value={subloc._id}>
+                    {subloc.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+
+        {/* Venue Mode: Direct Venue Selection */}
+        {viewMode === 'venue' && onVenueChange && (
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Select Venue
+            </label>
+            <select
+              value={selectedVenue || ''}
+              onChange={(e) => onVenueChange(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+            >
+              <option value="">Choose a venue...</option>
+              {venues.map((venue) => (
+                <option key={venue._id} value={venue._id}>
+                  {venue.name}
+                  {venue.venueType && ` (${venue.venueType})`}
+                  {venue.capacity && ` - Capacity: ${venue.capacity}`}
+                </option>
+              ))}
+            </select>
+
+            {/* Auto-detected sublocation message */}
+            {autoDetectedSubLocation && (
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-green-700 font-medium">
+                  ✓ Auto-detected: Assigned to SubLocation
+                </span>
+              </div>
+            )}
+
+            {selectedVenue && !autoDetectedSubLocation && (
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                <span className="text-yellow-700 font-medium">
+                  ⚠ Not assigned to any sublocation - Pricing features unavailable
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Event */}
         <div>

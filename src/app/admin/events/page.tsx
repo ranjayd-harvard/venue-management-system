@@ -20,6 +20,7 @@ interface Event {
   gracePeriodAfter?: number;
   attendees?: number;
   defaultHourlyRate?: number;
+  customPriority?: number;
   timezone?: string;
   isActive: boolean;
   customer?: { _id: string; name: string };
@@ -371,6 +372,19 @@ export default function AdminEventsPage() {
                           <p className="font-semibold text-gray-900">${event.defaultHourlyRate}/hr</p>
                         </div>
                       )}
+                      <div>
+                        <span className="text-gray-500">Priority:</span>
+                        <div className="flex items-center gap-2">
+                          <p className={`font-semibold ${event.customPriority ? 'text-purple-700' : 'text-gray-600'}`}>
+                            {event.customPriority || 4900}
+                          </p>
+                          {event.customPriority && (
+                            <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full font-medium">
+                              Custom
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Grace Periods - Always show */}
