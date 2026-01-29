@@ -250,6 +250,55 @@ export interface PriorityConfig {
   updatedAt: Date;
 }
 
+// ===== PRICING SCENARIO TYPES =====
+
+export interface PricingScenarioConfig {
+  // Layer toggles (which pricing layers are enabled)
+  enabledLayers: string[]; // Array of layer IDs (ratesheet IDs or 'sublocation-default', 'location-default', etc.)
+
+  // Filter settings
+  selectedDuration: number; // 7, 12, 24, 48 hours
+  isEventBooking: boolean;
+
+  // Time window
+  viewStart: Date;
+  viewEnd: Date;
+  rangeStart: Date;
+  rangeEnd: Date;
+
+  // Duration context (optional)
+  useDurationContext?: boolean;
+  bookingStartTime?: Date;
+
+  // Pricing adjustments (placeholders for future use)
+  pricingCoefficientsUp?: number;
+  pricingCoefficientsDown?: number;
+  bias?: number;
+}
+
+export interface PricingScenario {
+  _id?: ObjectId;
+  name: string;
+  description?: string;
+
+  // Hierarchy scope
+  appliesTo: {
+    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    entityId: ObjectId;
+  };
+
+  // Saved simulation state
+  config: PricingScenarioConfig;
+
+  // Status and metadata
+  isActive: boolean;
+  createdBy?: string; // Future: user tracking
+  tags?: string[]; // Future: categorization
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ===== CAPACITY SHEET TYPES =====
 // Re-export from CapacitySheet model for convenience
 

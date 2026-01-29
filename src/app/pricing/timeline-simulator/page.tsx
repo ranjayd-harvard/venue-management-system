@@ -13,7 +13,9 @@ import {
   ChevronUp
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
-import PricingFilters from '@/components/PricingFilters';
+import PricingFiltersModal from '@/components/PricingFiltersModal';
+import { Settings, Save, FolderOpen, X, Zap, FileText } from 'lucide-react';
+import { PricingScenario } from '@/models/types';
 
 interface TimeWindow {
   windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
@@ -168,6 +170,24 @@ export default function TimelineSimulatorPage() {
   // Layer enable/disable state (tracks which layers are enabled)
   const [enabledLayers, setEnabledLayers] = useState<Set<string>>(new Set());
 
+  // Pricing coefficients (placeholders for future use)
+  const [pricingCoefficientsUp, setPricingCoefficientsUp] = useState<number | undefined>(undefined);
+  const [pricingCoefficientsDown, setPricingCoefficientsDown] = useState<number | undefined>(undefined);
+  const [bias, setBias] = useState<number | undefined>(undefined);
+
+  // Modal state
+  const [isFiltersModalOpen, setIsFiltersModalOpen] = useState(false);
+  const [isSaveScenarioModalOpen, setIsSaveScenarioModalOpen] = useState(false);
+  const [saveScenarioName, setSaveScenarioName] = useState('');
+  const [saveScenarioDescription, setSaveScenarioDescription] = useState('');
+
+  // Scenario state
+  const [scenarios, setScenarios] = useState<PricingScenario[]>([]);
+  const [currentScenarioId, setCurrentScenarioId] = useState<string | null>(null);
+
+  // Mode toggle: 'simulation' or 'planning'
+  const [mode, setMode] = useState<'simulation' | 'planning'>('simulation');
+
   useEffect(() => {
     fetchPricingConfig();
   }, []);
@@ -244,6 +264,13 @@ export default function TimelineSimulatorPage() {
     }
   }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent]);
 
+  // Load scenarios when sublocation changes
+  useEffect(() => {
+    if (selectedSubLocation) {
+      loadScenarios();
+    }
+  }, [selectedSubLocation]);
+
   const fetchPricingConfig = async () => {
     try {
       const response = await fetch('/api/pricing/config');
@@ -252,6 +279,135 @@ export default function TimelineSimulatorPage() {
     } catch (error) {
       console.error('Failed to fetch pricing config:', error);
     }
+  };
+
+  // Load scenarios for current sublocation
+  const loadScenarios = async () => {
+    if (!selectedSubLocation) return;
+
+    try {
+      const url = new URL('/api/pricing-scenarios', window.location.origin);
+      url.searchParams.set('subLocationId', selectedSubLocation);
+      url.searchParams.set('resolveHierarchy', 'true');
+
+      const response = await fetch(url.toString());
+      if (response.ok) {
+        const data = await response.json();
+        setScenarios(data.filter((s: PricingScenario) => s.isActive));
+      }
+    } catch (error) {
+      console.error('Failed to load scenarios:', error);
+    }
+  };
+
+  // Save current state as a scenario
+  const saveScenario = async () => {
+    if (!selectedSubLocation) {
+      alert('Please select a sublocation first');
+      return;
+    }
+
+    // Open the modal instead of using prompt
+    setIsSaveScenarioModalOpen(true);
+  };
+
+  // Handle actual scenario save from modal
+  const handleSaveScenarioSubmit = async () => {
+    if (!saveScenarioName.trim()) {
+      alert('Please enter a scenario name');
+      return;
+    }
+
+    try {
+      const config: any = {
+        enabledLayers: Array.from(enabledLayers),
+        selectedDuration,
+        isEventBooking,
+        viewStart: viewStart.toISOString(),
+        viewEnd: viewEnd.toISOString(),
+        rangeStart: rangeStart.toISOString(),
+        rangeEnd: rangeEnd.toISOString(),
+        useDurationContext,
+        bookingStartTime: bookingStartTime.toISOString(),
+      };
+
+      // Add pricing coefficients if they're set
+      if (pricingCoefficientsUp !== undefined) {
+        config.pricingCoefficientsUp = pricingCoefficientsUp;
+      }
+      if (pricingCoefficientsDown !== undefined) {
+        config.pricingCoefficientsDown = pricingCoefficientsDown;
+      }
+      if (bias !== undefined) {
+        config.bias = bias;
+      }
+
+      const response = await fetch('/api/pricing-scenarios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: saveScenarioName,
+          description: saveScenarioDescription || undefined,
+          appliesTo: {
+            level: 'SUBLOCATION',
+            entityId: selectedSubLocation,
+          },
+          config,
+          isActive: true,
+        }),
+      });
+
+      if (response.ok) {
+        const scenario = await response.json();
+        setCurrentScenarioId(scenario._id);
+        alert(`Scenario "${saveScenarioName}" saved successfully!`);
+        loadScenarios(); // Reload scenarios list
+
+        // Close modal and reset form
+        setIsSaveScenarioModalOpen(false);
+        setSaveScenarioName('');
+        setSaveScenarioDescription('');
+      } else {
+        const error = await response.json();
+        alert(`Failed to save scenario: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Failed to save scenario:', error);
+      alert('Failed to save scenario');
+    }
+  };
+
+  // Load a scenario
+  const loadScenario = (scenario: PricingScenario) => {
+    const { config } = scenario;
+
+    setEnabledLayers(new Set(config.enabledLayers));
+    setSelectedDuration(config.selectedDuration);
+    setIsEventBooking(config.isEventBooking);
+    setViewStart(new Date(config.viewStart));
+    setViewEnd(new Date(config.viewEnd));
+    setRangeStart(new Date(config.rangeStart));
+    setRangeEnd(new Date(config.rangeEnd));
+    setUseDurationContext(config.useDurationContext || false);
+    setBookingStartTime(config.bookingStartTime ? new Date(config.bookingStartTime) : new Date(config.viewStart));
+
+    // Restore pricing coefficients if they exist
+    setPricingCoefficientsUp(config.pricingCoefficientsUp);
+    setPricingCoefficientsDown(config.pricingCoefficientsDown);
+    setBias(config.bias);
+
+    setCurrentScenarioId(scenario._id?.toString() || null);
+    alert(`Loaded scenario: ${scenario.name}`);
+  };
+
+  // Clear/reset current scenario
+  const clearScenario = () => {
+    setCurrentScenarioId(null);
+    // Reset to default state
+    setEnabledLayers(new Set());
+    setPricingCoefficientsUp(undefined);
+    setPricingCoefficientsDown(undefined);
+    setBias(undefined);
   };
 
   const fetchLocationDetails = async (locationId: string) => {
@@ -739,7 +895,12 @@ export default function TimelineSimulatorPage() {
       const endTime = new Date(startTime);
       endTime.setHours(endTime.getHours() + 1);
 
-      const requestBody = {
+      const requestBody: {
+        subLocationId: string;
+        startTime: string;
+        endTime: string;
+        eventId?: string;
+      } = {
         subLocationId: selectedSubLocation,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
@@ -809,51 +970,174 @@ export default function TimelineSimulatorPage() {
   }, [ratesheets, allLayers.length, timeSlots.length]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 overflow-x-hidden">
-      <div className="max-w-[1800px] mx-auto overflow-x-hidden">
-        {/* Header */}
-        <div className="mb-6">
-          <div className="flex items-start justify-between">
+    <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-indigo-50 overflow-x-hidden">
+      {/* Header - Event Admin Style */}
+      <div className="bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-2xl">
+        <div className="max-w-[1800px] mx-auto px-8 py-8">
+          <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                Pricing Timeline Simulator
-              </h1>
-              <p className="text-gray-600">
-                Visual waterfall showing pricing hierarchy and winning rates for each hour
-              </p>
+              <h1 className="text-4xl font-bold mb-2">Pricing Simulator</h1>
+              <p className="text-pink-100 font-thin">Visual waterfall showing pricing hierarchy and winning rates for each hour</p>
+
+              {/* Selected Values Display */}
+              {selectedSubLocation && (
+                <div className="flex flex-wrap items-center gap-2 text-sm mt-4">
+                  <span className="font-semibold text-pink-100">Viewing:</span>
+                  {currentLocation && (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                      📍 {currentLocation.name}
+                    </span>
+                  )}
+                  {currentSubLocation && (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                      🏢 {currentSubLocation.label}
+                    </span>
+                  )}
+                  {currentEvent && (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                      🗓️ {currentEvent.name}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                    ⏱️ {selectedDuration}h
+                  </span>
+                  {isEventBooking && (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                      🎫 Event Booking
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="bg-gray-100 rounded-lg p-3 text-xs space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Local Time:</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toLocaleString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                  })}
-                </span>
+
+            <div className="flex flex-col gap-3 items-end">
+              {/* Mode Toggle */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-xl p-1 flex gap-1 border border-white/20">
+                <button
+                  onClick={() => setMode('simulation')}
+                  className={`px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 ${
+                    mode === 'simulation'
+                      ? 'bg-white text-purple-600 shadow-md'
+                      : 'text-white hover:bg-white/10'
+                  }`}
+                >
+                  <Zap className="w-4 h-4" />
+                  Simulation
+                </button>
+                <button
+                  onClick={() => setMode('planning')}
+                  className={`px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 ${
+                    mode === 'planning'
+                      ? 'bg-white text-purple-600 shadow-md'
+                      : 'text-white hover:bg-white/10'
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  Planning
+                </button>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Server (UTC):</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toUTCString().slice(0, -4)}
-                </span>
+
+              <div className="flex gap-3">
+                {/* Planning Mode: Show scenario controls */}
+                {mode === 'planning' && selectedSubLocation && (
+                  <>
+                    {/* Save Scenario Button */}
+                    <button
+                      onClick={saveScenario}
+                      className="bg-white/20 backdrop-blur-sm border border-white/30 text-white px-6 py-3 rounded-xl font-semibold hover:bg-white/30 transition-all shadow-lg flex items-center gap-2"
+                    >
+                      <Save className="w-5 h-5" />
+                      Save Scenario
+                    </button>
+
+                    {/* Load Scenario Dropdown */}
+                    {scenarios.length > 0 && (
+                      <div className="relative group">
+                        <select
+                          onChange={(e) => {
+                            const scenario = scenarios.find(s => s._id?.toString() === e.target.value);
+                            if (scenario) loadScenario(scenario);
+                          }}
+                          value={currentScenarioId || ''}
+                          className="bg-white/20 backdrop-blur-sm border border-white/30 text-white px-6 py-3 pl-12 pr-4 rounded-xl font-semibold hover:bg-white/30 transition-all shadow-lg appearance-none cursor-pointer"
+                          style={{
+                            backgroundImage: 'none',
+                          }}
+                        >
+                          <option value="" className="bg-purple-600 text-white">📁 Load Scenario...</option>
+                          {scenarios.map((scenario) => (
+                            <option
+                              key={scenario._id?.toString()}
+                              value={scenario._id?.toString()}
+                              className="bg-purple-600 text-white"
+                            >
+                              {scenario.name}
+                            </option>
+                          ))}
+                        </select>
+                        <FolderOpen className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-white" />
+                        {currentScenarioId && (
+                          <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-purple-600"></div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Clear Scenario Button - Only show when a scenario is loaded */}
+                    {currentScenarioId && (
+                      <button
+                        onClick={clearScenario}
+                        className="bg-red-500/20 backdrop-blur-sm border border-red-400/30 text-white px-4 py-3 rounded-xl font-semibold hover:bg-red-500/30 transition-all shadow-lg flex items-center gap-2"
+                        title="Clear loaded scenario"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* Filters button - always visible */}
+                <button
+                  onClick={() => setIsFiltersModalOpen(true)}
+                  className="bg-white text-pink-600 px-6 py-3 rounded-xl font-semibold hover:bg-pink-50 transition-all shadow-lg flex items-center gap-2"
+                >
+                  <Settings className="w-5 h-5" />
+                  Filters
+                </button>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Timezone:</span>
-                <span className="text-gray-900 font-mono">
-                  {Intl.DateTimeFormat().resolvedOptions().timeZone}
-                </span>
+
+              {/* Timezone Info - Compact */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-lg px-3 py-2 text-xs space-y-1 border border-white/20">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-3 h-3" />
+                  <span className="font-medium text-pink-100">Local:</span>
+                  <span className="text-white font-mono">
+                    {new Date().toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: true
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-pink-100">TZ:</span>
+                  <span className="text-white font-mono text-[10px]">
+                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Filters */}
-        <PricingFilters
+      <div className="max-w-[1800px] mx-auto px-8 py-8">
+
+        {/* Filters Modal */}
+        <PricingFiltersModal
+          isOpen={isFiltersModalOpen}
+          onClose={() => setIsFiltersModalOpen(false)}
           selectedLocation={selectedLocation}
           selectedSubLocation={selectedSubLocation}
           selectedEventId={selectedEventId}
@@ -868,8 +1152,92 @@ export default function TimelineSimulatorPage() {
           onBookingStartTimeChange={setBookingStartTime}
           isEventBooking={isEventBooking}
           onIsEventBookingChange={setIsEventBooking}
+          pricingCoefficientsUp={pricingCoefficientsUp}
+          pricingCoefficientsDown={pricingCoefficientsDown}
+          bias={bias}
+          onPricingCoefficientsUpChange={setPricingCoefficientsUp}
+          onPricingCoefficientsDownChange={setPricingCoefficientsDown}
+          onBiasChange={setBias}
           eventCount={counts.event}
         />
+
+        {/* Save Scenario Modal */}
+        {isSaveScenarioModalOpen && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-pink-600 to-purple-600 px-6 py-4">
+                <h2 className="text-2xl font-bold text-white">Save Scenario</h2>
+                <p className="text-pink-100 text-sm mt-1">Save current simulation configuration</p>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Scenario Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={saveScenarioName}
+                    onChange={(e) => setSaveScenarioName(e.target.value)}
+                    placeholder="e.g., Peak Season Pricing"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Description (Optional)
+                  </label>
+                  <textarea
+                    value={saveScenarioDescription}
+                    onChange={(e) => setSaveScenarioDescription(e.target.value)}
+                    placeholder="Brief description of this scenario..."
+                    rows={3}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all resize-none"
+                  />
+                </div>
+
+                {/* Summary of what will be saved */}
+                <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-purple-800 mb-2">What will be saved:</p>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-purple-700">
+                    <div>✓ {enabledLayers.size} enabled layers</div>
+                    <div>✓ {selectedDuration}h duration</div>
+                    <div>✓ Time window settings</div>
+                    <div>✓ {isEventBooking ? 'Event' : 'Standard'} booking</div>
+                    {(pricingCoefficientsUp !== undefined || pricingCoefficientsDown !== undefined || bias !== undefined) && (
+                      <div className="col-span-2">✓ Pricing coefficients</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="bg-gray-50 px-6 py-4 flex justify-end gap-3 border-t border-gray-200">
+                <button
+                  onClick={() => {
+                    setIsSaveScenarioModalOpen(false);
+                    setSaveScenarioName('');
+                    setSaveScenarioDescription('');
+                  }}
+                  className="px-6 py-2 rounded-xl font-semibold text-gray-700 hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveScenarioSubmit}
+                  disabled={!saveScenarioName.trim()}
+                  className="px-6 py-2 bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-xl font-semibold hover:from-pink-700 hover:to-purple-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save Scenario
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div className="flex items-center justify-center h-64">
@@ -879,83 +1247,107 @@ export default function TimelineSimulatorPage() {
 
         {!loading && selectedSubLocation && (
           <>
-            {/* Timeline Range Slider */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-gray-900">Selected Interval</h2>
-                <div className="text-sm text-gray-600 font-medium">
-                   {formatDateTime(viewStart)} - {formatDateTime(viewEnd)} {' '}<span className="text-gray-500 font-light">({selectedDuration}h duration)</span>
+            {/* Apple-Inspired Timeline Section */}
+            <div className="relative overflow-hidden rounded-3xl mb-6 mb-2" style={{
+              background: 'linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(248,250,252,0.95) 100%)',
+              backdropFilter: 'blur(20px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
+              border: '1px solid rgba(255,255,255,0.8)'
+            }}>
+              {/* Premium Header with Glassmorphism */}
+              <div className="relative px-8 pt-8 pb-6">
+                {/* Total Cost - Hero Section */}
+                <div className="text-center mb-8">
+                  <div className="inline-flex items-baseline gap-2 mb-2">
+                    <span className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Cost</span>
+                  </div>
+                  <div className="flex items-center justify-center gap-3">
+                    <div className="text-8xl font-semibold tracking-tight bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 bg-clip-text text-transparent">
+                      ${getTotalCost().toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="mt-3 text-sm text-gray-500 font-medium">
+                    {getTotalDuration()}
+                  </div>
                 </div>
-              </div>
 
-              <div className="relative bg-white rounded-lg px-4 py-6 border border-gray-200">
-                {/* Timeline track container */}
-                <div className="relative h-16 mb-8">
-                  {/* Time tick marks */}
-                  <div className="absolute inset-x-0 top-0 flex justify-between">
-                    {Array.from({ length: 11 }).map((_, i) => {
-                      const tickMs = rangeStart.getTime() + (i / 10) * (rangeEnd.getTime() - rangeStart.getTime());
+                {/* Start and End Times - Minimal Pills */}
+                <div className="flex items-center justify-center gap-3 mb-8">
+                  <div className="px-4 py-2 rounded-full bg-white/60 backdrop-blur-sm border border-gray-200/50 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                      <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Start</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {viewStart.toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        })}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="h-px w-12 bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+
+                  <div className="px-4 py-2 rounded-full bg-white/60 backdrop-blur-sm border border-gray-200/50 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                      <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">End</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {viewEnd.toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Minimalist Timeline Slider */}
+                <div className="relative px-6">
+                  {/* Date markers - Above track */}
+                  <div className="flex justify-between mb-3 px-1">
+                    {Array.from({ length: 5 }).map((_, i) => {
+                      const tickMs = rangeStart.getTime() + (i / 4) * (rangeEnd.getTime() - rangeStart.getTime());
                       const tickDate = new Date(tickMs);
                       return (
-                        <div key={i} className="flex flex-col items-center">
-                          <div className="w-px h-2 bg-gray-400" />
-                          <div className="text-[9px] text-gray-500 mt-1 font-medium">
+                        <div key={i} className="text-center">
+                          <div className="text-[10px] font-semibold text-gray-900">
                             {tickDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </div>
+                          <div className="text-[9px] text-gray-400 mt-0.5">
+                            {tickDate.toLocaleDateString('en-US', { weekday: 'short' })}
                           </div>
                         </div>
                       );
                     })}
                   </div>
 
-                  {/* Main slider track */}
-                  <div className="absolute inset-x-0 top-8 h-10">
-                    <div className="relative w-full h-full bg-gray-100 rounded-sm border-t-2 border-b-2 border-gray-300">
-                      {/* Unselected area - hatched pattern */}
-                      <div
-                        className="absolute h-full bg-gray-200"
-                        style={{
-                          left: 0,
-                          width: '100%',
-                          backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0,0,0,0.04) 6px, rgba(0,0,0,0.04) 12px)'
-                        }}
-                      />
+                  {/* Clean track */}
+                  <div className="relative h-2 group">
+                    {/* Base track with subtle gradient */}
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-r from-gray-200/80 via-gray-100/80 to-gray-200/80 shadow-inner"></div>
 
-                      {/* Selected interval - solid red block */}
-                      <div
-                        className="absolute h-full shadow-lg"
-                        style={{
-                          left: `${getViewWindowPosition().left}%`,
-                          width: `${getViewWindowPosition().width}%`,
-                          background: '#e616c6ff',
-                          border: '2px solid white',
-                          boxSizing: 'border-box'
-                        }}
-                      >
-                        {/* Single combined label below the interval */}
-                        <div
-                          className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 whitespace-nowrap text-[11px] font-semibold text-gray-800 bg-white px-3 py-1 rounded border border-gray-400 shadow-md"
-                          style={{ zIndex: 20 }}
-                        >
-                          {viewStart.toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                            hour12: true
-                          })}
-                          {' – '}
-                          {viewEnd.toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                            hour12: true
-                          })}
-                        </div>
-                      </div>
+                    {/* Active selection with premium gradient */}
+                    <div
+                      className="absolute h-full rounded-full transition-all duration-300 group-hover:h-3 group-hover:-mt-0.5"
+                      style={{
+                        left: `${getViewWindowPosition().left}%`,
+                        width: `${getViewWindowPosition().width}%`,
+                        background: 'linear-gradient(90deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%)',
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3), 0 0 0 4px rgba(139, 92, 246, 0.1)'
+                      }}
+                    >
+                      {/* Subtle shine effect */}
+                      <div className="absolute inset-0 rounded-full bg-gradient-to-b from-white/40 to-transparent"></div>
                     </div>
 
-                    {/* Invisible range input for dragging */}
+                    {/* Invisible drag handle */}
                     <input
                       type="range"
                       min="0"
@@ -963,61 +1355,21 @@ export default function TimelineSimulatorPage() {
                       step="0.1"
                       value={getViewWindowPosition().left}
                       onChange={(e) => handleStartTimeChange(parseFloat(e.target.value))}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize"
-                      style={{ zIndex: 11 }}
+                      className="absolute inset-0 w-full h-8 -mt-3 opacity-0 cursor-grab active:cursor-grabbing"
+                      style={{ zIndex: 10 }}
                     />
                   </div>
-                </div>
 
-                {/* Selected interval info below slider */}
-                {/* <div className="text-center text-sm text-gray-700 mt-2">
-                  <span className="font-medium">Selected Interval:</span>{' '}
-                  <span className="text-gray-900 font-semibold">
-                    {formatDateTime(viewStart)} – {formatDateTime(viewEnd)}
-                  </span>
-                  {' '}
-                  <span className="text-gray-500">({selectedDuration}h duration)</span>
-                </div> */}
-              </div>
-
-              {/* START, Total Cost, END section */}
-              <div className="flex items-stretch justify-between gap-4">
-                <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-lg px-3 py-2 shadow-md border border-blue-700 flex-shrink-0 flex flex-col justify-center">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide opacity-90">Start</div>
-                  <div className="text-xs font-bold">
-                    {viewStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                  </div>
-                  <div className="text-[10px] font-medium">
-                    {viewStart.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
-                  </div>
-                </div>
-
-                {/* Total cost - full width between START and END */}
-                <div className="bg-gradient-to-r from-gray-500 to-gray-900 rounded-lg px-4 py-2 flex-1 flex flex-col justify-center shadow-md">
-                  <div className="text-center">
-                    <div className="text-xs font-medium text-white uppercase tracking-wide opacity-90">Total Cost</div>
-                    <div className="text-3xl font-bold text-white">
-                      ${getTotalCost()}
-                    </div>
-                    <div className="text-[10px] text-white mt-1 hidden">
-                      {timeSlots.map(s => s.winningPrice ? `$${s.winningPrice}` : '$0').join(' + ')} = ${getTotalCost()}
-                    </div>
-                    <div className="text-xs text-white opacity-90 mt-1">
-                      Duration: {getTotalDuration()}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-lg px-3 py-2 shadow-md border border-purple-700 flex-shrink-0 flex flex-col justify-center">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide opacity-90">End</div>
-                  <div className="text-xs font-bold">
-                    {viewEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                  </div>
-                  <div className="text-[10px] font-medium">
-                    {viewEnd.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
+                  {/* Subtle tick marks below */}
+                  <div className="flex justify-between mt-2 px-1">
+                    {Array.from({ length: 11 }).map((_, i) => (
+                      <div key={i} className="w-px h-1.5 bg-gray-300/60 rounded-full"></div>
+                    ))}
                   </div>
                 </div>
               </div>
+
+
 
               {/* Hourly Rate Breakdown Chart */}
               {timeSlots.length > 0 && (
