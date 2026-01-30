@@ -23,6 +23,8 @@ import {
   TrendingUp,
   Zap,
   SatelliteIcon,
+  Shield,
+  FileText,
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -33,6 +35,9 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
   );
   const [capacityOpen, setCapacityOpen] = useState(
     pathname.startsWith('/capacity') || pathname.startsWith('/admin/capacity')
+  );
+  const [adminOpen, setAdminOpen] = useState(
+    pathname.startsWith('/admin/surge-pricing') || pathname.startsWith('/admin/pricing-scenarios')
   );
 
   const isActive = (path: string) => {
@@ -158,8 +163,24 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
     },
   ];
 
+  const adminSubItems = [
+    {
+      href: '/admin/surge-pricing',
+      icon: Zap,
+      label: 'Surge Pricing',
+      description: 'Dynamic pricing configs'
+    },
+    {
+      href: '/admin/pricing-scenarios',
+      icon: FileText,
+      label: 'Pricing Scenarios',
+      description: 'Saved pricing simulations'
+    },
+  ];
+
   const isPricingActive = pathname.startsWith('/pricing') || pathname.startsWith('/admin/pricing');
   const isCapacityActive = pathname.startsWith('/capacity') || pathname.startsWith('/admin/capacity');
+  const isAdminActive = pathname.startsWith('/admin/surge-pricing') || pathname.startsWith('/admin/pricing-scenarios');
 
   return (
     <div className="min-h-screen flex">
@@ -387,6 +408,108 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
                           <div className="flex-1">
                             <div className={`text-xs font-medium ${
                               active ? 'text-orange-700' : 'text-gray-700'
+                            }`}>
+                              {subItem.label}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {subItem.description}
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Admin Menu with Submenu */}
+          <div>
+            <button
+              onClick={() => setAdminOpen(!adminOpen)}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${
+                isAdminActive
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Admin"
+            >
+              <div className="flex items-center space-x-3">
+                <Shield className="w-5 h-5 flex-shrink-0" />
+                {sidebarOpen && <span className="text-sm font-medium">Admin</span>}
+              </div>
+              {sidebarOpen && (
+                adminOpen ?
+                  <ChevronDown className="w-4 h-4" /> :
+                  <ChevronRight className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* Submenu Items */}
+            {adminOpen && sidebarOpen && (
+              <div className="ml-4 mt-2 space-y-1 border-l-2 border-purple-200 pl-4">
+                {adminSubItems.map((subItem) => {
+                  const SubIcon = subItem.icon;
+                  const active = pathname === subItem.href;
+
+                  return (
+                    <Link
+                      key={subItem.href}
+                      href={subItem.href}
+                      className={`flex items-start space-x-3 px-3 py-2 rounded-lg transition-colors group ${
+                        active
+                          ? 'bg-purple-50 text-purple-700'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                      title={subItem.label}
+                    >
+                      <SubIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-xs font-medium ${
+                          active ? 'text-purple-700' : 'text-gray-700'
+                        }`}>
+                          {subItem.label}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {subItem.description}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Collapsed State - Show submenu on hover */}
+            {!sidebarOpen && (
+              <div className="relative group">
+                <div className="absolute left-full top-0 ml-2 w-56 bg-white shadow-lg rounded-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                  <div className="p-3 border-b border-gray-100">
+                    <div className="flex items-center space-x-2 text-purple-700">
+                      <Shield className="w-5 h-5" />
+                      <span className="font-semibold text-sm">Admin</span>
+                    </div>
+                  </div>
+                  <div className="p-2 space-y-1">
+                    {adminSubItems.map((subItem) => {
+                      const SubIcon = subItem.icon;
+                      const active = pathname === subItem.href;
+
+                      return (
+                        <Link
+                          key={subItem.href}
+                          href={subItem.href}
+                          className={`flex items-start space-x-3 px-3 py-2 rounded-lg transition-colors ${
+                            active
+                              ? 'bg-purple-50 text-purple-700'
+                              : 'text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <SubIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <div className={`text-xs font-medium ${
+                              active ? 'text-purple-700' : 'text-gray-700'
                             }`}>
                               {subItem.label}
                             </div>

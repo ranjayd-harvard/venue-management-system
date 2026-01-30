@@ -188,7 +188,7 @@ export interface RateSheet {
   _id?: ObjectId;
   name: string;
   description?: string;
-  type: 'TIMING_BASED' | 'PACKAGE_BASED';
+  type: 'TIMING_BASED' | 'PACKAGE_BASED' | 'SURGE_MULTIPLIER';
 
   // Application scope
   applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
@@ -209,13 +209,16 @@ export interface RateSheet {
   
   // Timing-based rates
   timeWindows?: TimeWindow[];
-  
+
   // Package-based rates
   packages?: Package[];
-  
+
+  // Surge multiplier (for SURGE_MULTIPLIER type)
+  surgeMultiplier?: number;
+
   // Status
   isActive: boolean;
-  
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -227,7 +230,8 @@ export interface PricingConfig {
   customerPriorityRange: { min: number; max: number };
   locationPriorityRange: { min: number; max: number };
   sublocationPriorityRange: { min: number; max: number };
-  
+  surgePriorityRange?: { min: number; max: number }; // 10000-10999 (optional for backward compatibility)
+
   // Default system timezone
   defaultTimezone: string;
   
@@ -297,6 +301,81 @@ export interface PricingScenario {
 
   createdAt: Date;
   updatedAt: Date;
+}
+
+// ===== SURGE PRICING TYPES =====
+
+export interface DemandSupplyParams {
+  currentDemand: number;        // e.g., 15 (bookings/hour)
+  currentSupply: number;        // e.g., 10 (available capacity/slots per hour)
+  historicalAvgPressure: number; // e.g., 1.2 (baseline pressure ratio)
+}
+
+export interface SurgeParams {
+  alpha: number;                // Sensitivity coefficient (0.1 - 1.0, default 0.3)
+  minMultiplier: number;        // Floor multiplier (0.5 - 1.0, default 0.75)
+  maxMultiplier: number;        // Ceiling multiplier (1.0 - 3.0, default 1.8)
+  emaAlpha: number;             // EMA smoothing factor (0.1 - 0.5, default 0.3)
+}
+
+export interface SurgeTimeWindow {
+  daysOfWeek?: number[];        // 0=Sunday, 6=Saturday (optional, default all days)
+  startTime?: string;           // "HH:MM" format (optional, default 00:00)
+  endTime?: string;             // "HH:MM" format (optional, default 23:59)
+}
+
+export interface SurgeConfig {
+  _id?: ObjectId;
+  name: string;
+  description?: string;
+
+  // Hierarchy scope (surge is location/space-based, not event-based)
+  appliesTo: {
+    level: 'SUBLOCATION' | 'LOCATION';
+    entityId: ObjectId;
+  };
+
+  // Manual demand/supply parameters (for simulation)
+  demandSupplyParams: DemandSupplyParams;
+
+  // Surge calculation parameters
+  surgeParams: SurgeParams;
+
+  // Time-based applicability (optional)
+  effectiveFrom: Date;
+  effectiveTo?: Date;
+  timeWindows?: SurgeTimeWindow[];
+
+  // Status
+  isActive: boolean;
+  createdBy?: string;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SurgeCalculationResult {
+  surge_factor: number;           // Final multiplier (0.75 - 1.8)
+  pressure: number;               // demand / supply
+  normalized_pressure: number;    // pressure / historical_avg
+  smoothed_pressure: number;      // EMA of normalized
+  raw_factor: number;             // Before clamping
+  applied: boolean;               // Whether surge was successfully calculated
+}
+
+export interface HourlySurgeBreakdown {
+  hour: Date;                     // ISO timestamp for this hour
+  basePrice: number;              // Original price before surge
+  surgeMultiplier: number;        // The surge factor applied
+  finalPrice: number;             // basePrice * surgeMultiplier
+}
+
+export interface SurgePricingResult {
+  basePrice: number;              // Average base price per hour
+  surgeMultiplier: number;        // Average surge multiplier across all hours
+  finalPrice: number;             // Average final price per hour
+  surgeDetails: SurgeCalculationResult;
+  hourlyBreakdown: HourlySurgeBreakdown[];
 }
 
 // ===== CAPACITY SHEET TYPES =====

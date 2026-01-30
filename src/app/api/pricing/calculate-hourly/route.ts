@@ -10,7 +10,7 @@ import { TimezoneSettingsRepository } from '@/models/TimezoneSettings';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { subLocationId, eventId, startTime, endTime, timezone: requestTimezone, isEventBooking } = body;
+    const { subLocationId, eventId, startTime, endTime, timezone: requestTimezone, isEventBooking, includeSurge = true } = body;
 
     if (!subLocationId || !startTime || !endTime) {
       return NextResponse.json(
@@ -341,17 +341,196 @@ export async function POST(request: NextRequest) {
     };
     
     // Calculate pricing using hourly engine
+    console.log('\n🎯 ===== BASE PRICING CALCULATION (WITHOUT SURGE) =====');
     const engine = new HourlyPricingEngine();
-    const result = engine.calculatePrice(context);
-    
+    const baseResult = engine.calculatePrice(context);
+
+    console.log('\n📊 BASE PRICING RESULTS:');
+    console.log(`   Total Hours: ${baseResult.totalHours}`);
+    console.log(`   Total Price: $${baseResult.totalPrice.toFixed(2)}`);
+    console.log(`   Average Price/Hour: $${(baseResult.totalPrice / baseResult.totalHours).toFixed(2)}`);
+    console.log('\n   Sample Base Segments (first 3):');
+    baseResult.segments.slice(0, 3).forEach((seg, idx) => {
+      console.log(`   ${idx + 1}. ${new Date(seg.startTime).toLocaleString()} → $${seg.pricePerHour.toFixed(2)}/hr`);
+      console.log(`      Ratesheet: ${seg.ratesheet?.name || 'Default'} (Level: ${seg.ratesheet?.level || 'N/A'}, Priority: ${seg.ratesheet?.priority || 'N/A'})`);
+    });
+
+    // Check for active surge config and generate surge ratesheets (only if includeSurge is true)
+    let finalResult = baseResult;
+    let surgeRatesheets: any[] = [];
+
+    if (includeSurge) {
+      const { SurgeConfigRepository } = await import('@/models/SurgeConfig');
+      const { calculateSurgeFactor, applySurgeToPrice } = await import('@/lib/surge-pricing-engine');
+
+      const surgeConfig = await SurgeConfigRepository.findActiveBySubLocation(
+        subLocationId,
+        new Date(startTime)
+      );
+
+      if (surgeConfig) {
+      console.log('\n🔥 ===== SURGE PRICING GENERATION =====');
+      console.log(`   Surge Config: ${surgeConfig.name}`);
+      console.log(`   Applies To: ${surgeConfig.appliesTo.level} (${surgeConfig.appliesTo.entityId})`);
+
+      // Calculate surge factor
+      const surgeResult = calculateSurgeFactor({
+        demand: surgeConfig.demandSupplyParams.currentDemand,
+        supply: surgeConfig.demandSupplyParams.currentSupply,
+        historicalAvgPressure: surgeConfig.demandSupplyParams.historicalAvgPressure,
+        alpha: surgeConfig.surgeParams.alpha,
+        minMultiplier: surgeConfig.surgeParams.minMultiplier,
+        maxMultiplier: surgeConfig.surgeParams.maxMultiplier,
+        emaAlpha: surgeConfig.surgeParams.emaAlpha,
+        previousSmoothedPressure: undefined
+      });
+
+      console.log('\n   Surge Calculation:');
+      console.log(`   - Demand: ${surgeConfig.demandSupplyParams.currentDemand}`);
+      console.log(`   - Supply: ${surgeConfig.demandSupplyParams.currentSupply}`);
+      console.log(`   - Pressure: ${surgeResult.pressure.toFixed(3)}`);
+      console.log(`   - Normalized Pressure: ${surgeResult.normalized_pressure.toFixed(3)}`);
+      console.log(`   - Smoothed Pressure: ${surgeResult.smoothed_pressure.toFixed(3)}`);
+      console.log(`   - Raw Factor: ${surgeResult.raw_factor.toFixed(3)}`);
+      console.log(`   - Final Surge Factor: ${surgeResult.surge_factor.toFixed(3)}x`);
+      console.log(`   - Min/Max: ${surgeConfig.surgeParams.minMultiplier}x - ${surgeConfig.surgeParams.maxMultiplier}x`);
+
+      // Generate surge ratesheets with surge-adjusted prices
+      const timeWindows: any[] = [];
+      let windowsCreated = 0;
+      let windowsSkipped = 0;
+
+      console.log('\n   Generating Surge Time Windows:');
+      for (const segment of baseResult.segments) {
+        const hourTimestamp = new Date(segment.startTime);
+        let surgeFactor = surgeResult.surge_factor;
+
+        // Check if this hour matches the surge config's time windows
+        if (surgeConfig.timeWindows && surgeConfig.timeWindows.length > 0) {
+          const dayOfWeek = hourTimestamp.getDay();
+          const timeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
+
+          const matchesWindow = surgeConfig.timeWindows.some(window => {
+            if (window.daysOfWeek && window.daysOfWeek.length > 0) {
+              if (!window.daysOfWeek.includes(dayOfWeek)) return false;
+            }
+            if (window.startTime && window.endTime) {
+              // Handle overnight ranges (e.g., 19:00 - 07:00)
+              if (window.startTime > window.endTime) {
+                // Overnight: matches if time >= startTime OR time < endTime
+                if (timeStr < window.startTime && timeStr >= window.endTime) return false;
+              } else {
+                // Same-day: matches if time >= startTime AND time < endTime
+                if (timeStr < window.startTime || timeStr >= window.endTime) return false;
+              }
+            }
+            return true;
+          });
+
+          if (!matchesWindow) {
+            windowsSkipped++;
+            continue; // Skip this hour
+          }
+        }
+
+        // Store the surge MULTIPLIER, not the absolute price
+        // The pricing engine will apply this multiplier to the base price dynamically
+        const basePrice = segment.pricePerHour;
+        const surgePrice = applySurgeToPrice(basePrice, { ...surgeResult, surge_factor: surgeFactor });
+
+        const startTimeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
+        const endHour = new Date(hourTimestamp);
+        endHour.setHours(endHour.getHours() + 1);
+        const endTimeStr = `${endHour.getHours().toString().padStart(2, '0')}:00`;
+
+        timeWindows.push({
+          startTime: startTimeStr,
+          endTime: endTimeStr,
+          pricePerHour: surgeFactor, // CHANGED: Store multiplier instead of absolute price
+          windowType: 'ABSOLUTE_TIME',
+          surgeMultiplier: surgeFactor // Also store explicitly for clarity
+        });
+
+        windowsCreated++;
+
+        // Log first 3 conversions
+        if (windowsCreated <= 3) {
+          console.log(`   ${windowsCreated}. ${startTimeStr}-${endTimeStr}: Multiplier ${surgeFactor.toFixed(2)}x (example: $${basePrice.toFixed(2)} → $${surgePrice.toFixed(2)})`);
+        }
+      }
+
+      console.log(`\n   Created ${windowsCreated} surge windows, skipped ${windowsSkipped} windows`);
+
+      if (timeWindows.length > 0) {
+        const surgeRatesheet = {
+          _id: new ObjectId(),
+          name: `SURGE: ${surgeConfig.name}`,
+          description: `Auto-generated surge pricing (${surgeResult.surge_factor.toFixed(2)}x)`,
+          type: 'SURGE_MULTIPLIER', // CHANGED: Special type for multiplier-based pricing
+          appliesTo: surgeConfig.appliesTo,
+          priority: 10000,
+          effectiveFrom: new Date(startTime),
+          effectiveTo: new Date(endTime),
+          timeWindows,
+          isActive: true,
+          approvalStatus: 'APPROVED',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          surgeMultiplier: surgeResult.surge_factor // Store base multiplier
+        };
+
+        surgeRatesheets = [surgeRatesheet];
+
+        console.log('\n   Surge Ratesheet Generated:');
+        console.log(`   - Name: ${surgeRatesheet.name}`);
+        console.log(`   - Type: ${surgeRatesheet.type} (stores multipliers, not absolute prices)`);
+        console.log(`   - Priority: ${surgeRatesheet.priority}`);
+        console.log(`   - Level: SURGE`);
+        console.log(`   - Base Multiplier: ${surgeResult.surge_factor.toFixed(2)}x`);
+        console.log(`   - Time Windows: ${timeWindows.length}`);
+        console.log(`   - Effective: ${surgeRatesheet.effectiveFrom.toISOString()} → ${surgeRatesheet.effectiveTo.toISOString()}`);
+
+        // Re-run pricing engine with surge ratesheets
+        console.log('\n🎯 ===== FINAL PRICING CALCULATION (WITH SURGE) =====');
+        const surgeContext = {
+          ...context,
+          surgeRatesheets
+        };
+
+        finalResult = engine.calculatePrice(surgeContext);
+
+        console.log('\n📊 FINAL PRICING RESULTS:');
+        console.log(`   Total Hours: ${finalResult.totalHours}`);
+        console.log(`   Total Price: $${finalResult.totalPrice.toFixed(2)}`);
+        console.log(`   Average Price/Hour: $${(finalResult.totalPrice / finalResult.totalHours).toFixed(2)}`);
+        console.log('\n   Sample Final Segments (first 3):');
+        finalResult.segments.slice(0, 3).forEach((seg, idx) => {
+          console.log(`   ${idx + 1}. ${new Date(seg.startTime).toLocaleString()} → $${seg.pricePerHour.toFixed(2)}/hr`);
+          console.log(`      Ratesheet: ${seg.ratesheet?.name || 'Default'} (Level: ${seg.ratesheet?.level || 'N/A'}, Priority: ${seg.ratesheet?.priority || 'N/A'})`);
+        });
+
+        console.log('\n📈 BASE vs SURGE COMPARISON:');
+        console.log(`   Base Total: $${baseResult.totalPrice.toFixed(2)}`);
+        console.log(`   Surge Total: $${finalResult.totalPrice.toFixed(2)}`);
+        console.log(`   Difference: $${(finalResult.totalPrice - baseResult.totalPrice).toFixed(2)} (${((finalResult.totalPrice / baseResult.totalPrice - 1) * 100).toFixed(1)}%)`);
+      } else {
+        console.log('\n   ⚠️ No surge windows created (all hours filtered out by time window constraints)');
+      }
+      } else {
+        console.log('\n   ℹ️ No active surge configuration found for this sublocation/time');
+      }
+    } else {
+      console.log('\n   ℹ️ Surge pricing disabled (includeSurge=false)');
+    }
+
     // Return enhanced result
     return NextResponse.json({
-      ...result,
+      ...finalResult,
       metadata: {
         customer: customer.name,
         location: location.name,
         sublocation: sublocation.label,
-        timezone: result.timezone,
+        timezone: finalResult.timezone,
         overlappingEvents: overlappingEvents.map(e => ({
           id: e._id.toString(),
           name: e.name,
@@ -359,11 +538,12 @@ export async function POST(request: NextRequest) {
           endDate: e.endDate
         })),
         ratesheetSummary: {
-          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length + eventRatesheets.length,
+          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length + eventRatesheets.length + surgeRatesheets.length,
           customer: customerRatesheets.length,
           location: locationRatesheets.length,
           sublocation: sublocationRatesheets.length,
-          event: eventRatesheets.length
+          event: eventRatesheets.length,
+          surge: surgeRatesheets.length
         }
       }
     });

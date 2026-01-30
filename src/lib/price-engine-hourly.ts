@@ -15,7 +15,7 @@ export interface HourlySegment {
     name: string;
     type: string;
     priority: number;
-    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT' | 'SURGE';
   };
   source: 'RATESHEET' | 'DEFAULT_RATE';
   timeWindow?: {
@@ -63,6 +63,7 @@ export interface PricingContext {
   locationRatesheets: RateSheet[];
   sublocationRatesheets: RateSheet[];
   eventRatesheets?: RateSheet[];
+  surgeRatesheets?: RateSheet[];
 
   // Default rates (fallback)
   customerDefaultRate?: number;
@@ -174,11 +175,72 @@ export class HourlyPricingEngine {
       slot.start,
       context
     );
-    
-    // Step 2: If ratesheets found, use highest priority
+
+    // Step 2: Check if SURGE_MULTIPLIER is the winner
     if (applicableRatesheets.length > 0) {
       const selected = applicableRatesheets[0]; // Already sorted by priority
-      
+
+      // Handle SURGE_MULTIPLIER type specially
+      if (selected.level === 'SURGE' && selected.ratesheet.type === 'SURGE_MULTIPLIER') {
+        // Surge is a multiplier - find the base price (next non-SURGE winner)
+        const baseRatesheet = applicableRatesheets.find(rs => rs.level !== 'SURGE');
+
+        let basePrice: number;
+        let baseName: string;
+
+        if (baseRatesheet) {
+          basePrice = baseRatesheet.pricePerHour;
+          baseName = baseRatesheet.ratesheet.name;
+        } else {
+          // No ratesheet found, use default rate
+          basePrice = this.getDefaultRate(context);
+          baseName = 'Default Rate';
+        }
+
+        // Apply surge multiplier to base price
+        const surgeMultiplier = selected.pricePerHour; // This is the multiplier, not absolute price
+        const finalPrice = basePrice * surgeMultiplier;
+
+        console.log(`\n🏆 [ENGINE] WINNER for ${slot.start.toISOString()}: SURGE MULTIPLIER`);
+        console.log(`[ENGINE]    Surge Config: ${selected.ratesheet.name}`);
+        console.log(`[ENGINE]    Base: ${baseName} ($${basePrice.toFixed(2)}/hr)`);
+        console.log(`[ENGINE]    Multiplier: ${surgeMultiplier.toFixed(2)}x`);
+        console.log(`[ENGINE]    Final Price: $${finalPrice.toFixed(2)}/hr`);
+
+        return {
+          startTime: slot.start,
+          endTime: slot.end,
+          durationHours: slot.durationHours,
+          pricePerHour: finalPrice,
+          totalPrice: finalPrice * slot.durationHours,
+          ratesheet: {
+            id: selected.ratesheet._id!.toString(),
+            name: selected.ratesheet.name,
+            type: selected.ratesheet.type,
+            priority: selected.ratesheet.priority,
+            level: selected.level
+          },
+          source: 'RATESHEET',
+          timeWindow: selected.timeWindow
+        };
+      }
+
+      // Regular ratesheet (not surge multiplier)
+      // DEBUG: Log the winner
+      if (selected.level === 'SURGE') {
+        console.log(`\n🏆 [ENGINE] WINNER for ${slot.start.toISOString()}: SURGE ratesheet`);
+        console.log(`[ENGINE]    Name: ${selected.ratesheet.name}`);
+        console.log(`[ENGINE]    Price: $${selected.pricePerHour.toFixed(2)}/hr`);
+        console.log(`[ENGINE]    Priority: ${selected.ratesheet.priority}`);
+      } else if (applicableRatesheets.some(rs => rs.level === 'SURGE')) {
+        console.log(`\n⚠️ [ENGINE] SURGE ratesheet found but did NOT win for ${slot.start.toISOString()}`);
+        console.log(`[ENGINE]    Winner: ${selected.ratesheet.name} (${selected.level}, Priority: ${selected.ratesheet.priority}, $${selected.pricePerHour.toFixed(2)}/hr)`);
+        const surgeRatesheet = applicableRatesheets.find(rs => rs.level === 'SURGE');
+        if (surgeRatesheet) {
+          console.log(`[ENGINE]    SURGE: ${surgeRatesheet.ratesheet.name} (Priority: ${surgeRatesheet.ratesheet.priority}, $${surgeRatesheet.pricePerHour.toFixed(2)}/hr)`);
+        }
+      }
+
       return {
         startTime: slot.start,
         endTime: slot.end,
@@ -219,35 +281,62 @@ export class HourlyPricingEngine {
   ): Array<{
     ratesheet: RateSheet;
     pricePerHour: number;
-    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT' | 'SURGE';
     timeWindow?: { start: string; end: string };
   }> {
     const applicable: Array<{
       ratesheet: RateSheet;
       pricePerHour: number;
-      level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+      level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT' | 'SURGE';
       timeWindow?: { start: string; end: string };
     }> = [];
 
-    // Check all ratesheets (EVENT has highest priority)
+    // Check all ratesheets (SURGE has highest priority)
     const allRatesheets = [
+      ...(context.surgeRatesheets || []).map(rs => ({ rs, level: 'SURGE' as const })),
       ...(context.eventRatesheets || []).map(rs => ({ rs, level: 'EVENT' as const })),
       ...context.sublocationRatesheets.map(rs => ({ rs, level: 'SUBLOCATION' as const })),
       ...context.locationRatesheets.map(rs => ({ rs, level: 'LOCATION' as const })),
       ...context.customerRatesheets.map(rs => ({ rs, level: 'CUSTOMER' as const })),
     ];
-    
+
+    // DEBUG: Log surge ratesheets
+    const surgeCount = context.surgeRatesheets?.length || 0;
+    if (surgeCount > 0) {
+      console.log(`\n🔥 [ENGINE] Evaluating hour ${hourStart.toISOString()}`);
+      console.log(`[ENGINE] Found ${surgeCount} SURGE ratesheet(s) in context`);
+      context.surgeRatesheets?.forEach((rs, idx) => {
+        console.log(`[ENGINE]   ${idx + 1}. ${rs.name} (Priority: ${rs.priority}, Active: ${rs.isActive})`);
+        console.log(`[ENGINE]      Type: ${rs.type}, TimeWindows: ${rs.timeWindows?.length || 0}`);
+        console.log(`[ENGINE]      EffectiveFrom: ${rs.effectiveFrom}`);
+        console.log(`[ENGINE]      EffectiveTo: ${rs.effectiveTo}`);
+      });
+    }
+
     for (const { rs, level } of allRatesheets) {
       // Skip inactive ratesheets
-      if (!rs.isActive) continue;
-      
-      // Check date range
-      if (!isDateInRange(hourStart, rs.effectiveFrom, rs.effectiveTo || null)) {
+      if (!rs.isActive) {
+        if (level === 'SURGE') {
+          console.log(`[ENGINE] ❌ Skipping SURGE ${rs.name} - inactive`);
+        }
         continue;
       }
-      
-      // Check time windows for TIMING_BASED ratesheets
-      if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
+
+      // Check date range
+      if (!isDateInRange(hourStart, rs.effectiveFrom, rs.effectiveTo || null)) {
+        if (level === 'SURGE') {
+          console.log(`[ENGINE] ❌ Skipping SURGE ${rs.name} - date range mismatch`);
+          console.log(`[ENGINE]    Hour: ${hourStart.toISOString()}`);
+          console.log(`[ENGINE]    Range: ${rs.effectiveFrom} → ${rs.effectiveTo}`);
+        }
+        continue;
+      }
+
+      // Check time windows for TIMING_BASED and SURGE_MULTIPLIER ratesheets
+      if ((rs.type === 'TIMING_BASED' || rs.type === 'SURGE_MULTIPLIER') && rs.timeWindows) {
+        if (level === 'SURGE') {
+          console.log(`[ENGINE] ✓ SURGE ${rs.name} passed date check, checking ${rs.timeWindows.length} time windows`);
+        }
         for (const tw of rs.timeWindows) {
           // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
           // This allows event rates to apply but excludes free grace periods
@@ -294,6 +383,11 @@ export class HourlyPricingEngine {
           }
 
           if (matches) {
+            if (level === 'SURGE') {
+              console.log(`[ENGINE] ✅ SURGE ${rs.name} MATCHED! Adding to applicable list`);
+              console.log(`[ENGINE]    Price: $${tw.pricePerHour.toFixed(2)}/hr`);
+              console.log(`[ENGINE]    Window: ${tw.startTime} - ${tw.endTime}`);
+            }
             applicable.push({
               ratesheet: rs,
               pricePerHour: tw.pricePerHour,
@@ -303,6 +397,8 @@ export class HourlyPricingEngine {
                 : { start: `${tw.startMinute}m`, end: `${tw.endMinute}m` }
             });
             break; // Found matching window
+          } else if (level === 'SURGE') {
+            console.log(`[ENGINE] ❌ SURGE ${rs.name} time window ${tw.startTime}-${tw.endTime} did not match`);
           }
         }
       }
@@ -318,9 +414,9 @@ export class HourlyPricingEngine {
     
     // Sort by hierarchy then priority, then prefer non-zero rates
     return applicable.sort((a, b) => {
-      // Level hierarchy: EVENT (4) > SUBLOCATION (3) > LOCATION (2) > CUSTOMER (1)
-      const levelA = a.level === 'EVENT' ? 4 : a.level === 'SUBLOCATION' ? 3 : a.level === 'LOCATION' ? 2 : 1;
-      const levelB = b.level === 'EVENT' ? 4 : b.level === 'SUBLOCATION' ? 3 : b.level === 'LOCATION' ? 2 : 1;
+      // Level hierarchy: SURGE (5) > EVENT (4) > SUBLOCATION (3) > LOCATION (2) > CUSTOMER (1)
+      const levelA = a.level === 'SURGE' ? 5 : a.level === 'EVENT' ? 4 : a.level === 'SUBLOCATION' ? 3 : a.level === 'LOCATION' ? 2 : 1;
+      const levelB = b.level === 'SURGE' ? 5 : b.level === 'EVENT' ? 4 : b.level === 'SUBLOCATION' ? 3 : b.level === 'LOCATION' ? 2 : 1;
 
       if (levelA !== levelB) {
         return levelB - levelA; // Higher level first

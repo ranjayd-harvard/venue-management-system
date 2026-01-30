@@ -1,0 +1,394 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Plus, Edit, Trash2, Power, Zap, ExternalLink, TrendingUp, TrendingDown } from 'lucide-react';
+import { SurgeConfig } from '@/models/types';
+import CreateSurgeConfigModal from '@/components/CreateSurgeConfigModal';
+
+export default function AdminSurgePricingPage() {
+  const [configs, setConfigs] = useState<SurgeConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  useEffect(() => {
+    loadConfigs();
+  }, [filterStatus]);
+
+  const loadConfigs = async () => {
+    setLoading(true);
+    try {
+      const url = new URL('/api/surge-pricing/configs', window.location.origin);
+      if (filterStatus !== 'all') {
+        url.searchParams.set('includeInactive', 'true');
+      }
+
+      const response = await fetch(url.toString());
+      if (response.ok) {
+        let data = await response.json();
+
+        // Filter by status
+        if (filterStatus === 'active') {
+          data = data.filter((c: SurgeConfig) => c.isActive);
+        } else if (filterStatus === 'inactive') {
+          data = data.filter((c: SurgeConfig) => !c.isActive);
+        }
+
+        setConfigs(data);
+      }
+    } catch (error) {
+      console.error('Failed to load surge configs:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleActive = async (configId: string, currentStatus: boolean) => {
+    try {
+      const response = await fetch(`/api/surge-pricing/configs/${configId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: !currentStatus }),
+      });
+
+      if (!response.ok) throw new Error('Failed to toggle status');
+      await loadConfigs();
+    } catch (error) {
+      console.error('Error toggling status:', error);
+      alert('Failed to toggle config status');
+    }
+  };
+
+  const deleteConfig = async (configId: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete "${name}"?\n\nThis action cannot be undone.`)) return;
+
+    try {
+      const response = await fetch(`/api/surge-pricing/configs/${configId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) throw new Error('Failed to delete config');
+      await loadConfigs();
+      alert('Surge config deleted successfully');
+    } catch (error) {
+      console.error('Error deleting config:', error);
+      alert('Failed to delete surge config');
+    }
+  };
+
+  const getHierarchyBadge = (level: string) => {
+    const badges = {
+      LOCATION: { text: '📍 Location', color: 'bg-green-50 text-green-700 border-green-200' },
+      SUBLOCATION: { text: '🏢 SubLocation', color: 'bg-purple-50 text-purple-700 border-purple-200' },
+    };
+    return badges[level as keyof typeof badges] || { text: level, color: 'bg-gray-50 text-gray-700 border-gray-200' };
+  };
+
+  const getSurgeIndicator = (config: SurgeConfig) => {
+    // Calculate current surge factor for display
+    const { demandSupplyParams, surgeParams } = config;
+    const pressure = demandSupplyParams.currentDemand / demandSupplyParams.currentSupply;
+    const normalized = pressure / demandSupplyParams.historicalAvgPressure;
+    const rawFactor = 1 + surgeParams.alpha * Math.log(normalized);
+    const surgeFactor = Math.max(
+      surgeParams.minMultiplier,
+      Math.min(surgeParams.maxMultiplier, rawFactor)
+    );
+
+    const isIncrease = surgeFactor > 1.0;
+    const isDecrease = surgeFactor < 1.0;
+
+    return {
+      surgeFactor,
+      isIncrease,
+      isDecrease,
+      color: isIncrease
+        ? 'bg-gradient-to-r from-orange-100 to-red-100 text-red-700 border-red-300'
+        : isDecrease
+        ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 border-green-300'
+        : 'bg-gray-100 text-gray-700 border-gray-300',
+      icon: isIncrease ? TrendingUp : isDecrease ? TrendingDown : Zap,
+    };
+  };
+
+  const getCounts = () => ({
+    all: configs.length,
+    active: configs.filter(c => c.isActive).length,
+    inactive: configs.filter(c => !c.isActive).length,
+  });
+
+  const counts = getCounts();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading surge configs...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-pink-50">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-2xl">
+        <div className="max-w-7xl mx-auto px-8 py-8">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-4xl font-bold mb-2 flex items-center gap-3">
+                <Zap className="w-10 h-10" />
+                Surge Pricing
+              </h1>
+              <p className="text-orange-100 text-lg">Dynamic pricing configurations based on demand/supply pressure</p>
+            </div>
+            <div className="flex gap-3">
+              <a
+                href="/pricing/timeline-simulator"
+                className="bg-white text-orange-600 px-6 py-3 rounded-xl font-semibold hover:bg-orange-50 transition-all shadow-lg flex items-center gap-2"
+              >
+                <ExternalLink size={20} />
+                Open Simulator
+              </a>
+              <button
+                onClick={() => setIsCreateModalOpen(true)}
+                className="bg-white text-orange-600 px-6 py-3 rounded-xl font-semibold hover:bg-orange-50 transition-all shadow-lg flex items-center gap-2"
+              >
+                <Plus size={20} />
+                Create Surge Config
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-8 py-8">
+        {/* Filter Tabs */}
+        <div className="bg-white rounded-xl shadow-lg p-2 mb-6 flex gap-2">
+          {[
+            { key: 'all', label: 'All Configs', count: counts.all },
+            { key: 'active', label: 'Active', count: counts.active },
+            { key: 'inactive', label: 'Inactive', count: counts.inactive },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setFilterStatus(tab.key as any)}
+              className={`flex-1 px-4 py-3 rounded-lg font-semibold transition-all ${
+                filterStatus === tab.key
+                  ? 'bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-md'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {tab.label}
+              <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white bg-opacity-20">
+                {tab.count}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Configs List */}
+        {configs.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-lg p-12 text-center">
+            <div className="text-6xl mb-4">⚡</div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">No Surge Configs Found</h3>
+            <p className="text-gray-600 mb-6">
+              {filterStatus === 'all'
+                ? 'Create your first surge pricing configuration'
+                : `No ${filterStatus} surge configs found`}
+            </p>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-600 to-red-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-orange-700 hover:to-red-700 transition-all"
+            >
+              <Plus size={20} />
+              Create Surge Config
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {configs.map((config) => {
+              const hierarchyBadge = getHierarchyBadge(config.appliesTo.level);
+              const surgeIndicator = getSurgeIndicator(config);
+              const SurgeIcon = surgeIndicator.icon;
+
+              return (
+                <div
+                  key={config._id?.toString()}
+                  className={`bg-white rounded-xl shadow-lg overflow-hidden border-l-4 border-orange-500 transition-all hover:shadow-xl ${
+                    !config.isActive ? 'opacity-60' : ''
+                  }`}
+                >
+                  {/* Card Header */}
+                  <div className="p-6">
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex-1">
+                        <h3 className="text-xl font-bold text-gray-900 mb-1 flex items-center gap-2">
+                          <Zap className="w-5 h-5 text-orange-600" />
+                          {config.name}
+                        </h3>
+                        {config.description && (
+                          <p className="text-sm text-gray-600">{config.description}</p>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2 items-end">
+                        <div className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                          config.isActive
+                            ? 'bg-green-100 text-green-800 border-green-300'
+                            : 'bg-gray-100 text-gray-800 border-gray-300'
+                        }`}>
+                          {config.isActive ? 'Active' : 'Inactive'}
+                        </div>
+                        <div className={`px-3 py-1 rounded-full text-xs font-semibold border ${hierarchyBadge.color}`}>
+                          {hierarchyBadge.text}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Entity Info */}
+                    {(config as any).location && (
+                      <div className="text-sm text-gray-600 mb-3 flex items-center gap-2 bg-green-50 px-3 py-2 rounded-lg">
+                        <span className="font-semibold text-green-800">
+                          {(config as any).location.name} ({(config as any).location.city})
+                        </span>
+                      </div>
+                    )}
+                    {(config as any).sublocation && (
+                      <div className="text-sm text-gray-600 mb-3 flex items-center gap-2 bg-purple-50 px-3 py-2 rounded-lg">
+                        <span className="font-semibold text-purple-800">{(config as any).sublocation.label}</span>
+                      </div>
+                    )}
+
+                    {/* Surge Multiplier Display */}
+                    <div className={`mb-4 p-4 rounded-lg border-2 ${surgeIndicator.color}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-semibold flex items-center gap-1">
+                          <SurgeIcon className="w-4 h-4" />
+                          Current Surge
+                        </span>
+                        <span className="text-2xl font-bold">
+                          {surgeIndicator.surgeFactor.toFixed(2)}x
+                        </span>
+                      </div>
+                      <div className="text-xs opacity-75">
+                        Demand: {config.demandSupplyParams.currentDemand} / Supply: {config.demandSupplyParams.currentSupply}
+                        {' '}→ Pressure: {(config.demandSupplyParams.currentDemand / config.demandSupplyParams.currentSupply).toFixed(2)}
+                      </div>
+                    </div>
+
+                    {/* Configuration Summary */}
+                    <div className="grid grid-cols-2 gap-4 text-sm border-t border-gray-100 pt-4">
+                      <div>
+                        <span className="text-gray-500">Multiplier Range:</span>
+                        <p className="font-semibold text-gray-900">
+                          {config.surgeParams.minMultiplier}x - {config.surgeParams.maxMultiplier}x
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Sensitivity (α):</span>
+                        <p className="font-semibold text-gray-900">{config.surgeParams.alpha}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Historical Avg:</span>
+                        <p className="font-semibold text-gray-900">
+                          {config.demandSupplyParams.historicalAvgPressure.toFixed(2)}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">EMA Alpha:</span>
+                        <p className="font-semibold text-gray-900">{config.surgeParams.emaAlpha}</p>
+                      </div>
+                    </div>
+
+                    {/* Time Windows */}
+                    {config.timeWindows && config.timeWindows.length > 0 && (
+                      <div className="border-t border-gray-100 pt-4 mt-4">
+                        <span className="text-xs text-gray-500 font-semibold">Time Windows:</span>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {config.timeWindows.map((window, idx) => (
+                            <div key={idx} className="px-2 py-1 rounded-lg bg-orange-50 text-xs text-orange-700">
+                              {window.daysOfWeek && window.daysOfWeek.length > 0 && (
+                                <span className="font-semibold">
+                                  {window.daysOfWeek.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}
+                                </span>
+                              )}
+                              {window.startTime && window.endTime && (
+                                <span className="ml-1">
+                                  {window.startTime} - {window.endTime}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Metadata */}
+                    <div className="border-t border-gray-100 pt-3 mt-4 text-xs text-gray-500">
+                      <div className="flex justify-between">
+                        <span>Effective: {new Date(config.effectiveFrom).toLocaleDateString()}</span>
+                        {config.effectiveTo && (
+                          <span>Until: {new Date(config.effectiveTo).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card Actions */}
+                  <div className="bg-gray-50 px-6 py-4 flex justify-between items-center border-t border-gray-200">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleActive(config._id?.toString() || '', config.isActive)}
+                        className={`p-2 rounded-lg transition-all ${
+                          config.isActive
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                            : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
+                        }`}
+                        title={config.isActive ? 'Disable' : 'Enable'}
+                      >
+                        <Power size={18} />
+                      </button>
+                      <span className={`text-xs font-semibold ${
+                        config.isActive ? 'text-green-700' : 'text-gray-500'
+                      }`}>
+                        {config.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => alert('Edit modal coming soon!')}
+                        className="px-4 py-2 bg-gradient-to-r from-orange-100 to-red-100 text-orange-700 rounded-lg hover:from-orange-200 hover:to-red-200 transition-all font-medium flex items-center gap-2"
+                      >
+                        <Edit size={16} />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteConfig(config._id?.toString() || '', config.name)}
+                        className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-all font-medium flex items-center gap-2"
+                      >
+                        <Trash2 size={16} />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Create Modal */}
+      <CreateSurgeConfigModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={() => {
+          loadConfigs();
+          setIsCreateModalOpen(false);
+        }}
+      />
+    </div>
+  );
+}

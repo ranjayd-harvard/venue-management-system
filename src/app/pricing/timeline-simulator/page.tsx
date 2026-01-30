@@ -15,8 +15,8 @@ import {
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
-import { Save, FolderOpen, X, Zap, FileText } from 'lucide-react';
-import { PricingScenario } from '@/models/types';
+import { Save, FolderOpen, X, Zap, FileText, Lock } from 'lucide-react';
+import { PricingScenario, SurgeConfig } from '@/models/types';
 
 interface TimeWindow {
   windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
@@ -88,7 +88,7 @@ interface PricingConfig {
 interface PricingLayer {
   id: string;
   name: string;
-  type: 'RATESHEET' | 'SUBLOCATION_DEFAULT' | 'LOCATION_DEFAULT' | 'CUSTOMER_DEFAULT';
+  type: 'RATESHEET' | 'SUBLOCATION_DEFAULT' | 'LOCATION_DEFAULT' | 'CUSTOMER_DEFAULT' | 'SURGE';
   priority: number;
   rate?: number;
   color: string;
@@ -105,7 +105,10 @@ interface TimeSlot {
     isActive: boolean;
   }>;
   winningLayer?: PricingLayer;
-  winningPrice?: number;
+  winningPrice?: number;        // Final price (surge if enabled, base otherwise)
+  basePrice?: number;           // Base price before surge
+  surgePrice?: number;          // Surge-adjusted price
+  surgeMultiplier?: number;     // The surge factor applied
   decisionLog?: any;
   pricingData?: any;
   capacity?: {
@@ -190,6 +193,10 @@ export default function TimelineSimulatorPage() {
   const [isSimulationEnabled, setIsSimulationEnabled] = useState(false);
   const [isPlanningEnabled, setIsPlanningEnabled] = useState(false);
 
+  // Surge pricing state
+  const [surgeEnabled, setSurgeEnabled] = useState<boolean>(false);
+  const [activeSurgeConfig, setActiveSurgeConfig] = useState<SurgeConfig | null>(null);
+
   useEffect(() => {
     fetchPricingConfig();
   }, []);
@@ -264,14 +271,38 @@ export default function TimelineSimulatorPage() {
         console.error('Error calculating time slots:', error);
       });
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent, surgeEnabled, activeSurgeConfig]);
 
   // Load scenarios when sublocation changes
   useEffect(() => {
     if (selectedSubLocation) {
       loadScenarios();
+      loadSurgeConfig();
     }
   }, [selectedSubLocation]);
+
+  // Apply surge pricing when surge is toggled or context changes
+  // NOTE: Surge pricing is now handled automatically in /api/pricing/calculate-hourly
+  // No separate surge calculation needed - it's integrated into the pricing waterfall
+
+  // Automatically enable SURGE layer when surge is toggled on
+  useEffect(() => {
+    if (surgeEnabled && activeSurgeConfig) {
+      // Add surge layer to enabled layers
+      setEnabledLayers(prev => {
+        const newSet = new Set(prev);
+        newSet.add('surge-layer');
+        return newSet;
+      });
+    } else {
+      // Remove surge layer from enabled layers when disabled
+      setEnabledLayers(prev => {
+        const newSet = new Set(prev);
+        newSet.delete('surge-layer');
+        return newSet;
+      });
+    }
+  }, [surgeEnabled, activeSurgeConfig])
 
   const fetchPricingConfig = async () => {
     try {
@@ -301,6 +332,32 @@ export default function TimelineSimulatorPage() {
       console.error('Failed to load scenarios:', error);
     }
   };
+
+  // Load surge config for current sublocation
+  const loadSurgeConfig = async () => {
+    if (!selectedSubLocation) {
+      setActiveSurgeConfig(null);
+      return;
+    }
+
+    try {
+      const url = new URL('/api/surge-pricing/configs', window.location.origin);
+      url.searchParams.set('subLocationId', selectedSubLocation);
+
+      const response = await fetch(url.toString());
+      if (response.ok) {
+        const configs = await response.json();
+        const activeConfig = configs.find((c: SurgeConfig) => c.isActive);
+        setActiveSurgeConfig(activeConfig || null);
+      }
+    } catch (error) {
+      console.error('Failed to load surge config:', error);
+      setActiveSurgeConfig(null);
+    }
+  };
+
+  // NOTE: Surge pricing is now integrated into the main pricing calculation
+  // The /api/pricing/calculate-hourly endpoint automatically includes surge when enabled
 
   // Save current state as a scenario
   const saveScenario = async () => {
@@ -512,6 +569,18 @@ export default function TimelineSimulatorPage() {
   const getPricingLayers = (): PricingLayer[] => {
     const layers: PricingLayer[] = [];
 
+    // Add SURGE layer if surge is enabled and active
+    if (surgeEnabled && activeSurgeConfig) {
+      layers.push({
+        id: 'surge-layer',
+        name: `🔥 SURGE: ${activeSurgeConfig.name}`,
+        type: 'SURGE',
+        priority: 10000,
+        color: 'bg-gradient-to-br from-orange-400 to-orange-600',
+        applyTo: 'SURGE'
+      });
+    }
+
     // Add ratesheets (already sorted by priority)
     ratesheets.forEach((rs) => {
       let name = rs.name;
@@ -609,8 +678,19 @@ export default function TimelineSimulatorPage() {
 
   const calculateTimeSlots = async () => {
     const slots: TimeSlot[] = [];
-    const currentTime = new Date(viewStart);
-    const endTime = new Date(viewEnd);
+
+    // Round viewStart down to the start of the hour
+    const roundedViewStart = new Date(viewStart);
+    roundedViewStart.setMinutes(0, 0, 0);
+
+    const currentTime = new Date(roundedViewStart);
+
+    // Calculate end time based on selectedDuration to ensure we get exactly 12, 24, or 48 hours
+    const roundedViewEnd = new Date(roundedViewStart);
+    roundedViewEnd.setHours(roundedViewEnd.getHours() + selectedDuration);
+
+    const endTime = new Date(roundedViewEnd);
+
     const allLayers = getPricingLayers();
 
     // Fetch all active events to determine which event is active for each hour
@@ -634,8 +714,8 @@ export default function TimelineSimulatorPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             subLocationId: selectedSubLocation,
-            startTime: viewStart.toISOString(),
-            endTime: viewEnd.toISOString(),
+            startTime: roundedViewStart.toISOString(),
+            endTime: roundedViewEnd.toISOString(),
             eventId: selectedEventId || undefined,
           }),
         });
@@ -647,17 +727,150 @@ export default function TimelineSimulatorPage() {
       }
     }
 
+    // Fetch pricing data from API
+    // When surge is enabled, we need BOTH base and surge prices
+    let basePricingData: any = null;
+    let surgePricingData: any = null;
+
+    console.log('🔍 API Fetch Check:', {
+      selectedSubLocation,
+      surgeEnabled,
+      roundedViewStart: roundedViewStart.toISOString(),
+      roundedViewEnd: roundedViewEnd.toISOString()
+    });
+
+    if (selectedSubLocation) {
+      try {
+        if (surgeEnabled) {
+          // Fetch base prices (without surge)
+          console.log('💰 Fetching base pricing data (surge OFF)');
+          const baseResponse = await fetch('/api/pricing/calculate-hourly', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subLocationId: selectedSubLocation,
+              startTime: roundedViewStart.toISOString(),
+              endTime: roundedViewEnd.toISOString(),
+              eventId: selectedEventId || undefined,
+              includeSurge: false,
+            }),
+          });
+          if (baseResponse.ok) {
+            basePricingData = await baseResponse.json();
+          }
+
+          // Fetch surge prices (with surge)
+          console.log('💰 Fetching surge pricing data (surge ON)');
+          const surgeResponse = await fetch('/api/pricing/calculate-hourly', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subLocationId: selectedSubLocation,
+              startTime: roundedViewStart.toISOString(),
+              endTime: roundedViewEnd.toISOString(),
+              eventId: selectedEventId || undefined,
+              includeSurge: true,
+            }),
+          });
+          if (surgeResponse.ok) {
+            surgePricingData = await surgeResponse.json();
+            console.log('💰 Surge pricing data received:', {
+              totalPrice: surgePricingData.totalPrice,
+              segments: surgePricingData.segments?.length,
+              hasSurgeRatesheets: surgePricingData.segments?.some((s: any) => s.ratesheet?.level === 'SURGE')
+            });
+          }
+        } else {
+          // Just fetch base prices
+          console.log('💰 Fetching pricing data (surge OFF)');
+          const response = await fetch('/api/pricing/calculate-hourly', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subLocationId: selectedSubLocation,
+              startTime: roundedViewStart.toISOString(),
+              endTime: roundedViewEnd.toISOString(),
+              eventId: selectedEventId || undefined,
+              includeSurge: false,
+            }),
+          });
+          if (response.ok) {
+            basePricingData = await response.json();
+            console.log('📊 Base pricing data received:', {
+              totalPrice: basePricingData.totalPrice,
+              totalHours: basePricingData.totalHours,
+              segments: basePricingData.segments?.length,
+              firstSegment: basePricingData.segments?.[0],
+              lastSegment: basePricingData.segments?.[basePricingData.segments.length - 1]
+            });
+            console.log('📊 First 3 segments:', basePricingData.segments?.slice(0, 3).map((seg: any) => ({
+              startTime: seg.startTime,
+              pricePerHour: seg.pricePerHour
+            })));
+          } else {
+            console.error('❌ Base pricing API failed:', response.status, response.statusText);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch pricing data:', error);
+      }
+    }
+
+    let iterationCount = 0;
     while (currentTime < endTime) {
       // Use UTC hours for consistent timezone handling
       const hour = currentTime.getUTCHours();
       const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+      iterationCount++;
 
       // For each layer, check if it applies at this hour
       const layerPrices = allLayers.map(layer => {
         let price: number | null = null;
         let isActive = false;
 
-        if (layer.type === 'RATESHEET') {
+        if (layer.type === 'SURGE') {
+          // SURGE layer - store the multiplier, not absolute price
+          // We'll apply it dynamically to the current base price
+          if (surgePricingData?.segments) {
+            const segment = surgePricingData.segments.find((seg: any) => {
+              const segStart = new Date(seg.startTime);
+              return segStart.getTime() === currentTime.getTime();
+            });
+
+            if (hour === 4) {
+              console.log('🐛 [4 AM SURGE LAYER] Checking surge segment:');
+              console.log('   segment found:', !!segment);
+              console.log('   segment.ratesheet?.level:', segment?.ratesheet?.level);
+              console.log('   segment.pricePerHour:', segment?.pricePerHour);
+            }
+
+            // Must have both a segment AND that segment's winning ratesheet must be SURGE level
+            // If surge was skipped for this hour, segment.ratesheet.level won't be 'SURGE'
+            if (segment && segment.ratesheet?.level === 'SURGE') {
+              // Store the MULTIPLIER (the backend now returns the final price after applying surge)
+              // We need to calculate the multiplier from base vs surge price
+              const baseSegment = basePricingData?.segments.find((seg: any) => {
+                const segStart = new Date(seg.startTime);
+                return segStart.getTime() === currentTime.getTime();
+              });
+
+              if (baseSegment && baseSegment.pricePerHour > 0) {
+                // Calculate multiplier: surge_price / base_price
+                const surgeMultiplier = segment.pricePerHour / baseSegment.pricePerHour;
+                price = surgeMultiplier; // Store multiplier for later application
+                isActive = true;
+
+                if (hour === 4) {
+                  console.log('🐛 [4 AM SURGE LAYER] Calculating multiplier:');
+                  console.log('   baseSegment.pricePerHour:', baseSegment.pricePerHour);
+                  console.log('   segment.pricePerHour:', segment.pricePerHour);
+                  console.log('   calculated multiplier:', surgeMultiplier);
+                }
+              }
+            }
+            // If no SURGE ratesheet for this hour, leave isActive = false (grayed out tile)
+          }
+        } else if (layer.type === 'RATESHEET') {
           // Find the ratesheet
           const ratesheet = ratesheets.find(rs => rs._id === layer.id);
           if (ratesheet) {
@@ -712,7 +925,28 @@ export default function TimelineSimulatorPage() {
       });
 
       // Winner is the first active layer (highest priority) that is also enabled
-      const winner = layerPrices.find(lp => lp.isActive && enabledLayers.has(lp.layer.id));
+      let winner = layerPrices.find(lp => lp.isActive && enabledLayers.has(lp.layer.id));
+
+      // If SURGE layer won, apply multiplier to base price dynamically
+      if (winner && winner.layer.type === 'SURGE' && winner.price !== null) {
+        const surgeMultiplier = winner.price; // This is the multiplier
+
+        // Find the next non-SURGE winner
+        const baseWinner = layerPrices.find(lp =>
+          lp.isActive &&
+          enabledLayers.has(lp.layer.id) &&
+          lp.layer.type !== 'SURGE'
+        );
+
+        if (baseWinner && baseWinner.price !== null) {
+          // Apply multiplier to base price
+          const surgePrice = baseWinner.price * surgeMultiplier;
+          winner = {
+            ...winner,
+            price: surgePrice // Override with calculated surge price
+          };
+        }
+      }
 
       // Find capacity for this hour
       let capacityForHour = undefined;
@@ -799,13 +1033,147 @@ export default function TimelineSimulatorPage() {
 
       const eventNames = eventsWithPriority.map(e => e.name);
 
+      // Find pricing data from API for this hour
+      let apiBasePrice = undefined;
+      let apiSurgePrice = undefined;
+      let apiWinningPrice = undefined;
+      let apiSurgeMultiplier = undefined;
+
+      // Get base price
+      if (basePricingData?.segments) {
+        const segment = basePricingData.segments.find((seg: any) => {
+          const segStart = new Date(seg.startTime);
+          return segStart.getTime() === currentTime.getTime();
+        });
+        if (segment) {
+          apiBasePrice = segment.pricePerHour;
+        }
+
+        // Debug: Log segment matching for first few iterations
+        if (iterationCount <= 5) {
+          console.log(`🐛 [Iteration ${iterationCount}, Hour ${hour}] Base price segment matching:`, {
+            currentTime: currentTime.toISOString(),
+            currentTimeMs: currentTime.getTime(),
+            totalSegments: basePricingData.segments.length,
+            segmentFound: !!segment,
+            apiBasePrice,
+            firstSegmentStart: basePricingData.segments[0]?.startTime,
+            firstSegmentStartMs: new Date(basePricingData.segments[0]?.startTime).getTime()
+          });
+        }
+      }
+
+      // Get surge price if enabled
+      if (surgeEnabled && surgePricingData?.segments) {
+        const segment = surgePricingData.segments.find((seg: any) => {
+          const segStart = new Date(seg.startTime);
+          return segStart.getTime() === currentTime.getTime();
+        });
+        if (segment) {
+          apiSurgePrice = segment.pricePerHour;
+          // Calculate surge multiplier from base and surge prices
+          if (apiBasePrice && apiBasePrice > 0) {
+            apiSurgeMultiplier = apiSurgePrice / apiBasePrice;
+          }
+        }
+      }
+
+      // Winning price logic:
+      // - In simulation mode: Use layer-based winner (respects layer toggles)
+      // - Otherwise: Use surge price if surge enabled, otherwise base price
+      let finalWinningPrice: number | undefined;
+      let finalBasePrice: number | undefined;
+
+      if (isSimulationEnabled) {
+        // Simulation mode: respect layer toggles
+        // Winner is already calculated at line 880-901 and respects enabledLayers
+        // If SURGE won, winner.price has already been recalculated dynamically
+        finalWinningPrice = winner?.price !== undefined && winner?.price !== null ? winner.price : undefined;
+
+        // Debug logging
+        if (hour === 4) {
+          console.log('🐛 [4 AM DEBUG] Simulation Mode:');
+          console.log('   Winner:', winner?.layer.name, winner?.layer.type);
+          console.log('   Winner Price:', winner?.price);
+          console.log('   Final Winning Price:', finalWinningPrice);
+          console.log('   Enabled Layers:', Array.from(enabledLayers));
+        }
+
+        // For base price in simulation mode:
+        // - If SURGE layer is winning AND enabled, find the non-surge layer winner for base price
+        // - Otherwise, base price = winning price (no strikethrough needed)
+        if (winner?.layer.type === 'SURGE' && enabledLayers.has('surge-layer')) {
+          // Find the winning non-SURGE layer for the base price
+          const nonSurgeWinner = layerPrices.find(lp =>
+            lp.isActive &&
+            enabledLayers.has(lp.layer.id) &&
+            lp.layer.type !== 'SURGE'
+          );
+          finalBasePrice = nonSurgeWinner?.price ?? apiBasePrice;
+        } else {
+          finalBasePrice = finalWinningPrice; // Same as winning price when not showing surge
+        }
+      } else {
+        // Normal mode: use API pricing
+        apiWinningPrice = surgeEnabled ? apiSurgePrice : apiBasePrice;
+        finalWinningPrice = apiWinningPrice;
+        finalBasePrice = apiBasePrice;
+
+        // Debug: Log normal mode pricing for first few iterations
+        if (iterationCount <= 5) {
+          console.log(`🐛 [Iteration ${iterationCount}, Hour ${hour}] Normal mode pricing:`, {
+            surgeEnabled,
+            apiBasePrice,
+            apiSurgePrice,
+            apiWinningPrice,
+            finalWinningPrice,
+            finalBasePrice
+          });
+        }
+      }
+
+      // Calculate dynamic surge price in simulation mode
+      let finalSurgePrice = apiSurgePrice;
+      if (isSimulationEnabled && winner?.layer.type === 'SURGE' && enabledLayers.has('surge-layer')) {
+        // In simulation mode, if SURGE is winning, calculate surge price from current base
+        const nonSurgeWinner = layerPrices.find(lp =>
+          lp.isActive &&
+          enabledLayers.has(lp.layer.id) &&
+          lp.layer.type !== 'SURGE'
+        );
+        if (nonSurgeWinner && nonSurgeWinner.price !== null && apiSurgeMultiplier !== undefined) {
+          finalSurgePrice = nonSurgeWinner.price * apiSurgeMultiplier;
+        }
+      }
+
+      if (hour === 4 && currentTime.getDate() === 29) {
+        console.log('🐛 [4 AM JAN 29] Setting slot values:');
+        console.log('   finalWinningPrice:', finalWinningPrice);
+        console.log('   finalBasePrice:', finalBasePrice);
+        console.log('   apiSurgePrice:', apiSurgePrice);
+        console.log('   finalSurgePrice:', finalSurgePrice);
+        console.log('   apiSurgeMultiplier:', apiSurgeMultiplier);
+        console.log('   isSimulationEnabled:', isSimulationEnabled);
+        console.log('   surgeEnabled:', surgeEnabled);
+        console.log('   enabledLayers.has("surge-layer"):', enabledLayers.has('surge-layer'));
+        console.log('   Winner layer:', winner?.layer.name, winner?.layer.type);
+        console.log('   Winner price:', winner?.price);
+        console.log('   apiWinningPrice:', apiWinningPrice);
+        console.log('   apiBasePrice:', apiBasePrice);
+        console.log('   Date:', currentTime.toISOString());
+      }
+
       slots.push({
         hour,
         label: formatHour(hour),
         date: new Date(currentTime),
         layers: layerPrices,
         winningLayer: winner?.layer,
-        winningPrice: winner?.price !== undefined && winner?.price !== null ? winner.price : undefined,
+        // Use final winning price (respects simulation mode and layer toggles)
+        winningPrice: finalWinningPrice !== undefined ? finalWinningPrice : (apiWinningPrice !== undefined ? apiWinningPrice : undefined),
+        basePrice: finalBasePrice !== undefined ? finalBasePrice : (apiWinningPrice !== undefined ? apiWinningPrice : undefined),
+        surgePrice: finalSurgePrice,
+        surgeMultiplier: apiSurgeMultiplier,
         capacity: capacityForHour,
         eventNames: eventNames.length > 0 ? eventNames : undefined,
         events: eventsWithPriority.length > 0 ? eventsWithPriority : undefined,
@@ -819,6 +1187,10 @@ export default function TimelineSimulatorPage() {
 
       currentTime.setHours(currentTime.getHours() + 1);
     }
+
+    // NOTE: Surge pricing now happens automatically in the pricing engine (SURGE ratesheets)
+    // No post-processing needed - surge ratesheets are generated and applied in the pricing waterfall
+    console.log('🔍 Surge enabled:', surgeEnabled, '| Active config:', !!activeSurgeConfig);
 
     setTimeSlots(slots);
   };
@@ -881,7 +1253,17 @@ export default function TimelineSimulatorPage() {
   };
 
   const getTotalCost = (): number => {
+    return surgeEnabled ? getTotalSurgeCost() : getTotalBaseCost();
+  };
+
+  const getTotalBaseCost = (): number => {
     return timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
+  };
+
+  const getTotalSurgeCost = (): number => {
+    return timeSlots.reduce((sum, slot) => {
+      return sum + (slot.surgePrice || slot.winningPrice || 0);
+    }, 0);
   };
 
   const getTotalDuration = (): string => {
@@ -946,13 +1328,59 @@ export default function TimelineSimulatorPage() {
   };
 
   const toggleLayer = (layerId: string) => {
+    console.log('🔄 [toggleLayer] Attempting to toggle:', layerId);
+
     setEnabledLayers(prev => {
       const newSet = new Set(prev);
+      const allLayers = getPricingLayers();
+
+      console.log('🔄 [toggleLayer] Current state:', {
+        layerId,
+        currentlyEnabled: Array.from(prev),
+        allLayers: allLayers.map(l => ({ id: l.id, name: l.name, type: l.type }))
+      });
+
+      // Check if trying to disable a layer
       if (newSet.has(layerId)) {
+        const layerToDisable = allLayers.find(l => l.id === layerId);
+
+        // Count enabled DEFAULT layers AFTER removing this layer
+        // DEFAULT layers are always active (no time windows), so we need at least one
+        const enabledDefaultLayersAfterDisable = Array.from(newSet)
+          .filter(id => id !== layerId) // Exclude the layer being disabled
+          .filter(id => {
+            const layer = allLayers.find(l => l.id === id);
+            return layer && (
+              layer.type === 'SUBLOCATION_DEFAULT' ||
+              layer.type === 'LOCATION_DEFAULT' ||
+              layer.type === 'CUSTOMER_DEFAULT'
+            );
+          });
+
+        console.log('🔄 [toggleLayer] Disabling check:', {
+          layerToDisable: layerToDisable?.name,
+          layerType: layerToDisable?.type,
+          enabledDefaultLayersAfterDisable: enabledDefaultLayersAfterDisable.length,
+          willBlock: enabledDefaultLayersAfterDisable.length === 0
+        });
+
+        // Prevent disabling if it would leave zero DEFAULT layers
+        // This ensures there's always at least one always-active pricing layer
+        if (enabledDefaultLayersAfterDisable.length === 0) {
+          console.log('⚠️ BLOCKED: Cannot disable layer - at least one DEFAULT layer must remain enabled:', layerId);
+          return prev; // Return unchanged
+        }
+
+        // Allow disabling this layer
+        console.log('✅ Allowing disable of:', layerId);
         newSet.delete(layerId);
       } else {
+        // Enabling a layer is always allowed
+        console.log('✅ Enabling layer:', layerId);
         newSet.add(layerId);
       }
+
+      console.log('🔄 [toggleLayer] New enabled layers:', Array.from(newSet));
       return newSet;
     });
   };
@@ -1087,6 +1515,45 @@ export default function TimelineSimulatorPage() {
                   </div>
                   <FileText className="w-4 h-4 text-white" />
                   <span className="text-white font-semibold text-sm">Planning</span>
+                </button>
+
+                {/* Surge Pricing Toggle - Shows surge multiplier when active */}
+                <button
+                  onClick={() => setSurgeEnabled(!surgeEnabled)}
+                  disabled={!activeSurgeConfig}
+                  className={`flex items-center gap-2 group ${
+                    !activeSurgeConfig ? 'opacity-40 cursor-not-allowed' : ''
+                  }`}
+                  title={!activeSurgeConfig ? 'No surge config available for this sublocation' : 'Toggle surge pricing'}
+                >
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                    surgeEnabled && activeSurgeConfig
+                      ? 'bg-white border-white'
+                      : 'border-white/50 group-hover:border-white/70'
+                  }`}>
+                    {surgeEnabled && activeSurgeConfig && (
+                      <svg className="w-3 h-3 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <Zap className="w-4 h-4 text-white" />
+                  <span className="text-white font-semibold text-sm">Surge Pricing</span>
+                  {surgeEnabled && activeSurgeConfig && (
+                    <span className="px-2 py-0.5 bg-orange-500 text-white text-xs font-bold rounded-full">
+                      {(() => {
+                        const { demandSupplyParams, surgeParams } = activeSurgeConfig;
+                        const pressure = demandSupplyParams.currentDemand / demandSupplyParams.currentSupply;
+                        const normalized = pressure / demandSupplyParams.historicalAvgPressure;
+                        const rawFactor = 1 + surgeParams.alpha * Math.log(normalized);
+                        const surgeFactor = Math.max(
+                          surgeParams.minMultiplier,
+                          Math.min(surgeParams.maxMultiplier, rawFactor)
+                        );
+                        return `${surgeFactor.toFixed(2)}x`;
+                      })()}
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -1281,11 +1748,36 @@ export default function TimelineSimulatorPage() {
                 <div className="text-center mb-8">
                   <div className="inline-flex items-baseline gap-2 mb-2">
                     <span className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Cost</span>
+                    {surgeEnabled && activeSurgeConfig && (
+                      <span className="px-2 py-0.5 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold rounded-full flex items-center gap-1">
+                        <Zap className="w-3 h-3" />
+                        SURGE
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center justify-center gap-3">
-                    <div className="text-8xl font-semibold tracking-tight bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 bg-clip-text text-transparent">
-                      ${getTotalCost().toLocaleString()}
-                    </div>
+                    {surgeEnabled && activeSurgeConfig ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-baseline gap-4">
+                          <span className="text-4xl font-medium text-gray-400 line-through">
+                            ${getTotalBaseCost().toLocaleString()}
+                          </span>
+                          <span className="text-8xl font-semibold tracking-tight bg-gradient-to-br from-orange-600 to-red-600 bg-clip-text text-transparent">
+                            ${getTotalSurgeCost().toLocaleString()}
+                          </span>
+                        </div>
+                        <span className={`text-sm font-bold ${getTotalSurgeCost() > getTotalBaseCost() ? 'text-red-600' : 'text-green-600'}`}>
+                          {getTotalSurgeCost() > getTotalBaseCost() ? '+' : ''}
+                          ${(getTotalSurgeCost() - getTotalBaseCost()).toLocaleString()}
+                          {' '}
+                          ({((getTotalSurgeCost() / getTotalBaseCost() - 1) * 100).toFixed(1)}%)
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-8xl font-semibold tracking-tight bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 bg-clip-text text-transparent">
+                        ${getTotalCost().toLocaleString()}
+                      </div>
+                    )}
                   </div>
                   <div className="mt-3 text-sm text-gray-500 font-medium">
                     {getTotalDuration()}
@@ -1519,9 +2011,14 @@ export default function TimelineSimulatorPage() {
                         const chartWidth = 1000 - leftMargin - rightMargin;
 
                         const points = timeSlots.map((slot, i) => {
-                          const x = leftMargin + (i / (timeSlots.length - 1)) * chartWidth;
+                          // Handle single slot case (avoid division by zero)
+                          const x = timeSlots.length === 1
+                            ? leftMargin + chartWidth / 2  // Center single point
+                            : leftMargin + (i / (timeSlots.length - 1)) * chartWidth;
+
                           const normalizedPrice = ((slot.winningPrice || 0) - minPrice + padding) / (range + 2 * padding);
                           const y = chartBaseline - (normalizedPrice * chartHeight);
+
                           return { x, y, slot };
                         });
 
@@ -1662,24 +2159,37 @@ export default function TimelineSimulatorPage() {
                             })}
 
                             {/* Y-axis labels */}
-                            {[0, 1, 2, 3, 4].map(i => {
-                              const price = maxPrice - (i * maxPrice / 4);
-                              const y = 40 + i * 50;
+                            {(() => {
+                              const prices = timeSlots.map(s => s.winningPrice || 0);
+                              const maxPrice = Math.max(...prices);
+                              const minPrice = Math.min(...prices.filter(p => p > 0));
+                              const range = maxPrice - minPrice || 1;
+                              const padding = range * 0.15;
 
-                              return (
-                                <text
-                                  key={`y-${i}`}
-                                  x="30"
-                                  y={y + 5}
-                                  textAnchor="end"
-                                  fill="#64748b"
-                                  fontSize="11"
-                                  fontWeight="600"
-                                >
-                                  ${price.toFixed(0)}
-                                </text>
-                              );
-                            })}
+                              // Y-axis should show the actual scale used for plotting
+                              const yAxisMax = maxPrice + padding;
+                              const yAxisMin = minPrice - padding;
+                              const yAxisRange = yAxisMax - yAxisMin;
+
+                              return [0, 1, 2, 3, 4].map(i => {
+                                const price = yAxisMax - (i * yAxisRange / 4);
+                                const y = 40 + i * 50;
+
+                                return (
+                                  <text
+                                    key={`y-${i}`}
+                                    x="30"
+                                    y={y + 5}
+                                    textAnchor="end"
+                                    fill="#64748b"
+                                    fontSize="11"
+                                    fontWeight="600"
+                                  >
+                                    ${price.toFixed(0)}
+                                  </text>
+                                );
+                              });
+                            })()}
                           </>
                         );
                       })()}
@@ -1724,11 +2234,48 @@ export default function TimelineSimulatorPage() {
 
                         {/* Pricing Section */}
                         <div className="bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 px-2 py-3 border-b border-gray-100">
-                          <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Price</div>
+                          <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider flex items-center justify-center gap-1">
+                            Price
+                            {/* Show surge icon if surge is ON and SURGE layer is winning */}
+                            {surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || enabledLayers.has('surge-layer')) && (
+                              <Zap className="w-2 h-2 text-orange-600" />
+                            )}
+                          </div>
                           {slot.winningPrice !== undefined && slot.winningPrice !== null ? (
-                            <div className="text-2xl font-black bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
-                              ${slot.winningPrice}
-                            </div>
+                            /* Show surge price only if: surge enabled AND SURGE layer is winning */
+                            surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || enabledLayers.has('surge-layer')) ? (
+                              <div className="space-y-1">
+                                {slot.basePrice !== undefined && (
+                                  <div className="text-sm font-bold text-gray-400 line-through">
+                                    ${slot.basePrice.toFixed(2)}
+                                  </div>
+                                )}
+                                <div className={`text-2xl font-black ${
+                                  slot.basePrice && slot.surgePrice > slot.basePrice
+                                    ? 'bg-gradient-to-r from-orange-600 to-red-600'
+                                    : slot.basePrice && slot.surgePrice < slot.basePrice
+                                    ? 'bg-gradient-to-r from-green-600 to-emerald-600'
+                                    : 'bg-gradient-to-r from-gray-600 to-gray-700'
+                                } bg-clip-text text-transparent`}>
+                                  ${slot.surgePrice.toFixed(2)}
+                                </div>
+                                {slot.surgeMultiplier && (
+                                  <div className={`text-[9px] font-bold ${
+                                    slot.surgeMultiplier > 1
+                                      ? 'text-red-600'
+                                      : slot.surgeMultiplier < 1
+                                      ? 'text-green-600'
+                                      : 'text-gray-600'
+                                  }`}>
+                                    {slot.surgeMultiplier.toFixed(2)}x
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-2xl font-black bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
+                                ${slot.winningPrice.toFixed(2)}
+                              </div>
+                            )
                           ) : (
                             <div className="text-base font-extrabold text-gray-300">
                               -
@@ -1763,7 +2310,7 @@ export default function TimelineSimulatorPage() {
                             <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Revenue Max</div>
                             <div className="flex items-baseline justify-center gap-0.5">
                               <span className="text-lg font-black bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
-                                ${(slot.capacity.max * slot.winningPrice).toLocaleString()}
+                                ${(slot.capacity.max * (surgeEnabled && slot.surgePrice && (!isSimulationEnabled || enabledLayers.has('surge-layer')) ? slot.surgePrice : slot.winningPrice)).toLocaleString()}
                               </span>
                             </div>
                           </div>
@@ -1838,20 +2385,54 @@ export default function TimelineSimulatorPage() {
 
                   const isLayerEnabled = enabledLayers.has(layer.id);
 
+                  // Check if this layer can be disabled
+                  // Count enabled DEFAULT layers AFTER removing this layer
+                  // DEFAULT layers are always active, so we need at least one
+                  const enabledDefaultLayersAfterDisable = Array.from(enabledLayers)
+                    .filter(id => id !== layer.id) // Exclude current layer
+                    .filter(id => {
+                      const l = allLayers.find(layer => layer.id === id);
+                      return l && (
+                        l.type === 'SUBLOCATION_DEFAULT' ||
+                        l.type === 'LOCATION_DEFAULT' ||
+                        l.type === 'CUSTOMER_DEFAULT'
+                      );
+                    });
+
+                  // Cannot disable if it would leave zero DEFAULT layers
+                  const wouldLeaveNoDefaultLayers = enabledDefaultLayersAfterDisable.length === 0;
+                  const canToggleOff = !wouldLeaveNoDefaultLayers;
+
+                  // Debug logging for layer toggle state
+                  if (layerIdx === 0 || layer.type === 'SURGE') {
+                    console.log(`🔒 [Layer Toggle Debug] ${layer.name}:`, {
+                      layerId: layer.id,
+                      layerType: layer.type,
+                      isEnabled: isLayerEnabled,
+                      enabledDefaultLayersAfterDisable: enabledDefaultLayersAfterDisable.length,
+                      wouldLeaveNoDefaultLayers,
+                      canToggleOff,
+                      shouldShowLock: isLayerEnabled && !canToggleOff,
+                      allEnabledLayers: Array.from(enabledLayers),
+                      allLayers: allLayers.map(l => ({ id: l.id, name: l.name, type: l.type }))
+                    });
+                  }
+
                   return (
                   <div key={layer.id}>
                     {/* Layer label with toggle */}
                     <div className="flex items-center gap-2 mb-1">
                       {/* Toggle switch */}
                       <button
-                        onClick={() => isSimulationEnabled && toggleLayer(layer.id)}
-                        disabled={!isSimulationEnabled}
+                        onClick={() => isSimulationEnabled && canToggleOff && toggleLayer(layer.id)}
+                        disabled={!isSimulationEnabled || (isLayerEnabled && !canToggleOff)}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                          !isSimulationEnabled ? 'bg-gray-200 opacity-40 cursor-not-allowed' :
+                          !isSimulationEnabled || (isLayerEnabled && !canToggleOff) ? 'bg-gray-400 opacity-60 cursor-not-allowed' :
                           isLayerEnabled ? 'bg-blue-600' : 'bg-gray-300'
                         }`}
                         title={
                           !isSimulationEnabled ? 'Enable Simulation mode to toggle layers' :
+                          (isLayerEnabled && !canToggleOff) ? 'Cannot disable - at least one DEFAULT layer must remain enabled (always-active pricing)' :
                           isLayerEnabled ? 'Click to disable this layer' : 'Click to enable this layer'
                         }
                       >
@@ -1861,8 +2442,13 @@ export default function TimelineSimulatorPage() {
                           }`}
                         />
                       </button>
-                      <div className="text-xs font-medium text-gray-700" title={layer.name}>
+                      <div className="text-xs font-medium text-gray-700 flex items-center gap-1" title={layer.name}>
                         <span className="font-semibold">{layer.name}</span>
+                        {(isLayerEnabled && !canToggleOff) && (
+                          <span title="Cannot disable - at least one DEFAULT layer required (always-active pricing)">
+                            <Lock className="w-3 h-3 text-gray-500" />
+                          </span>
+                        )}
                         <span className="text-[10px] text-gray-500 ml-2">Priority: {layer.priority}</span>
                       </div>
                     </div>
@@ -1926,7 +2512,7 @@ export default function TimelineSimulatorPage() {
                                   <div className={`font-bold text-sm drop-shadow-md ${
                                     isDisabled ? 'text-gray-600 line-through' : 'text-white'
                                   }`}>
-                                    ${layerData.price}
+                                    ${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}
                                   </div>
                                   {/* Capacity */}
                                   {slot.capacity && (
