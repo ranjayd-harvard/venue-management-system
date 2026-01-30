@@ -10,11 +10,12 @@ import {
   User,
   Award,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Filter
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
-import { Settings, Save, FolderOpen, X, Zap, FileText } from 'lucide-react';
+import { Save, FolderOpen, X, Zap, FileText } from 'lucide-react';
 import { PricingScenario } from '@/models/types';
 
 interface TimeWindow {
@@ -981,23 +982,32 @@ export default function TimelineSimulatorPage() {
         <div className="max-w-[1800px] mx-auto px-8 py-8">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-4xl font-bold mb-2">Pricing Simulator</h1>
-              <p className="text-pink-100 font-thin">Visual waterfall showing pricing hierarchy and winning rates for each hour</p>
+              {/* Dynamic Title: Show SubLocation name or default */}
+              <div className="flex items-center gap-3 mb-2">
+                <h1 className="text-4xl font-bold">
+                  {currentSubLocation ? currentSubLocation.label : 'Pricing Simulator'}
+                </h1>
+                <button
+                  onClick={() => setIsFiltersModalOpen(true)}
+                  className="bg-white/10 backdrop-blur-sm border border-white/30 text-white p-2 rounded-lg hover:bg-white/20 transition-all shadow-lg"
+                  title="Change SubLocation"
+                >
+                  <Filter className="w-5 h-5" />
+                </button>
+              </div>
 
-              {/* Selected Values Display */}
+              {/* Location context and description */}
+              {currentLocation && currentSubLocation ? (
+                <p className="text-pink-100 font-thin">
+                  📍 {currentLocation.name} • Visual waterfall showing pricing hierarchy
+                </p>
+              ) : (
+                <p className="text-pink-100 font-thin">Visual waterfall showing pricing hierarchy and winning rates for each hour</p>
+              )}
+
+              {/* Selected Values Display - More compact, without duplicating sublocation/location */}
               {selectedSubLocation && (
                 <div className="flex flex-wrap items-center gap-2 text-sm mt-4">
-                  <span className="font-semibold text-pink-100">Viewing:</span>
-                  {currentLocation && (
-                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                      📍 {currentLocation.name}
-                    </span>
-                  )}
-                  {currentSubLocation && (
-                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                      🏢 {currentSubLocation.label}
-                    </span>
-                  )}
                   {currentEvent && (
                     <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
                       🗓️ {currentEvent.name}
@@ -1011,6 +1021,20 @@ export default function TimelineSimulatorPage() {
                       🎫 Event Booking
                     </span>
                   )}
+                  {/* Timezone Info */}
+                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
+                    <Clock className="w-3 h-3 mr-1.5" />
+                    {new Date().toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: true
+                    })}
+                  </span>
+                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white text-xs font-medium border border-white/30">
+                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </span>
                 </div>
               )}
             </div>
@@ -1123,38 +1147,6 @@ export default function TimelineSimulatorPage() {
                     )}
                   </>
                 )}
-
-                {/* Filters button - always visible */}
-                <button
-                  onClick={() => setIsFiltersModalOpen(true)}
-                  className="bg-white text-pink-600 px-6 py-3 rounded-xl font-semibold hover:bg-pink-50 transition-all shadow-lg flex items-center gap-2"
-                >
-                  <Settings className="w-5 h-5" />
-                  Filters
-                </button>
-              </div>
-
-              {/* Timezone Info - Compact */}
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg px-3 py-2 text-xs space-y-1 border border-white/20">
-                <div className="flex items-center gap-2">
-                  <Clock className="w-3 h-3" />
-                  <span className="font-medium text-pink-100">Local:</span>
-                  <span className="text-white font-mono">
-                    {new Date().toLocaleString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-pink-100">TZ:</span>
-                  <span className="text-white font-mono text-[10px]">
-                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
-                  </span>
-                </div>
               </div>
             </div>
           </div>
