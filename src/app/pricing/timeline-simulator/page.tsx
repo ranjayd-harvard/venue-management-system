@@ -1982,20 +1982,6 @@ export default function TimelineSimulatorPage() {
                         </linearGradient>
                       </defs>
 
-                      {/* Grid lines */}
-                      {[0, 1, 2, 3, 4].map(i => (
-                        <line
-                          key={`grid-${i}`}
-                          x1="40"
-                          y1={40 + i * 50}
-                          x2="980"
-                          y2={40 + i * 50}
-                          stroke="#e5e7eb"
-                          strokeWidth="0.5"
-                          opacity="0.5"
-                        />
-                      ))}
-
                       {/* Chart calculation and rendering */}
                       {(() => {
                         const prices = timeSlots.map(s => s.winningPrice || 0);
@@ -2010,13 +1996,35 @@ export default function TimelineSimulatorPage() {
                         const rightMargin = 20;
                         const chartWidth = 1000 - leftMargin - rightMargin;
 
+                        // Calculate Y-axis values for grid lines with intelligent scaling
+                        let yAxisMax, yAxisMin, yAxisRange;
+
+                        if (range < 1) {
+                          // Very small range - show a fixed $1 range centered on the price
+                          const avgPrice = (maxPrice + minPrice) / 2;
+                          yAxisMin = Math.floor(avgPrice) - 0.5;
+                          yAxisMax = Math.ceil(avgPrice) + 0.5;
+                          yAxisRange = yAxisMax - yAxisMin;
+                        } else if (range < 5) {
+                          // Small range - add moderate padding
+                          yAxisMax = maxPrice + padding;
+                          yAxisMin = minPrice - padding;
+                          yAxisRange = yAxisMax - yAxisMin;
+                        } else {
+                          // Larger range - use standard padding
+                          yAxisMax = Math.ceil(maxPrice + padding);
+                          yAxisMin = Math.floor(minPrice - padding);
+                          yAxisRange = yAxisMax - yAxisMin;
+                        }
+
                         const points = timeSlots.map((slot, i) => {
                           // Handle single slot case (avoid division by zero)
                           const x = timeSlots.length === 1
                             ? leftMargin + chartWidth / 2  // Center single point
                             : leftMargin + (i / (timeSlots.length - 1)) * chartWidth;
 
-                          const normalizedPrice = ((slot.winningPrice || 0) - minPrice + padding) / (range + 2 * padding);
+                          // Use Y-axis range for normalization to ensure consistency
+                          const normalizedPrice = ((slot.winningPrice || 0) - yAxisMin) / yAxisRange;
                           const y = chartBaseline - (normalizedPrice * chartHeight);
 
                           return { x, y, slot };
@@ -2026,6 +2034,28 @@ export default function TimelineSimulatorPage() {
 
                         return (
                           <>
+                            {/* Grid lines - positioned to match Y-axis labels and chart scale */}
+                            {[0, 1, 2, 3, 4].map(i => {
+                              // Calculate price for this grid line
+                              const price = yAxisMax - (i * yAxisRange / 4);
+                              // Convert price to Y coordinate using same formula as chart points
+                              const normalizedPrice = (price - yAxisMin) / yAxisRange;
+                              const y = chartBaseline - (normalizedPrice * chartHeight);
+
+                              return (
+                                <line
+                                  key={`grid-${i}`}
+                                  x1={leftMargin}
+                                  y1={y}
+                                  x2={leftMargin + chartWidth}
+                                  y2={y}
+                                  stroke="#e5e7eb"
+                                  strokeWidth="0.5"
+                                  opacity="0.5"
+                                />
+                              );
+                            })}
+
                             {/* Area fill */}
                             <polygon
                               points={`${leftMargin},${chartBaseline} ${pointsStr} ${leftMargin + chartWidth},${chartBaseline}`}
@@ -2158,38 +2188,38 @@ export default function TimelineSimulatorPage() {
                               );
                             })}
 
-                            {/* Y-axis labels */}
-                            {(() => {
-                              const prices = timeSlots.map(s => s.winningPrice || 0);
-                              const maxPrice = Math.max(...prices);
-                              const minPrice = Math.min(...prices.filter(p => p > 0));
-                              const range = maxPrice - minPrice || 1;
-                              const padding = range * 0.15;
+                            {/* Y-axis labels - positioned to match grid lines */}
+                            {[0, 1, 2, 3, 4].map(i => {
+                              // Calculate price for this label (same as grid line)
+                              const price = yAxisMax - (i * yAxisRange / 4);
+                              // Convert price to Y coordinate using same formula as chart points
+                              const normalizedPrice = (price - yAxisMin) / yAxisRange;
+                              const y = chartBaseline - (normalizedPrice * chartHeight);
 
-                              // Y-axis should show the actual scale used for plotting
-                              const yAxisMax = maxPrice + padding;
-                              const yAxisMin = minPrice - padding;
-                              const yAxisRange = yAxisMax - yAxisMin;
+                              // Dynamic decimal precision based on range
+                              let decimals;
+                              if (yAxisRange < 2) {
+                                decimals = 2; // Very small range - show cents
+                              } else if (yAxisRange < 10) {
+                                decimals = 1; // Small range - show one decimal
+                              } else {
+                                decimals = 0; // Large range - whole dollars
+                              }
 
-                              return [0, 1, 2, 3, 4].map(i => {
-                                const price = yAxisMax - (i * yAxisRange / 4);
-                                const y = 40 + i * 50;
-
-                                return (
-                                  <text
-                                    key={`y-${i}`}
-                                    x="30"
-                                    y={y + 5}
-                                    textAnchor="end"
-                                    fill="#64748b"
-                                    fontSize="11"
-                                    fontWeight="600"
-                                  >
-                                    ${price.toFixed(0)}
-                                  </text>
-                                );
-                              });
-                            })()}
+                              return (
+                                <text
+                                  key={`y-${i}`}
+                                  x="30"
+                                  y={y + 5}
+                                  textAnchor="end"
+                                  fill="#64748b"
+                                  fontSize="11"
+                                  fontWeight="600"
+                                >
+                                  ${price.toFixed(decimals)}
+                                </text>
+                              );
+                            })}
                           </>
                         );
                       })()}
