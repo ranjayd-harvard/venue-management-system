@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
-import { Save, FolderOpen, X, Zap, FileText, Lock } from 'lucide-react';
+import { Save, FolderOpen, X, Zap, FileText, Lock, Activity } from 'lucide-react';
 import { PricingScenario, SurgeConfig } from '@/models/types';
 
 interface TimeWindow {
@@ -1740,25 +1740,36 @@ export default function TimelineSimulatorPage() {
               {/* Mode Toggles - Hierarchical Structure */}
               <div className="flex flex-col gap-3 items-end w-full">
                 <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 flex flex-col gap-2 border border-white/20">
-                  {/* Simulation Toggle - Top Level */}
-                  <button
-                    onClick={() => setIsSimulationEnabled(!isSimulationEnabled)}
-                    className="flex items-center gap-2 group"
-                  >
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
-                      isSimulationEnabled
-                        ? 'bg-white border-white'
-                        : 'border-white/50 group-hover:border-white/70'
-                    }`}>
-                      {isSimulationEnabled && (
-                        <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
+                  {/* Mode Toggle - Radio Button Style */}
+                  <div className="flex items-center gap-2">
+                    <div className="bg-white/20 backdrop-blur-sm rounded-lg p-1 flex gap-1">
+                      {/* Live Mode Button */}
+                      <button
+                        onClick={() => setIsSimulationEnabled(false)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                          !isSimulationEnabled
+                            ? 'bg-white text-purple-600 shadow-sm'
+                            : 'text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <Activity className="w-3.5 h-3.5" />
+                        Live Mode
+                      </button>
+
+                      {/* Simulation Mode Button */}
+                      <button
+                        onClick={() => setIsSimulationEnabled(true)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                          isSimulationEnabled
+                            ? 'bg-white text-purple-600 shadow-sm'
+                            : 'text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <Zap className="w-3.5 h-3.5" />
+                        Simulation
+                      </button>
                     </div>
-                    <Zap className="w-4 h-4 text-white" />
-                    <span className="text-white font-semibold text-sm">Simulation</span>
-                  </button>
+                  </div>
 
                   {/* Children of Simulation - Only show when Simulation is enabled */}
                   {isSimulationEnabled && (
@@ -1825,66 +1836,70 @@ export default function TimelineSimulatorPage() {
                   )}
                 </div>
 
-                {/* Scenario Controls - Children of Planning */}
+                {/* Scenario Management - Compact Card */}
                 {isPlanningEnabled && isSimulationEnabled && selectedSubLocation && (
-                  <div className="flex gap-3">
-                    {/* Save Scenario Button */}
-                    <button
-                      onClick={saveScenario}
-                      className="bg-white/20 backdrop-blur-sm border border-white/30 text-white px-6 py-3 rounded-xl font-semibold hover:bg-white/30 transition-all shadow-lg flex items-center gap-2"
-                    >
-                      <Save className="w-5 h-5" />
-                      Save Scenario
-                    </button>
-
-                    {/* Load Scenario Dropdown */}
-                    {scenarios.length > 0 && (
-                      <div className="relative group">
-                        <select
-                          onChange={(e) => {
-                            const scenario = scenarios.find(s => s._id?.toString() === e.target.value);
-                            if (scenario) loadScenario(scenario);
-                          }}
-                          value={currentScenarioId || ''}
-                          className="bg-white/20 backdrop-blur-sm border border-white/30 text-white px-6 py-3 pl-12 pr-4 rounded-xl font-semibold hover:bg-white/30 transition-all shadow-lg appearance-none cursor-pointer"
-                          style={{
-                            backgroundImage: 'none',
-                          }}
-                        >
-                          <option value="" className="bg-purple-600 text-white">📁 Load Scenario...</option>
-                          {scenarios.map((scenario) => (
-                            <option
-                              key={scenario._id?.toString()}
-                              value={scenario._id?.toString()}
-                              className="bg-purple-600 text-white"
-                            >
-                              {scenario.name}
-                              {scenario._id?.toString() === currentScenarioId && hasUnsavedChanges ? ' *' : ''}
-                            </option>
-                          ))}
-                        </select>
-                        <FolderOpen className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-white" />
-                        {currentScenarioId && (
-                          <div
-                            className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-purple-600 ${
-                              hasUnsavedChanges ? 'bg-yellow-400' : 'bg-green-400'
-                            }`}
-                            title={hasUnsavedChanges ? 'Scenario has unsaved changes' : 'Scenario loaded'}
-                          ></div>
-                        )}
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 border border-white/20 min-w-[280px]">
+                    {/* Current Scenario Status */}
+                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/20">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${hasUnsavedChanges ? 'bg-yellow-400 animate-pulse' : currentScenarioId ? 'bg-green-400' : 'bg-gray-400'}`}></div>
+                        <span className="text-white/70 text-xs font-medium">
+                          {currentScenarioId
+                            ? (hasUnsavedChanges ? 'Modified' : 'Saved')
+                            : 'No scenario'}
+                        </span>
                       </div>
-                    )}
+                      {currentScenarioId && (
+                        <button
+                          onClick={clearScenario}
+                          className="text-white/60 hover:text-red-400 transition-colors"
+                          title="Clear scenario"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
 
-                    {/* Clear Scenario Button - Only show when a scenario is loaded */}
-                    {currentScenarioId && (
+                    {/* Action Buttons */}
+                    <div className="space-y-2">
+                      {/* Save Button */}
                       <button
-                        onClick={clearScenario}
-                        className="bg-red-500/20 backdrop-blur-sm border border-red-400/30 text-white px-4 py-3 rounded-xl font-semibold hover:bg-red-500/30 transition-all shadow-lg flex items-center gap-2"
-                        title="Clear loaded scenario"
+                        onClick={saveScenario}
+                        className="w-full bg-white/20 hover:bg-white/30 border border-white/30 text-white px-3 py-2 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 group"
                       >
-                        <X className="w-5 h-5" />
+                        <Save className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        <span>{currentScenarioId && !hasUnsavedChanges ? 'Save As New' : 'Save Scenario'}</span>
                       </button>
-                    )}
+
+                      {/* Load Scenario - Custom Dropdown */}
+                      {scenarios.length > 0 && (
+                        <div className="relative">
+                          <select
+                            onChange={(e) => {
+                              const scenario = scenarios.find(s => s._id?.toString() === e.target.value);
+                              if (scenario) loadScenario(scenario);
+                            }}
+                            value={currentScenarioId || ''}
+                            className="w-full bg-white/20 hover:bg-white/30 border border-white/30 text-white px-3 py-2 pl-9 pr-8 rounded-lg font-medium text-sm transition-all appearance-none cursor-pointer"
+                            style={{ backgroundImage: 'none' }}
+                          >
+                            <option value="" className="bg-purple-600 text-white">Load Scenario...</option>
+                            {scenarios.map((scenario) => (
+                              <option
+                                key={scenario._id?.toString()}
+                                value={scenario._id?.toString()}
+                                className="bg-purple-600 text-white"
+                              >
+                                {scenario.name}
+                                {scenario._id?.toString() === currentScenarioId && hasUnsavedChanges ? ' •' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <FolderOpen className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-white/70" />
+                          <ChevronDown className="w-4 h-4 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-white/70" />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2188,7 +2203,7 @@ export default function TimelineSimulatorPage() {
 
               {/* Hourly Rate Breakdown Chart */}
               {timeSlots.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6 ml-6 mr-6">
                   {/* Header with Stats */}
                   <div className="flex items-start justify-between mb-6">
                     <div className="flex-1">
@@ -2560,8 +2575,7 @@ export default function TimelineSimulatorPage() {
               )}
 
               {/* Time markers in grid with winning prices */}
-              <div className="mt-4">
-                <div className="grid grid-cols-12 gap-1">
+              <div className="grid grid-cols-12 gap-1 mb-6 mt-6 ml-6 mr-6">
                   {timeSlots.map((slot, idx) => {
                     const isSelected = selectedSlot?.slotIdx === idx;
                     const isHovered = hoveredSlot?.slotIdx === idx;
@@ -2706,7 +2720,6 @@ export default function TimelineSimulatorPage() {
                       </div>
                     );
                   })}
-                </div>
               </div>
 
               {/* Toggle button for waterfall */}
