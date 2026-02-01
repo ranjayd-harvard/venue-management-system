@@ -355,120 +355,129 @@ export async function POST(request: NextRequest) {
       console.log(`      Ratesheet: ${seg.ratesheet?.name || 'Default'} (Level: ${seg.ratesheet?.level || 'N/A'}, Priority: ${seg.ratesheet?.priority || 'N/A'})`);
     });
 
-    // Check for active surge config and generate surge ratesheets (only if includeSurge is true)
+    // Check for active surge configs and generate surge ratesheets (only if includeSurge is true)
     let finalResult = baseResult;
     let surgeRatesheets: any[] = [];
 
     if (includeSurge) {
       const { SurgeConfigRepository } = await import('@/models/SurgeConfig');
-      const { calculateSurgeFactor, applySurgeToPrice } = await import('@/lib/surge-pricing-engine');
+      const { calculateSurgeFactor } = await import('@/lib/surge-pricing-engine');
 
-      const surgeConfig = await SurgeConfigRepository.findActiveBySubLocation(
+      // Find ALL surge configs that overlap ANY part of the booking time range
+      // We'll evaluate them per-hour to determine which one wins for each hour
+      const surgeConfigs = await SurgeConfigRepository.findAllActiveBySubLocation(
         subLocationId,
-        new Date(startTime)
+        new Date(startTime),
+        new Date(endTime)
       );
 
-      if (surgeConfig) {
-      console.log('\n🔥 ===== SURGE PRICING GENERATION =====');
-      console.log(`   Surge Config: ${surgeConfig.name}`);
-      console.log(`   Applies To: ${surgeConfig.appliesTo.level} (${surgeConfig.appliesTo.entityId})`);
+      if (surgeConfigs.length > 0) {
+      console.log('\n🔥 ===== SURGE PRICING GENERATION (PER-HOUR EVALUATION) =====');
+      console.log(`   Found ${surgeConfigs.length} active surge config(s)`);
 
-      // Calculate surge factor
-      const surgeResult = calculateSurgeFactor({
-        demand: surgeConfig.demandSupplyParams.currentDemand,
-        supply: surgeConfig.demandSupplyParams.currentSupply,
-        historicalAvgPressure: surgeConfig.demandSupplyParams.historicalAvgPressure,
-        alpha: surgeConfig.surgeParams.alpha,
-        minMultiplier: surgeConfig.surgeParams.minMultiplier,
-        maxMultiplier: surgeConfig.surgeParams.maxMultiplier,
-        emaAlpha: surgeConfig.surgeParams.emaAlpha,
-        previousSmoothedPressure: undefined
+      surgeConfigs.forEach((config, idx) => {
+        console.log(`   ${idx + 1}. ${config.name} (Priority: ${config.priority}, Level: ${config.appliesTo.level})`);
       });
 
-      console.log('\n   Surge Calculation:');
-      console.log(`   - Demand: ${surgeConfig.demandSupplyParams.currentDemand}`);
-      console.log(`   - Supply: ${surgeConfig.demandSupplyParams.currentSupply}`);
-      console.log(`   - Pressure: ${surgeResult.pressure.toFixed(3)}`);
-      console.log(`   - Normalized Pressure: ${surgeResult.normalized_pressure.toFixed(3)}`);
-      console.log(`   - Smoothed Pressure: ${surgeResult.smoothed_pressure.toFixed(3)}`);
-      console.log(`   - Raw Factor: ${surgeResult.raw_factor.toFixed(3)}`);
-      console.log(`   - Final Surge Factor: ${surgeResult.surge_factor.toFixed(3)}x`);
-      console.log(`   - Min/Max: ${surgeConfig.surgeParams.minMultiplier}x - ${surgeConfig.surgeParams.maxMultiplier}x`);
+      // Map to store surge ratesheets grouped by config ID
+      const surgeRatesheetsMap = new Map<string, any[]>();
+      const surgeFactorsMap = new Map<string, number>(); // Store calculated surge factors
 
-      // Generate surge ratesheets with surge-adjusted prices
-      const timeWindows: any[] = [];
-      let windowsCreated = 0;
-      let windowsSkipped = 0;
+      console.log('\n   Evaluating surge per hour:');
 
-      console.log('\n   Generating Surge Time Windows:');
+      // For each hour, find which surge config is active
       for (const segment of baseResult.segments) {
         const hourTimestamp = new Date(segment.startTime);
-        let surgeFactor = surgeResult.surge_factor;
+        const dayOfWeek = hourTimestamp.getDay();
+        const timeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
 
-        // Check if this hour matches the surge config's time windows
-        if (surgeConfig.timeWindows && surgeConfig.timeWindows.length > 0) {
-          const dayOfWeek = hourTimestamp.getDay();
-          const timeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
+        // Find all surge configs active for THIS hour
+        const applicableSurgeConfigs = surgeConfigs.filter(config => {
+          // Check date range
+          if (config.effectiveFrom && hourTimestamp < new Date(config.effectiveFrom)) return false;
+          if (config.effectiveTo && hourTimestamp >= new Date(config.effectiveTo)) return false;
 
-          const matchesWindow = surgeConfig.timeWindows.some(window => {
-            if (window.daysOfWeek && window.daysOfWeek.length > 0) {
-              if (!window.daysOfWeek.includes(dayOfWeek)) return false;
-            }
-            if (window.startTime && window.endTime) {
-              // Handle overnight ranges (e.g., 19:00 - 07:00)
-              if (window.startTime > window.endTime) {
-                // Overnight: matches if time >= startTime OR time < endTime
-                if (timeStr < window.startTime && timeStr >= window.endTime) return false;
-              } else {
-                // Same-day: matches if time >= startTime AND time < endTime
-                if (timeStr < window.startTime || timeStr >= window.endTime) return false;
+          // Check time windows
+          if (config.timeWindows && config.timeWindows.length > 0) {
+            const matchesWindow = config.timeWindows.some((window: any) => {
+              if (window.daysOfWeek && window.daysOfWeek.length > 0) {
+                if (!window.daysOfWeek.includes(dayOfWeek)) return false;
               }
-            }
-            return true;
-          });
+              if (window.startTime && window.endTime) {
+                // Handle overnight ranges
+                if (window.startTime > window.endTime) {
+                  if (timeStr < window.startTime && timeStr >= window.endTime) return false;
+                } else {
+                  if (timeStr < window.startTime || timeStr >= window.endTime) return false;
+                }
+              }
+              return true;
+            });
 
-          if (!matchesWindow) {
-            windowsSkipped++;
-            continue; // Skip this hour
+            if (!matchesWindow) return false;
           }
-        }
 
-        // Store the surge MULTIPLIER, not the absolute price
-        // The pricing engine will apply this multiplier to the base price dynamically
-        const basePrice = segment.pricePerHour;
-        const surgePrice = applySurgeToPrice(basePrice, { ...surgeResult, surge_factor: surgeFactor });
-
-        const startTimeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
-        const endHour = new Date(hourTimestamp);
-        endHour.setHours(endHour.getHours() + 1);
-        const endTimeStr = `${endHour.getHours().toString().padStart(2, '0')}:00`;
-
-        timeWindows.push({
-          startTime: startTimeStr,
-          endTime: endTimeStr,
-          pricePerHour: surgeFactor, // CHANGED: Store multiplier instead of absolute price
-          windowType: 'ABSOLUTE_TIME',
-          surgeMultiplier: surgeFactor // Also store explicitly for clarity
+          return true;
         });
 
-        windowsCreated++;
+        // If multiple configs match, the first one wins (already sorted by priority)
+        if (applicableSurgeConfigs.length > 0) {
+          const winningSurge = applicableSurgeConfigs[0];
+          const configId = winningSurge._id!.toString();
 
-        // Log first 3 conversions
-        if (windowsCreated <= 3) {
-          console.log(`   ${windowsCreated}. ${startTimeStr}-${endTimeStr}: Multiplier ${surgeFactor.toFixed(2)}x (example: $${basePrice.toFixed(2)} → $${surgePrice.toFixed(2)})`);
+          // Calculate surge factor for this config (cache it if not already calculated)
+          if (!surgeFactorsMap.has(configId)) {
+            const surgeResult = calculateSurgeFactor({
+              demand: winningSurge.demandSupplyParams.currentDemand,
+              supply: winningSurge.demandSupplyParams.currentSupply,
+              historicalAvgPressure: winningSurge.demandSupplyParams.historicalAvgPressure,
+              alpha: winningSurge.surgeParams.alpha,
+              minMultiplier: winningSurge.surgeParams.minMultiplier,
+              maxMultiplier: winningSurge.surgeParams.maxMultiplier,
+              emaAlpha: winningSurge.surgeParams.emaAlpha,
+              previousSmoothedPressure: undefined
+            });
+            surgeFactorsMap.set(configId, surgeResult.surge_factor);
+
+            console.log(`   📊 Calculated surge for "${winningSurge.name}": ${surgeResult.surge_factor.toFixed(2)}x`);
+          }
+
+          const surgeFactor = surgeFactorsMap.get(configId)!;
+
+          // Add time window to this config's map entry
+          if (!surgeRatesheetsMap.has(configId)) {
+            surgeRatesheetsMap.set(configId, []);
+          }
+
+          const startTimeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
+          const endHour = new Date(hourTimestamp);
+          endHour.setHours(endHour.getHours() + 1);
+          const endTimeStr = `${endHour.getHours().toString().padStart(2, '0')}:00`;
+
+          surgeRatesheetsMap.get(configId)!.push({
+            startTime: startTimeStr,
+            endTime: endTimeStr,
+            pricePerHour: surgeFactor,
+            windowType: 'ABSOLUTE_TIME',
+            surgeMultiplier: surgeFactor
+          });
+
+          console.log(`   ✓ ${timeStr}: ${winningSurge.name} (${surgeFactor.toFixed(2)}x)`);
         }
       }
 
-      console.log(`\n   Created ${windowsCreated} surge windows, skipped ${windowsSkipped} windows`);
+      // Convert map to array of surge ratesheets (one per unique config that was applied)
+      surgeRatesheets = Array.from(surgeRatesheetsMap.entries()).map(([configId, timeWindows]) => {
+        const config = surgeConfigs.find(c => c._id!.toString() === configId)!;
+        const surgeFactor = surgeFactorsMap.get(configId)!;
 
-      if (timeWindows.length > 0) {
-        const surgeRatesheet = {
+        return {
           _id: new ObjectId(),
-          name: `SURGE: ${surgeConfig.name}`,
-          description: `Auto-generated surge pricing (${surgeResult.surge_factor.toFixed(2)}x)`,
-          type: 'SURGE_MULTIPLIER', // CHANGED: Special type for multiplier-based pricing
-          appliesTo: surgeConfig.appliesTo,
-          priority: 10000,
+          name: `SURGE: ${config.name}`,
+          description: `Auto-generated surge pricing (${surgeFactor.toFixed(2)}x)`,
+          type: 'SURGE_MULTIPLIER',
+          appliesTo: config.appliesTo,
+          priority: config.priority, // Use actual config priority
           effectiveFrom: new Date(startTime),
           effectiveTo: new Date(endTime),
           timeWindows,
@@ -476,20 +485,16 @@ export async function POST(request: NextRequest) {
           approvalStatus: 'APPROVED',
           createdAt: new Date(),
           updatedAt: new Date(),
-          surgeMultiplier: surgeResult.surge_factor // Store base multiplier
+          surgeMultiplier: surgeFactor
         };
+      });
 
-        surgeRatesheets = [surgeRatesheet];
+      console.log(`\n   Generated ${surgeRatesheets.length} surge ratesheet(s):`);
+      surgeRatesheets.forEach((rs, idx) => {
+        console.log(`   ${idx + 1}. ${rs.name} - Priority: ${rs.priority}, Windows: ${rs.timeWindows.length}, Factor: ${rs.surgeMultiplier.toFixed(2)}x`);
+      });
 
-        console.log('\n   Surge Ratesheet Generated:');
-        console.log(`   - Name: ${surgeRatesheet.name}`);
-        console.log(`   - Type: ${surgeRatesheet.type} (stores multipliers, not absolute prices)`);
-        console.log(`   - Priority: ${surgeRatesheet.priority}`);
-        console.log(`   - Level: SURGE`);
-        console.log(`   - Base Multiplier: ${surgeResult.surge_factor.toFixed(2)}x`);
-        console.log(`   - Time Windows: ${timeWindows.length}`);
-        console.log(`   - Effective: ${surgeRatesheet.effectiveFrom.toISOString()} → ${surgeRatesheet.effectiveTo.toISOString()}`);
-
+      if (surgeRatesheets.length > 0) {
         // Re-run pricing engine with surge ratesheets
         console.log('\n🎯 ===== FINAL PRICING CALCULATION (WITH SURGE) =====');
         const surgeContext = {
@@ -514,10 +519,10 @@ export async function POST(request: NextRequest) {
         console.log(`   Surge Total: $${finalResult.totalPrice.toFixed(2)}`);
         console.log(`   Difference: $${(finalResult.totalPrice - baseResult.totalPrice).toFixed(2)} (${((finalResult.totalPrice / baseResult.totalPrice - 1) * 100).toFixed(1)}%)`);
       } else {
-        console.log('\n   ⚠️ No surge windows created (all hours filtered out by time window constraints)');
+        console.log('\n   ⚠️ No surge windows created (no hours matched any surge config)');
       }
       } else {
-        console.log('\n   ℹ️ No active surge configuration found for this sublocation/time');
+        console.log('\n   ℹ️ No active surge configurations found for this sublocation/time');
       }
     } else {
       console.log('\n   ℹ️ Surge pricing disabled (includeSurge=false)');

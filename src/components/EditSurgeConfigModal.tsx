@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { X, Zap, TrendingUp, TrendingDown, AlertCircle, Plus, Trash2 } from 'lucide-react';
+import { SurgeConfig } from '@/models/types';
 import { ObjectId } from 'bson';
 
-interface CreateSurgeConfigModalProps {
+interface EditSurgeConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  config: SurgeConfig | null;
 }
 
 interface Location {
@@ -28,7 +30,7 @@ interface TimeWindowConfig {
   endTime: string;
 }
 
-export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: CreateSurgeConfigModalProps) {
+export default function EditSurgeConfigModal({ isOpen, onClose, onSuccess, config }: EditSurgeConfigModalProps) {
   // Basic Info
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -61,17 +63,20 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (isOpen) {
-      loadLocationsAndSublocations();
-    }
-  }, [isOpen]);
-
   // Update priority when hierarchy level changes
   useEffect(() => {
     const defaultPriority = hierarchyLevel === 'SUBLOCATION' ? 700 : 400;
     setPriority(defaultPriority);
   }, [hierarchyLevel]);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadLocationsAndSublocations();
+      if (config) {
+        populateForm(config);
+      }
+    }
+  }, [isOpen, config]);
 
   const loadLocationsAndSublocations = async () => {
     try {
@@ -92,6 +97,39 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
     } catch (err) {
       console.error('Failed to load entities:', err);
     }
+  };
+
+
+  const populateForm = (cfg: SurgeConfig) => {
+    setName(cfg.name);
+    setDescription(cfg.description || '');
+    setHierarchyLevel(cfg.appliesTo.level as 'LOCATION' | 'SUBLOCATION');
+    setSelectedEntityId(cfg.appliesTo.entityId.toString());
+    setPriority(cfg.priority);
+
+    setCurrentDemand(cfg.demandSupplyParams.currentDemand);
+    setCurrentSupply(cfg.demandSupplyParams.currentSupply);
+    setHistoricalAvgPressure(cfg.demandSupplyParams.historicalAvgPressure);
+
+    setAlpha(cfg.surgeParams.alpha);
+    setMinMultiplier(cfg.surgeParams.minMultiplier);
+    setMaxMultiplier(cfg.surgeParams.maxMultiplier);
+    setEmaAlpha(cfg.surgeParams.emaAlpha);
+
+    setEffectiveFrom(new Date(cfg.effectiveFrom).toISOString().slice(0, 16));
+    setEffectiveTo(cfg.effectiveTo ? new Date(cfg.effectiveTo).toISOString().slice(0, 16) : '');
+
+    if (cfg.timeWindows && cfg.timeWindows.length > 0) {
+      setTimeWindows(cfg.timeWindows.map(tw => ({
+        daysOfWeek: tw.daysOfWeek || [],
+        startTime: tw.startTime || '09:00',
+        endTime: tw.endTime || '17:00',
+      })));
+    } else {
+      setTimeWindows([]);
+    }
+
+    setIsActive(cfg.isActive);
   };
 
   const calculateLivePreview = () => {
@@ -227,20 +265,23 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
         }));
       }
 
-      const response = await fetch('/api/surge-pricing/configs', {
-        method: 'POST',
+      if (!config?._id) {
+        throw new Error('Config ID is missing');
+      }
+
+      const response = await fetch(`/api/surge-pricing/configs/${config._id.toString()}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to create surge config');
+        throw new Error(error.error || 'Failed to update surge config');
       }
 
       // Success
       onSuccess();
-      resetForm();
       onClose();
     } catch (err: any) {
       setError(err.message);
@@ -269,7 +310,7 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
     setError('');
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !config) return null;
 
   const entities = hierarchyLevel === 'LOCATION' ? locations : sublocations;
 
@@ -281,9 +322,9 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
           <div>
             <h2 className="text-3xl font-bold flex items-center gap-3">
               <Zap className="w-8 h-8" />
-              Create Surge Config
+              Edit Surge Config
             </h2>
-            <p className="text-orange-100 mt-1">Configure dynamic pricing based on demand/supply</p>
+            <p className="text-orange-100 mt-1">Update dynamic pricing configuration</p>
           </div>
           <button
             onClick={onClose}
@@ -810,13 +851,13 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
               {loading ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Creating...
+                  Updating...
                 </>
               ) : (
                 <>
                   <Zap className="w-4 h-4" />
-                  Create Surge Config
-                </>
+                  Update Surge Config
+                </>  
               )}
             </button>
           </div>

@@ -4,12 +4,15 @@ import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Power, Zap, ExternalLink, TrendingUp, TrendingDown } from 'lucide-react';
 import { SurgeConfig } from '@/models/types';
 import CreateSurgeConfigModal from '@/components/CreateSurgeConfigModal';
+import EditSurgeConfigModal from '@/components/EditSurgeConfigModal';
 
 export default function AdminSurgePricingPage() {
   const [configs, setConfigs] = useState<SurgeConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [selectedConfig, setSelectedConfig] = useState<SurgeConfig | null>(null);
 
   useEffect(() => {
     loadConfigs();
@@ -280,6 +283,10 @@ export default function AdminSurgePricingPage() {
                     {/* Configuration Summary */}
                     <div className="grid grid-cols-2 gap-4 text-sm border-t border-gray-100 pt-4">
                       <div>
+                        <span className="text-gray-500">Priority:</span>
+                        <p className="font-semibold text-gray-900">{config.priority}</p>
+                      </div>
+                      <div>
                         <span className="text-gray-500">Multiplier Range:</span>
                         <p className="font-semibold text-gray-900">
                           {config.surgeParams.minMultiplier}x - {config.surgeParams.maxMultiplier}x
@@ -326,10 +333,64 @@ export default function AdminSurgePricingPage() {
 
                     {/* Metadata */}
                     <div className="border-t border-gray-100 pt-3 mt-4 text-xs text-gray-500">
-                      <div className="flex justify-between">
-                        <span>Effective: {new Date(config.effectiveFrom).toLocaleDateString()}</span>
+                      <div className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="font-semibold text-gray-600">Effective:</span>
+                          <span>
+                            {new Date(config.effectiveFrom).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            })}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pl-4">
+                          <span className="text-gray-400">UTC:</span>
+                          <span className="text-gray-400">
+                            {new Date(config.effectiveFrom).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true,
+                              timeZone: 'UTC'
+                            })}
+                          </span>
+                        </div>
                         {config.effectiveTo && (
-                          <span>Until: {new Date(config.effectiveTo).toLocaleDateString()}</span>
+                          <>
+                            <div className="flex justify-between mt-2">
+                              <span className="font-semibold text-gray-600">Until:</span>
+                              <span>
+                                {new Date(config.effectiveTo).toLocaleString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                  hour12: true
+                                })}
+                              </span>
+                            </div>
+                            <div className="flex justify-between pl-4">
+                              <span className="text-gray-400">UTC:</span>
+                              <span className="text-gray-400">
+                                {new Date(config.effectiveTo).toLocaleString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                  hour12: true,
+                                  timeZone: 'UTC'
+                                })}
+                              </span>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -358,7 +419,10 @@ export default function AdminSurgePricingPage() {
 
                     <div className="flex gap-2">
                       <button
-                        onClick={() => alert('Edit modal coming soon!')}
+                        onClick={() => {
+                          setSelectedConfig(config);
+                          setIsEditModalOpen(true);
+                        }}
                         className="px-4 py-2 bg-gradient-to-r from-orange-100 to-red-100 text-orange-700 rounded-lg hover:from-orange-200 hover:to-red-200 transition-all font-medium flex items-center gap-2"
                       >
                         <Edit size={16} />
@@ -388,6 +452,21 @@ export default function AdminSurgePricingPage() {
           loadConfigs();
           setIsCreateModalOpen(false);
         }}
+      />
+
+      {/* Edit Modal */}
+      <EditSurgeConfigModal
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setSelectedConfig(null);
+        }}
+        onSuccess={() => {
+          loadConfigs();
+          setIsEditModalOpen(false);
+          setSelectedConfig(null);
+        }}
+        config={selectedConfig}
       />
     </div>
   );

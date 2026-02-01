@@ -6,6 +6,15 @@ export class SurgeConfigRepository {
   private static COLLECTION = 'surge_configs';
 
   /**
+   * Get default priority for a given level
+   * SUBLOCATION: 500-999 (default 700)
+   * LOCATION: 300-499 (default 400)
+   */
+  static getDefaultPriority(level: 'SUBLOCATION' | 'LOCATION'): number {
+    return level === 'SUBLOCATION' ? 700 : 400;
+  }
+
+  /**
    * Create a new surge pricing configuration
    */
   static async create(config: Omit<SurgeConfig, '_id' | 'createdAt' | 'updatedAt'>): Promise<SurgeConfig> {
@@ -61,7 +70,8 @@ export class SurgeConfigRepository {
    */
   static async findActiveBySubLocation(
     subLocationId: string | ObjectId,
-    timestamp: Date = new Date()
+    rangeStart: Date = new Date(),
+    rangeEnd?: Date
   ): Promise<SurgeConfig | null> {
     const db = await getDb();
     const subLocObjectId = typeof subLocationId === 'string' ? new ObjectId(subLocationId) : subLocationId;
@@ -78,8 +88,34 @@ export class SurgeConfigRepository {
     console.log('🔍 Searching for surge configs:', {
       subLocationId: subLocObjectId.toString(),
       locationId: locationId?.toString(),
-      timestamp: timestamp.toISOString()
+      rangeStart: rangeStart.toISOString(),
+      rangeEnd: rangeEnd?.toISOString() || 'N/A'
     });
+
+    // Build date range query to find configs that overlap the booking time range
+    // A surge config overlaps if: effectiveFrom < rangeEnd AND effectiveTo > rangeStart
+    const dateRangeQuery = rangeEnd ? [
+      // Surge starts before booking ends
+      { effectiveFrom: { $lt: rangeEnd } },
+      // Surge ends after booking starts (or has no end date)
+      {
+        $or: [
+          { effectiveTo: { $exists: false } },
+          { effectiveTo: null },
+          { effectiveTo: { $gt: rangeStart } },
+        ]
+      }
+    ] : [
+      // Fallback to single timestamp check if no rangeEnd provided
+      { effectiveFrom: { $lte: rangeStart } },
+      {
+        $or: [
+          { effectiveTo: { $exists: false } },
+          { effectiveTo: null },
+          { effectiveTo: { $gte: rangeStart } },
+        ]
+      }
+    ];
 
     // Find all active surge configs at sublocation or location level
     const configs = await db.collection<SurgeConfig>(this.COLLECTION).find({
@@ -92,15 +128,8 @@ export class SurgeConfigRepository {
             { 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': locationId },
           ]
         },
-        // Check date range
-        { effectiveFrom: { $lte: timestamp } },
-        {
-          $or: [
-            { effectiveTo: { $exists: false } },
-            { effectiveTo: null },
-            { effectiveTo: { $gte: timestamp } },
-          ]
-        }
+        // Check date range overlap
+        ...dateRangeQuery
       ]
     }).toArray();
 
@@ -108,9 +137,25 @@ export class SurgeConfigRepository {
 
     if (configs.length === 0) return null;
 
-    // If multiple configs found, prefer sublocation-level over location-level
-    const subLocationConfig = configs.find(c => c.appliesTo.level === 'SUBLOCATION');
-    const activeConfig = subLocationConfig || configs[0];
+    // If multiple configs found, sort by priority (highest first)
+    // If same priority, prefer SUBLOCATION over LOCATION
+    configs.sort((a, b) => {
+      // First, compare by priority (higher priority wins)
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      // If same priority, SUBLOCATION beats LOCATION
+      if (a.appliesTo.level === 'SUBLOCATION' && b.appliesTo.level === 'LOCATION') {
+        return -1;
+      }
+      if (a.appliesTo.level === 'LOCATION' && b.appliesTo.level === 'SUBLOCATION') {
+        return 1;
+      }
+      return 0;
+    });
+
+    const activeConfig = configs[0];
+    console.log(`✅ Selected surge config: ${activeConfig.name} (Priority: ${activeConfig.priority}, Level: ${activeConfig.appliesTo.level})`);
 
     // Check if current timestamp matches time windows (if specified)
     if (activeConfig.timeWindows && activeConfig.timeWindows.length > 0) {
@@ -141,6 +186,102 @@ export class SurgeConfigRepository {
     }
 
     return activeConfig;
+  }
+
+  /**
+   * Find ALL active surge configs for a sublocation within a time range
+   * Returns array sorted by priority (highest first)
+   * Used for per-hour surge evaluation in the pricing engine
+   */
+  static async findAllActiveBySubLocation(
+    subLocationId: string | ObjectId,
+    rangeStart: Date = new Date(),
+    rangeEnd?: Date
+  ): Promise<SurgeConfig[]> {
+    const db = await getDb();
+    const subLocObjectId = typeof subLocationId === 'string' ? new ObjectId(subLocationId) : subLocationId;
+
+    // Get sublocation to traverse up the hierarchy
+    const sublocation = await db.collection('sublocations').findOne({ _id: subLocObjectId });
+    if (!sublocation) {
+      console.log('❌ Sublocation not found:', subLocationId);
+      return [];
+    }
+
+    const locationId = sublocation.locationId;
+
+    console.log('🔍 Searching for ALL active surge configs:', {
+      subLocationId: subLocObjectId.toString(),
+      locationId: locationId?.toString(),
+      rangeStart: rangeStart.toISOString(),
+      rangeEnd: rangeEnd?.toISOString() || 'N/A'
+    });
+
+    // Build date range query to find configs that overlap the booking time range
+    const dateRangeQuery = rangeEnd ? [
+      // Surge starts before booking ends
+      { effectiveFrom: { $lt: rangeEnd } },
+      // Surge ends after booking starts (or has no end date)
+      {
+        $or: [
+          { effectiveTo: { $exists: false } },
+          { effectiveTo: null },
+          { effectiveTo: { $gt: rangeStart } },
+        ]
+      }
+    ] : [
+      // Fallback to single timestamp check if no rangeEnd provided
+      { effectiveFrom: { $lte: rangeStart } },
+      {
+        $or: [
+          { effectiveTo: { $exists: false } },
+          { effectiveTo: null },
+          { effectiveTo: { $gte: rangeStart } },
+        ]
+      }
+    ];
+
+    // Find all active surge configs at sublocation or location level
+    const configs = await db.collection<SurgeConfig>(this.COLLECTION).find({
+      isActive: true,
+      $and: [
+        // Match sublocation or location level
+        {
+          $or: [
+            { 'appliesTo.level': 'SUBLOCATION', 'appliesTo.entityId': subLocObjectId },
+            { 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': locationId },
+          ]
+        },
+        // Check date range overlap
+        ...dateRangeQuery
+      ]
+    }).toArray();
+
+    console.log(`🔍 Found ${configs.length} active surge configs`);
+
+    if (configs.length === 0) return [];
+
+    // Sort by priority (highest first), then by hierarchy level
+    configs.sort((a, b) => {
+      // First, compare by priority (higher priority wins)
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      // If same priority, SUBLOCATION beats LOCATION
+      if (a.appliesTo.level === 'SUBLOCATION' && b.appliesTo.level === 'LOCATION') {
+        return -1;
+      }
+      if (a.appliesTo.level === 'LOCATION' && b.appliesTo.level === 'SUBLOCATION') {
+        return 1;
+      }
+      return 0;
+    });
+
+    configs.forEach(config => {
+      console.log(`   ✓ ${config.name} (Priority: ${config.priority}, Level: ${config.appliesTo.level})`);
+    });
+
+    return configs;
   }
 
   /**

@@ -24,6 +24,8 @@ Welcome to the Venue Management System documentation! This index will help you f
 |----------|---------|--------------|
 | **[SCHEMA.md](SCHEMA.md)** | Database schema details | Understanding data model |
 | **[FILE_STRUCTURE.md](FILE_STRUCTURE.md)** | Complete file listing | Finding specific files |
+| **[TIMELINE_SIMULATOR.md](TIMELINE_SIMULATOR.md)** | Timeline simulator & pricing visualization | Using the pricing simulator |
+| **[SURGE_PRICING.md](SURGE_PRICING.md)** | Surge pricing system architecture | Implementing dynamic pricing |
 
 ### Guides
 | Document | Purpose | When to Read |
@@ -151,8 +153,33 @@ Welcome to the Venue Management System documentation! This index will help you f
 - TypeScript issues
 - Common pitfalls
 
-**Read time**: As needed  
+**Read time**: As needed
 **Level**: All
+
+### TIMELINE_SIMULATOR.md
+**Interactive pricing simulator documentation** including:
+- Real-time pricing visualization
+- Surge pricing integration
+- Simulation mode & layer toggles
+- Scenario planning & management
+- Price display logic
+- API integration details
+
+**Read time**: 20 minutes
+**Level**: Intermediate
+
+### SURGE_PRICING.md
+**Dynamic surge pricing system** covering:
+- Architecture & design philosophy
+- Mathematical surge calculation formula
+- Database schema (surge_configs)
+- API integration
+- Time window logic
+- Admin interface
+- Testing & monitoring
+
+**Read time**: 25 minutes
+**Level**: Intermediate to Advanced
 
 ## 🔍 Quick Reference
 
@@ -168,6 +195,8 @@ Welcome to the Venue Management System documentation! This index will help you f
 | Find a specific file | [FILE_STRUCTURE.md](FILE_STRUCTURE.md) |
 | Learn about features | [README.md](README.md) |
 | Get project overview | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) |
+| Use pricing simulator | [TIMELINE_SIMULATOR.md](TIMELINE_SIMULATOR.md) |
+| Implement surge pricing | [SURGE_PRICING.md](SURGE_PRICING.md) |
 
 ### Key Sections
 

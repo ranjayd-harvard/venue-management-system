@@ -354,7 +354,25 @@ export class HourlyPricingEngine {
             const startMinutes = timeToMinutes(tw.startTime!);
             const endMinutes = timeToMinutes(tw.endTime!);
 
-            matches = hourMinutes >= startMinutes && hourMinutes < endMinutes;
+            // Handle overnight time windows (e.g., 23:00-00:00)
+            if (endMinutes < startMinutes) {
+              // Overnight window: matches if time >= startTime OR time < endTime
+              matches = hourMinutes >= startMinutes || hourMinutes < endMinutes;
+            } else {
+              // Same-day window: matches if time >= startTime AND time < endTime
+              matches = hourMinutes >= startMinutes && hourMinutes < endMinutes;
+            }
+
+            // DEBUG: Log time window matching for surge hours near midnight
+            if (level === 'SURGE' && (hourMinutes >= 1320 || hourMinutes < 60)) { // 22:00-01:00 range
+              console.log(`\n🔍 [SURGE OVERNIGHT CHECK] ${rs.name}`);
+              console.log(`   hourStart:`, hourStart.toISOString());
+              console.log(`   timezone:`, context.timezone);
+              console.log(`   hourTime:`, hourTime, `(${hourMinutes} min)`);
+              console.log(`   window:`, tw.startTime, `-`, tw.endTime, `(${startMinutes}-${endMinutes} min)`);
+              console.log(`   overnight:`, endMinutes < startMinutes);
+              console.log(`   Match result:`, matches);
+            }
           } else {
             // Duration-based logic: match against minutes from ratesheet effectiveFrom
             // For EVENT ratesheets, this is the event start minus grace period before

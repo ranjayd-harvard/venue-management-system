@@ -274,6 +274,10 @@ export interface PricingScenarioConfig {
   useDurationContext?: boolean;
   bookingStartTime?: Date;
 
+  // Surge pricing (optional)
+  surgeEnabled?: boolean;
+  surgeConfigId?: string; // Reference to the surge config used
+
   // Pricing adjustments (placeholders for future use)
   pricingCoefficientsUp?: number;
   pricingCoefficientsDown?: number;
@@ -334,6 +338,10 @@ export interface SurgeConfig {
     level: 'SUBLOCATION' | 'LOCATION';
     entityId: ObjectId;
   };
+
+  // Priority (higher number = higher priority when multiple configs overlap)
+  // Similar to ratesheets: typical ranges SUBLOCATION (500-999), LOCATION (300-499)
+  priority: number;
 
   // Manual demand/supply parameters (for simulation)
   demandSupplyParams: DemandSupplyParams;

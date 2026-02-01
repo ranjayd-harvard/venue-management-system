@@ -81,6 +81,7 @@ export async function PATCH(
     const {
       name,
       description,
+      priority,
       demandSupplyParams,
       surgeParams,
       appliesTo,
@@ -94,6 +95,7 @@ export async function PATCH(
     const updates: any = {};
     if (name !== undefined) updates.name = name;
     if (description !== undefined) updates.description = description;
+    if (priority !== undefined) updates.priority = priority;
     if (demandSupplyParams !== undefined) {
       // Validate demand/supply params
       if (demandSupplyParams.currentDemand < 0 || demandSupplyParams.currentSupply <= 0) {
