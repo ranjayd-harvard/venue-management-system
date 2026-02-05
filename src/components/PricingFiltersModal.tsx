@@ -103,13 +103,6 @@ export default function PricingFiltersModal({
     }
   }, [isOpen]);
 
-  // Auto-select first location when locations are loaded
-  useEffect(() => {
-    if (locations.length > 0 && !selectedLocation) {
-      onLocationChange(locations[0]._id);
-    }
-  }, [locations, selectedLocation, onLocationChange]);
-
   // Fetch sublocations when location changes
   useEffect(() => {
     if (selectedLocation) {
@@ -118,13 +111,6 @@ export default function PricingFiltersModal({
       setSublocations([]);
     }
   }, [selectedLocation]);
-
-  // Auto-select first sublocation when sublocations are loaded
-  useEffect(() => {
-    if (sublocations.length > 0 && !selectedSubLocation) {
-      onSubLocationChange(sublocations[0]._id);
-    }
-  }, [sublocations, selectedSubLocation, onSubLocationChange]);
 
   // Fetch events when sublocation changes
   useEffect(() => {

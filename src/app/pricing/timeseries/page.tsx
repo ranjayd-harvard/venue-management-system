@@ -286,6 +286,28 @@ export default function PricingTimeSeriesPage() {
         allRatesheets = [...allRatesheets, ...newEventRatesheets];
       }
 
+      // Step 5: Fetch SURGE ratesheets (materialized, approved surge configs)
+      // These are physical ratesheets in the database with surgeConfigId
+      const surgeUrl = new URL('/api/ratesheets', window.location.origin);
+      surgeUrl.searchParams.set('subLocationId', subLocationId);
+      surgeUrl.searchParams.set('startDate', startStr);
+      surgeUrl.searchParams.set('endDate', endStr);
+      surgeUrl.searchParams.set('includeSurge', 'true'); // Include materialized surge ratesheets
+
+      const surgeResponse = await fetch(surgeUrl.toString());
+      if (surgeResponse.ok) {
+        const surgeRatesheets = await surgeResponse.json();
+        // Filter for only surge ratesheets (those with surgeConfigId)
+        const surgOnly = surgeRatesheets.filter((rs: any) => rs.surgeConfigId && rs.isActive);
+
+        // Merge with existing ratesheets (avoid duplicates)
+        const existingIds = new Set(allRatesheets.map((rs: any) => rs._id));
+        const newSurgeRatesheets = surgOnly.filter((rs: any) => !existingIds.has(rs._id));
+        allRatesheets = [...allRatesheets, ...newSurgeRatesheets];
+
+        console.log('[TimeSeries] Loaded surge ratesheets:', newSurgeRatesheets.length);
+      }
+
       console.log('[TimeSeries] Loaded ratesheets:', {
         total: allRatesheets.length,
         active: allRatesheets.filter((rs: any) => rs.isActive).length,
@@ -294,6 +316,7 @@ export default function PricingTimeSeriesPage() {
           sublocation: allRatesheets.filter((rs: any) => rs.applyTo === 'SUBLOCATION').length,
           location: allRatesheets.filter((rs: any) => rs.applyTo === 'LOCATION').length,
           customer: allRatesheets.filter((rs: any) => rs.applyTo === 'CUSTOMER').length,
+          surge: allRatesheets.filter((rs: any) => (rs as any).surgeConfigId).length,
         }
       });
 
@@ -388,8 +411,74 @@ export default function PricingTimeSeriesPage() {
 
               if (matches) {
                 const key = `${rs.name} (${windowLabel})`;
-                point[key] = tw.pricePerHour;
-                rateKeysSet.add(key); 
+
+                // Handle SURGE_MULTIPLIER type ratesheets specially
+                if (rs.type === 'SURGE_MULTIPLIER') {
+                  // For surge multipliers, pricePerHour contains the multiplier, not the absolute price
+                  // We need to find the base price and multiply it
+                  const surgeMultiplier = tw.pricePerHour;
+
+                  // Find the base price from other active ratesheets at this time
+                  let basePrice = 0;
+
+                  // Check all other ratesheets for the base price (exclude current surge)
+                  for (const otherRs of ratesheets) {
+                    if (otherRs._id === rs._id || otherRs.type === 'SURGE_MULTIPLIER') continue;
+
+                    // Check if this ratesheet is active at this time
+                    const otherEffectiveFrom = new Date(otherRs.effectiveFrom);
+                    const otherEffectiveTo = otherRs.effectiveTo ? new Date(otherRs.effectiveTo) : null;
+
+                    if (currentTime >= otherEffectiveFrom && (!otherEffectiveTo || currentTime <= otherEffectiveTo)) {
+                      if (otherRs.timeWindows) {
+                        for (const otherTw of otherRs.timeWindows) {
+                          if (!isEventBooking && otherTw.pricePerHour === 0 && otherRs.applyTo === 'EVENT') {
+                            continue;
+                          }
+
+                          const otherWindowType = otherTw.windowType || 'ABSOLUTE_TIME';
+                          let otherMatches = false;
+
+                          if (otherWindowType === 'ABSOLUTE_TIME') {
+                            if (otherTw.startTime && otherTw.endTime && timeStr >= otherTw.startTime && timeStr < otherTw.endTime) {
+                              otherMatches = true;
+                            }
+                          } else if (otherWindowType === 'DURATION_BASED') {
+                            const otherRatesheetStart = new Date(otherRs.effectiveFrom);
+                            const otherMinutesFromStart = Math.floor((currentTime.getTime() - otherRatesheetStart.getTime()) / (1000 * 60));
+                            const otherStartMinute = otherTw.startMinute ?? 0;
+                            const otherEndMinute = otherTw.endMinute ?? 0;
+
+                            if (otherMinutesFromStart >= otherStartMinute && otherMinutesFromStart < otherEndMinute) {
+                              otherMatches = true;
+                            }
+                          }
+
+                          if (otherMatches) {
+                            basePrice = otherTw.pricePerHour;
+                            break;
+                          }
+                        }
+                      }
+
+                      if (basePrice > 0) break;
+                    }
+                  }
+
+                  // Fallback to default rates if no base found
+                  if (basePrice === 0) {
+                    basePrice = currentSubLocation?.defaultHourlyRate
+                      || currentLocation?.defaultHourlyRate
+                      || currentCustomer?.defaultHourlyRate
+                      || 0;
+                  }
+
+                  point[key] = Math.round(basePrice * surgeMultiplier * 100) / 100;
+                } else {
+                  point[key] = Math.round(tw.pricePerHour * 100) / 100;
+                }
+
+                rateKeysSet.add(key);
               }
             });
           }

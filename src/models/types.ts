@@ -269,6 +269,8 @@ export interface PricingScenarioConfig {
   viewEnd: Date;
   rangeStart: Date;
   rangeEnd: Date;
+  rangeStartOffset?: number; // Days offset from "now" for Range Start dropdown (e.g., -7 for "7 days ago")
+  rangeEndOffset?: number;   // Days offset from "now" for Range End dropdown (e.g., +3 for "3 days ahead")
 
   // Duration context (optional)
   useDurationContext?: boolean;
@@ -357,6 +359,10 @@ export interface SurgeConfig {
   // Status
   isActive: boolean;
   createdBy?: string;
+
+  // Materialization tracking (for physical surge ratesheets)
+  materializedRatesheetId?: ObjectId; // Reference to the physical surge ratesheet created from this config
+  lastMaterialized?: Date; // Timestamp when this config was last materialized
 
   createdAt: Date;
   updatedAt: Date;

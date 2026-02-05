@@ -159,8 +159,8 @@ export class SurgeConfigRepository {
 
     // Check if current timestamp matches time windows (if specified)
     if (activeConfig.timeWindows && activeConfig.timeWindows.length > 0) {
-      const dayOfWeek = timestamp.getDay(); // 0=Sunday, 6=Saturday
-      const timeStr = `${timestamp.getHours().toString().padStart(2, '0')}:${timestamp.getMinutes().toString().padStart(2, '0')}`;
+      const dayOfWeek = rangeStart.getDay(); // 0=Sunday, 6=Saturday
+      const timeStr = `${rangeStart.getHours().toString().padStart(2, '0')}:${rangeStart.getMinutes().toString().padStart(2, '0')}`;
 
       const matchesTimeWindow = activeConfig.timeWindows.some(window => {
         // Check day of week

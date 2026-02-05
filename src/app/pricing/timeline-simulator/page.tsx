@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
-import { Save, FolderOpen, X, Zap, FileText, Lock, Activity } from 'lucide-react';
+import { Save, FolderOpen, X, Zap, FileText, Lock, Activity, Rocket } from 'lucide-react';
 import { PricingScenario, SurgeConfig } from '@/models/types';
 
 interface TimeWindow {
@@ -133,34 +133,29 @@ export default function TimelineSimulatorPage() {
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
   const [currentEvent, setCurrentEvent] = useState<Event | null>(null);
 
-  // Initialize all dates from the same timestamp
-  // Range covers 60 days in past to 60 days in future
-  const [rangeStart, setRangeStart] = useState<Date>(() => {
+  // Initialize all dates from the same timestamp to prevent timing drift on initial render
+  // Range covers 1 day in past to 3 days in future (default)
+  const [initialDates] = useState(() => {
     const now = new Date();
-    //return new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000); // 60 days ago
-    return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
-  });
-  const [rangeEnd, setRangeEnd] = useState<Date>(() => {
-    const now = new Date();
-    //return new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days from now (total 120 day window)
-    return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now (total 37 day window)
+    return {
+      rangeStart: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
+      rangeEnd: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000), // 3 days from now (total 4 day window)
+      viewStart: new Date(now.getTime() - 6 * 60 * 60 * 1000), // 6 hours ago (default view)
+      viewEnd: new Date(now.getTime() + 6 * 60 * 60 * 1000) // 6 hours from now (12 hour default view)
+    };
   });
 
-  const [viewStart, setViewStart] = useState<Date>(() => {
-    const now = new Date();
-    return new Date(now.getTime() - 6 * 60 * 60 * 1000); // 6 hours ago (default view)
-  });
-  const [viewEnd, setViewEnd] = useState<Date>(() => {
-    const now = new Date();
-    return new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6 hours from now (12 hour default view)
-  });
+  const [rangeStart, setRangeStart] = useState<Date>(initialDates.rangeStart);
+  const [rangeEnd, setRangeEnd] = useState<Date>(initialDates.rangeEnd);
+  const [viewStart, setViewStart] = useState<Date>(initialDates.viewStart);
+  const [viewEnd, setViewEnd] = useState<Date>(initialDates.viewEnd);
 
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
 
-  // Booking start time for duration-based window calculations (optional)
-  const [useDurationContext, setUseDurationContext] = useState<boolean>(false);
-  const [bookingStartTime, setBookingStartTime] = useState<Date>(viewStart);
+  // Booking start time for duration-based window calculations (uses same synchronized timestamp)
+  const [useDurationContext, setUseDurationContext] = useState<boolean>(true);
+  const [bookingStartTime, setBookingStartTime] = useState<Date>(initialDates.viewStart);
 
   // Selected slot for showing decision panel (persistent)
   const [selectedSlot, setSelectedSlot] = useState<{ slotIdx: number; layerId: string } | null>(null);
@@ -206,14 +201,105 @@ export default function TimelineSimulatorPage() {
   // Pre-simulation baseline price (captured when simulation mode is first enabled)
   const [preSimulationBaselinePrice, setPreSimulationBaselinePrice] = useState<number>(0);
 
+  // Track URL-loaded scenario to apply after location is set
+  const pendingUrlScenario = useRef<PricingScenario | null>(null);
+
   useEffect(() => {
     fetchPricingConfig();
     loadInitialDefaults();
+    checkAndLoadScenarioFromUrl();
   }, []);
+
+  // Check URL for scenarioId parameter and auto-load if present
+  const checkAndLoadScenarioFromUrl = async () => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const scenarioId = urlParams.get('scenarioId');
+
+      if (scenarioId) {
+        console.log('🔍 [URL LOAD] Found scenarioId in URL:', scenarioId);
+
+        // Fetch the scenario from API
+        const response = await fetch(`/api/pricing-scenarios/${scenarioId}`);
+        if (response.ok) {
+          const scenario = await response.json();
+          console.log('✅ [URL LOAD] Successfully fetched scenario:', scenario.name);
+
+          // Store scenario to load after location is set
+          pendingUrlScenario.current = scenario;
+
+          // Set the location/sublocation/event based on the scenario's appliesTo
+          await loadScenarioFromUrl(scenario);
+        } else {
+          console.error('❌ [URL LOAD] Failed to fetch scenario:', response.statusText);
+          alert('Failed to load scenario from URL');
+        }
+      }
+    } catch (error) {
+      console.error('❌ [URL LOAD] Error loading scenario from URL:', error);
+    }
+  };
+
+  // Load scenario from URL (sets location context, actual scenario load happens in useEffect)
+  const loadScenarioFromUrl = async (scenario: PricingScenario) => {
+    console.log('📂 [URL LOAD] Setting location context for scenario:', scenario.name);
+
+    // First, set the location/sublocation/event based on the scenario's appliesTo
+    const { level, entityId } = scenario.appliesTo;
+
+    try {
+      if (level === 'SUBLOCATION') {
+        // Fetch sublocation to get its location
+        const sublocRes = await fetch(`/api/sublocations/${entityId}`);
+        const subloc = await sublocRes.json();
+        console.log('📍 [URL LOAD] Setting location:', subloc.locationId, 'sublocation:', entityId);
+        setSelectedLocation(subloc.locationId);
+        setSelectedSubLocation(entityId.toString());
+      } else if (level === 'LOCATION') {
+        console.log('📍 [URL LOAD] Setting location:', entityId);
+        setSelectedLocation(entityId.toString());
+        // Sublocation will be handled by the useEffect that watches selectedLocation
+      } else if (level === 'CUSTOMER') {
+        // Fetch first location for this customer
+        const locationsRes = await fetch(`/api/locations?customerId=${entityId}`);
+        const locations = await locationsRes.json();
+        if (locations.length > 0) {
+          console.log('📍 [URL LOAD] Setting location (from customer):', locations[0]._id);
+          setSelectedLocation(locations[0]._id);
+        }
+      } else if (level === 'EVENT') {
+        // Fetch event to get its sublocation/location
+        const eventRes = await fetch(`/api/events/${entityId}`);
+        const event = await eventRes.json();
+        if (event.subLocationId) {
+          const sublocRes = await fetch(`/api/sublocations/${event.subLocationId}`);
+          const subloc = await sublocRes.json();
+          console.log('📍 [URL LOAD] Setting location (from event):', subloc.locationId, 'sublocation:', event.subLocationId);
+          setSelectedLocation(subloc.locationId);
+          setSelectedSubLocation(event.subLocationId);
+        } else if (event.locationId) {
+          console.log('📍 [URL LOAD] Setting location (from event):', event.locationId);
+          setSelectedLocation(event.locationId);
+        }
+        setSelectedEventId(entityId.toString());
+      }
+    } catch (error) {
+      console.error('❌ [URL LOAD] Error setting location context:', error);
+      alert('Failed to set location context for scenario');
+    }
+  };
 
   // Load initial defaults: auto-select first location and sublocation on page load
   const loadInitialDefaults = async () => {
     try {
+      // Check if we're loading from URL - if so, skip default loading
+      const urlParams = new URLSearchParams(window.location.search);
+      const scenarioId = urlParams.get('scenarioId');
+      if (scenarioId) {
+        console.log('⏭️ [INIT] Skipping default location load - loading from URL instead');
+        return;
+      }
+
       // Fetch locations
       const locationsRes = await fetch('/api/locations');
       const locations = await locationsRes.json();
@@ -284,6 +370,20 @@ export default function TimelineSimulatorPage() {
     }
   }, [selectedEventId]);
 
+  // Apply pending URL scenario after ratesheets are loaded
+  useEffect(() => {
+    if (pendingUrlScenario.current && ratesheets.length > 0 && selectedSubLocation) {
+      console.log('🎬 [URL LOAD] Ratesheets loaded, applying pending scenario:', pendingUrlScenario.current.name);
+      const scenarioToLoad = pendingUrlScenario.current;
+      pendingUrlScenario.current = null; // Clear the pending scenario
+
+      // Give the UI a moment to settle after ratesheets load
+      setTimeout(() => {
+        loadScenario(scenarioToLoad);
+      }, 500);
+    }
+  }, [ratesheets, selectedSubLocation]);
+
   // Sync view window with booking start time when duration context is enabled
   useEffect(() => {
     if (useDurationContext) {
@@ -294,10 +394,25 @@ export default function TimelineSimulatorPage() {
 
   // Initialize all layers as enabled when layers change
   useEffect(() => {
+    // Skip auto-enable if we're loading a scenario with pending layers to restore
+    if (pendingEnabledLayers !== null || pendingUrlScenario.current !== null) {
+      console.log('⏭️ [AUTO-ENABLE] Skipping auto-enable (loading scenario)', {
+        hasPendingLayers: pendingEnabledLayers !== null,
+        hasPendingScenario: pendingUrlScenario.current !== null,
+        isLoadingScenario: isLoadingScenarioRef.current
+      });
+      return;
+    }
+
     const allLayers = getPricingLayers();
     const allLayerIds = new Set(allLayers.map(l => l.id));
+    console.log('🔄 [AUTO-ENABLE] Auto-enabling all layers:', {
+      layerCount: allLayerIds.size,
+      layersSample: Array.from(allLayerIds).slice(0, 5)
+    });
     setEnabledLayers(allLayerIds);
   }, [ratesheets, currentSubLocation, currentLocation, currentCustomer]);
+  // NOTE: pendingEnabledLayers is NOT in deps - we only check it to skip execution, not react to changes
 
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
@@ -305,7 +420,7 @@ export default function TimelineSimulatorPage() {
         console.error('Error calculating time slots:', error);
       });
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent, surgeEnabled, activeSurgeConfig]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent, surgeEnabled, activeSurgeConfig, isSimulationEnabled]);
 
   // Load scenarios when sublocation changes
   useEffect(() => {
@@ -332,9 +447,11 @@ export default function TimelineSimulatorPage() {
     }
   }, [isSimulationEnabled, timeSlots, preSimulationBaselinePrice]);
 
-  // Auto-disable surge when simulation mode is turned off
+  // Auto-disable surge when switching from Simulation to Live mode
+  // Live mode doesn't support surge toggle - it only shows materialized surge ratesheets
   useEffect(() => {
     if (!isSimulationEnabled && surgeEnabled) {
+      // Disable surge and clear virtual surge ratesheets
       setSurgeEnabled(false);
       setAppliedSurgeRatesheets([]);
     }
@@ -402,16 +519,43 @@ export default function TimelineSimulatorPage() {
 
   // Restore saved enabled layers after surge layers are created (when loading a scenario)
   useEffect(() => {
-    if (pendingEnabledLayers && appliedSurgeRatesheets.length > 0) {
-      console.log('✅ [LOAD SCENARIO] Restoring enabled layers now that surge layers exist:', {
-        pendingLayers: Array.from(pendingEnabledLayers),
-        surgeLayers: appliedSurgeRatesheets.map(s => s.id)
+    if (!pendingEnabledLayers) return;
+
+    console.log('🔄 [RESTORE LAYERS] Effect triggered:', {
+      pendingLayersCount: pendingEnabledLayers.size,
+      appliedSurgeCount: appliedSurgeRatesheets.length,
+      pendingLayersSample: Array.from(pendingEnabledLayers).slice(0, 5)
+    });
+
+    // Wait for surge layers if surge is enabled in the scenario
+    const hasSurgeLayers = Array.from(pendingEnabledLayers).some(id =>
+      typeof id === 'string' && id.startsWith('SURGE:')
+    );
+
+    if (hasSurgeLayers && appliedSurgeRatesheets.length === 0) {
+      console.log('⏳ [LOAD SCENARIO] Waiting for surge layers to be created...', {
+        hasSurgeLayers,
+        appliedSurgeCount: appliedSurgeRatesheets.length
       });
-      setEnabledLayers(pendingEnabledLayers);
-      setPendingEnabledLayers(null); // Clear pending state
-      // Reset unsaved changes flag after restoring (we just loaded the scenario)
-      setHasUnsavedChanges(false);
+      return; // Wait for surge layers to be generated
     }
+
+    console.log('✅ [LOAD SCENARIO] Restoring enabled layers NOW:', {
+      pendingLayers: Array.from(pendingEnabledLayers),
+      hasSurgeLayers,
+      surgeLayers: appliedSurgeRatesheets.map(s => s.id),
+      currentEnabledCount: enabledLayers.size
+    });
+
+    setEnabledLayers(pendingEnabledLayers);
+    setPendingEnabledLayers(null); // Clear pending state
+
+    // Clear the loading flag and reset unsaved changes after a delay to ensure all effects have run
+    setTimeout(() => {
+      isLoadingScenarioRef.current = false;
+      setHasUnsavedChanges(false);
+      console.log('✅ [LOAD SCENARIO] Cleared loading flag and reset unsaved changes');
+    }, 200);
   }, [pendingEnabledLayers, appliedSurgeRatesheets]);
 
   // Detect changes from saved scenario state
@@ -436,6 +580,17 @@ export default function TimelineSimulatorPage() {
       currentEnabledLayersSet.size !== savedEnabledLayersSet.size ||
       !Array.from(currentEnabledLayersSet).every(id => savedEnabledLayersSet.has(id));
 
+    // Find differences in layers
+    const currentLayersArray = Array.from(currentEnabledLayersSet);
+    const savedLayersArray = Array.from(savedEnabledLayersSet);
+    const addedLayers = currentLayersArray.filter(id => !savedEnabledLayersSet.has(id as string));
+    const removedLayers = savedLayersArray.filter(id => !currentEnabledLayersSet.has(id as string));
+
+    // Calculate current range offsets for comparison
+    const now = new Date();
+    const currentRangeStartOffset = Math.round((rangeStart.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+    const currentRangeEndOffset = Math.round((rangeEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+
     // Check if other settings have changed
     const surgeChanged = surgeEnabled !== savedScenarioState.surgeEnabled;
     const durationChanged = selectedDuration !== savedScenarioState.selectedDuration;
@@ -444,17 +599,37 @@ export default function TimelineSimulatorPage() {
       pricingCoefficientsDown !== savedScenarioState.pricingCoefficientsDown ||
       bias !== savedScenarioState.bias;
 
-    const hasChanges = layersChanged || surgeChanged || durationChanged || coefficientsChanged;
+    // Check if range offsets have changed (dropdown values)
+    const rangeOffsetsChanged =
+      (savedScenarioState.rangeStartOffset !== undefined &&
+       currentRangeStartOffset !== savedScenarioState.rangeStartOffset) ||
+      (savedScenarioState.rangeEndOffset !== undefined &&
+       currentRangeEndOffset !== savedScenarioState.rangeEndOffset);
+
+    const hasChanges = layersChanged || surgeChanged || durationChanged || coefficientsChanged || rangeOffsetsChanged;
 
     if (hasChanges !== hasUnsavedChanges) {
-      console.log('📝 [SCENARIO CHANGES] Detected changes:', {
+      console.log('📝 [SCENARIO CHANGES] Change detection triggered:', {
+        hasChanges,
         layersChanged,
         surgeChanged,
         durationChanged,
         coefficientsChanged,
-        totalChanges: hasChanges,
-        currentLayers: Array.from(currentEnabledLayersSet),
-        savedLayers: Array.from(savedEnabledLayersSet)
+        rangeOffsetsChanged,
+        currentLayersCount: currentEnabledLayersSet.size,
+        savedLayersCount: savedEnabledLayersSet.size,
+        addedLayers,
+        removedLayers,
+        currentSurge: surgeEnabled,
+        savedSurge: savedScenarioState.surgeEnabled,
+        currentDuration: selectedDuration,
+        savedDuration: savedScenarioState.selectedDuration,
+        currentRangeStartOffset,
+        savedRangeStartOffset: savedScenarioState.rangeStartOffset,
+        currentRangeEndOffset,
+        savedRangeEndOffset: savedScenarioState.rangeEndOffset,
+        isLoadingRef: isLoadingScenarioRef.current,
+        hasPendingLayers: pendingEnabledLayers !== null
       });
       setHasUnsavedChanges(hasChanges);
     }
@@ -467,6 +642,8 @@ export default function TimelineSimulatorPage() {
     pricingCoefficientsUp,
     pricingCoefficientsDown,
     bias,
+    rangeStart,
+    rangeEnd,
     hasUnsavedChanges,
     pendingEnabledLayers
   ]);
@@ -551,6 +728,11 @@ export default function TimelineSimulatorPage() {
     }
 
     try {
+      // Calculate range offsets in days (for dropdown values)
+      const now = new Date();
+      const rangeStartOffset = Math.round((rangeStart.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      const rangeEndOffset = Math.round((rangeEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+
       const config: any = {
         enabledLayers: Array.from(enabledLayers),
         selectedDuration,
@@ -559,6 +741,8 @@ export default function TimelineSimulatorPage() {
         viewEnd: viewEnd.toISOString(),
         rangeStart: rangeStart.toISOString(),
         rangeEnd: rangeEnd.toISOString(),
+        rangeStartOffset, // Save dropdown value (e.g., -7 for "7 days ago")
+        rangeEndOffset,   // Save dropdown value (e.g., +3 for "3 days ahead")
         useDurationContext,
         bookingStartTime: bookingStartTime.toISOString(),
         // Save surge pricing state
@@ -628,6 +812,20 @@ export default function TimelineSimulatorPage() {
     // Store the saved enabled layers to restore later (after surge layers are created)
     setPendingEnabledLayers(new Set(config.enabledLayers));
 
+    // Calculate range dates from offsets if available (for dropdown restoration)
+    let newRangeStart: Date;
+    let newRangeEnd: Date;
+    if (config.rangeStartOffset !== undefined && config.rangeEndOffset !== undefined) {
+      // Use saved offsets to recalculate dates relative to current "now"
+      const now = new Date();
+      newRangeStart = new Date(now.getTime() + config.rangeStartOffset * 24 * 60 * 60 * 1000);
+      newRangeEnd = new Date(now.getTime() + config.rangeEndOffset * 24 * 60 * 60 * 1000);
+    } else {
+      // Backward compatibility: use absolute dates if offsets not available
+      newRangeStart = new Date(config.rangeStart);
+      newRangeEnd = new Date(config.rangeEnd);
+    }
+
     // Save the initial scenario state for change detection
     setSavedScenarioState({
       enabledLayers: new Set(config.enabledLayers),
@@ -635,6 +833,8 @@ export default function TimelineSimulatorPage() {
       isEventBooking: config.isEventBooking,
       viewStart: new Date(config.viewStart),
       viewEnd: new Date(config.viewEnd),
+      rangeStartOffset: config.rangeStartOffset,
+      rangeEndOffset: config.rangeEndOffset,
       surgeEnabled: config.surgeEnabled,
       pricingCoefficientsUp: config.pricingCoefficientsUp,
       pricingCoefficientsDown: config.pricingCoefficientsDown,
@@ -647,8 +847,8 @@ export default function TimelineSimulatorPage() {
     setIsEventBooking(config.isEventBooking);
     setViewStart(new Date(config.viewStart));
     setViewEnd(new Date(config.viewEnd));
-    setRangeStart(new Date(config.rangeStart));
-    setRangeEnd(new Date(config.rangeEnd));
+    setRangeStart(newRangeStart);
+    setRangeEnd(newRangeEnd);
     setUseDurationContext(config.useDurationContext || false);
     setBookingStartTime(config.bookingStartTime ? new Date(config.bookingStartTime) : new Date(config.viewStart));
 
@@ -662,6 +862,10 @@ export default function TimelineSimulatorPage() {
     if (config.surgeEnabled !== undefined) {
       setSurgeEnabled(config.surgeEnabled);
     }
+
+    // Enable Simulation Mode when loading a scenario
+    setIsSimulationEnabled(true);
+    setIsPlanningEnabled(true);
 
     setCurrentScenarioId(scenario._id?.toString() || null);
     alert(`Loaded scenario: ${scenario.name}`);
@@ -681,6 +885,81 @@ export default function TimelineSimulatorPage() {
     setPricingCoefficientsUp(undefined);
     setPricingCoefficientsDown(undefined);
     setBias(undefined);
+  };
+
+  // Promote scenario to production (materialize surge configs)
+  const promoteToProduction = async () => {
+    if (!currentScenarioId) {
+      alert('No scenario selected to promote');
+      return;
+    }
+
+    if (!surgeEnabled || appliedSurgeRatesheets.length === 0) {
+      alert('⚠️ No surge pricing is active in this scenario.\n\nPromotion is only available for scenarios with surge pricing enabled.');
+      return;
+    }
+
+    const confirmMessage = `🚀 Promote to Production\n\nThis will materialize ${appliedSurgeRatesheets.length} surge config(s) into physical ratesheets:\n\n${appliedSurgeRatesheets.map(s => `• ${s.name}`).join('\n')}\n\nEach will be created as DRAFT and require approval before going live.\n\nContinue?`;
+
+    if (!confirm(confirmMessage)) return;
+
+    try {
+      let successCount = 0;
+      let failCount = 0;
+      const results = [];
+
+      for (const surgeRatesheet of appliedSurgeRatesheets) {
+        // Extract config ID from surge ratesheet
+        // Surge ratesheets have names like "SURGE: Test Surge - High Priority"
+        // We need to find the corresponding config
+        const surgeName = surgeRatesheet.name.replace('SURGE: ', '');
+
+        // Find the config by searching for active surge configs
+        try {
+          const response = await fetch('/api/surge-pricing/configs');
+          if (!response.ok) throw new Error('Failed to fetch surge configs');
+
+          const configs = await response.json();
+          const matchingConfig = configs.find((c: any) => c.name === surgeName && c.isActive);
+
+          if (!matchingConfig) {
+            failCount++;
+            results.push(`❌ ${surgeName}: Config not found`);
+            continue;
+          }
+
+          // Materialize the config
+          const materializeResponse = await fetch(`/api/surge-pricing/configs/${matchingConfig._id}/materialize`, {
+            method: 'POST',
+          });
+
+          if (materializeResponse.ok) {
+            const data = await materializeResponse.json();
+            successCount++;
+            results.push(`✅ ${surgeName}: ${data.multiplier.toFixed(3)}x`);
+          } else {
+            failCount++;
+            results.push(`❌ ${surgeName}: Materialization failed`);
+          }
+        } catch (error) {
+          failCount++;
+          results.push(`❌ ${surgeName}: ${error}`);
+        }
+      }
+
+      const resultMessage = `🎉 Promotion Complete!\n\n${results.join('\n')}\n\n✅ Success: ${successCount}\n❌ Failed: ${failCount}\n\nNavigate to Admin > Surge Pricing to review and submit for approval.`;
+      alert(resultMessage);
+
+      if (successCount > 0) {
+        // Optionally navigate to admin page
+        if (confirm('Navigate to Surge Pricing admin page?')) {
+          window.open('/admin/surge-pricing', '_blank');
+        }
+      }
+    } catch (error) {
+      console.error('Error promoting to production:', error);
+      alert('Failed to promote scenario to production');
+    }
   };
 
   const fetchLocationDetails = async (locationId: string) => {
@@ -780,11 +1059,17 @@ export default function TimelineSimulatorPage() {
     const layers: PricingLayer[] = [];
 
     // Add SURGE layers from the applied surge ratesheets (extracted from API response)
+    // These can be either:
+    // 1. VIRTUAL surge configs (not materialized) - add "(Virtual)" label
+    // 2. MATERIALIZED surge ratesheets (approved, in DB) - NO "(Virtual)" label
     if (surgeEnabled && appliedSurgeRatesheets.length > 0) {
       appliedSurgeRatesheets.forEach(surge => {
+        // Check if this surge ratesheet is materialized (exists in ratesheets array)
+        const isMaterialized = ratesheets.some(rs => rs.name === surge.name && !!(rs as any).surgeConfigId);
+
         layers.push({
           id: surge.id,
-          name: surge.name,
+          name: isMaterialized ? surge.name : `${surge.name} (Virtual)`,  // Only add "Virtual" for non-materialized
           type: 'SURGE',
           priority: surge.priority,
           color: 'bg-gradient-to-br from-orange-400 to-orange-600',
@@ -795,24 +1080,59 @@ export default function TimelineSimulatorPage() {
 
     // Add ratesheets (already sorted by priority)
     ratesheets.forEach((rs) => {
-      let name = rs.name;
-      if (rs.applyTo === 'EVENT' && rs.event) {
-        name = `${rs.name} (${rs.event.name})`;
-      } else if (rs.applyTo === 'CUSTOMER' && rs.customer) {
-        name = `${rs.name} (${rs.customer.name})`;
-      } else if (rs.applyTo === 'LOCATION' && rs.location) {
-        name = `${rs.name} (${rs.location.name})`;
-      } else if (rs.applyTo === 'SUBLOCATION' && rs.sublocation) {
-        name = `${rs.name} (${rs.sublocation.label})`;
+      // Check if this is a materialized surge ratesheet (has surgeConfigId)
+      // Materialized surge ratesheets are PHYSICAL ratesheets that have been approved
+      // They DON'T get "(Virtual)" label since they're real, approved ratesheets
+      const isSurgeRatesheet = !!(rs as any).surgeConfigId;
+
+      // Skip materialized surge ratesheets ONLY in Simulation Mode when surge is enabled
+      // They're already added from appliedSurgeRatesheets with correct IDs
+      // In Live Mode OR when surge is disabled, we want to show them as regular ratesheets
+      if (isSurgeRatesheet && isSimulationEnabled && surgeEnabled) {
+        console.log('⏭️  Skipping materialized surge ratesheet in Simulation Mode (already in appliedSurgeRatesheets):', rs.name);
+        return;
       }
+
+      // Debug: Log surge ratesheets
+      if (rs.name.includes('SURGE:')) {
+        console.log('🔍 Processing ratesheet:', {
+          name: rs.name,
+          hasSurgeConfigId: !!(rs as any).surgeConfigId,
+          surgeConfigId: (rs as any).surgeConfigId,
+          isSurgeRatesheet,
+          isMaterialized: isSurgeRatesheet,
+          priority: rs.priority,
+          surgeEnabled,
+          mode: surgeEnabled ? 'Simulation (can show both)' : 'Live (Materialized only)'
+        });
+      }
+
+      let name = rs.name;
+      // Don't append entity labels to surge ratesheets - they already have descriptive names
+      if (!isSurgeRatesheet) {
+        if (rs.applyTo === 'EVENT' && rs.event) {
+          name = `${rs.name} (${rs.event.name})`;
+        } else if (rs.applyTo === 'CUSTOMER' && rs.customer) {
+          name = `${rs.name} (${rs.customer.name})`;
+        } else if (rs.applyTo === 'LOCATION' && rs.location) {
+          name = `${rs.name} (${rs.location.name})`;
+        } else if (rs.applyTo === 'SUBLOCATION' && rs.sublocation) {
+          name = `${rs.name} (${rs.sublocation.label})`;
+        }
+      }
+
+      // CRITICAL: Materialized surge ratesheets should ALWAYS be SURGE type (in both Live and Simulation modes)
+      // This ensures they use API segment prices (calculated surge prices) instead of time window multipliers
+      const shouldBeSurgeType = isSurgeRatesheet;
 
       layers.push({
         id: rs._id,
         name,
-        type: 'RATESHEET',
+        type: shouldBeSurgeType ? 'SURGE' : 'RATESHEET',
         priority: rs.priority,
-        color: getLayerColor(rs.applyTo, rs.priority),
-        applyTo: rs.applyTo
+        // Always use orange color for surge ratesheets (even in Live Mode as RATESHEET type)
+        color: isSurgeRatesheet ? 'bg-gradient-to-br from-orange-400 to-orange-600' : getLayerColor(rs.applyTo, rs.priority),
+        applyTo: isSurgeRatesheet ? 'SURGE' : rs.applyTo
       });
     });
 
@@ -944,18 +1264,15 @@ export default function TimelineSimulatorPage() {
     let basePricingData: any = null;
     let surgePricingData: any = null;
 
-    console.log('🔍 API Fetch Check:', {
-      selectedSubLocation,
+    console.log('🔍 [SURGE] API Fetch:', {
       surgeEnabled,
-      roundedViewStart: roundedViewStart.toISOString(),
-      roundedViewEnd: roundedViewEnd.toISOString()
+      dateRange: `${roundedViewStart.toISOString()} → ${roundedViewEnd.toISOString()}`
     });
 
     if (selectedSubLocation) {
       try {
-        if (surgeEnabled) {
-          // Fetch base prices (without surge)
-          console.log('💰 Fetching base pricing data (surge OFF)');
+        if (surgeEnabled || !isSimulationEnabled) {
+          // Fetch base prices (without virtual surge, but includes materialized surge in Live mode)
           const baseResponse = await fetch('/api/pricing/calculate-hourly', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -964,56 +1281,77 @@ export default function TimelineSimulatorPage() {
               startTime: roundedViewStart.toISOString(),
               endTime: roundedViewEnd.toISOString(),
               eventId: selectedEventId || undefined,
-              includeSurge: false,
+              includeSurge: false, // Don't include virtual surge, but backend will still include materialized surge ratesheets
             }),
           });
           if (baseResponse.ok) {
             basePricingData = await baseResponse.json();
           }
 
-          // Fetch surge prices (with surge)
-          console.log('💰 Fetching surge pricing data (surge ON)');
-          const surgeResponse = await fetch('/api/pricing/calculate-hourly', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subLocationId: selectedSubLocation,
-              startTime: roundedViewStart.toISOString(),
-              endTime: roundedViewEnd.toISOString(),
-              eventId: selectedEventId || undefined,
-              includeSurge: true,
-            }),
-          });
-          if (surgeResponse.ok) {
-            surgePricingData = await surgeResponse.json();
-            console.log('💰 Surge pricing data received:', {
-              totalPrice: surgePricingData.totalPrice,
-              segments: surgePricingData.segments?.length,
-              hasSurgeRatesheets: surgePricingData.segments?.some((s: any) => s.ratesheet?.level === 'SURGE')
+          // Fetch surge prices (with virtual surge) - only in Simulation mode with surge enabled
+          if (surgeEnabled && isSimulationEnabled) {
+            const surgeResponse = await fetch('/api/pricing/calculate-hourly', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                subLocationId: selectedSubLocation,
+                startTime: roundedViewStart.toISOString(),
+                endTime: roundedViewEnd.toISOString(),
+                eventId: selectedEventId || undefined,
+                includeSurge: true, // Include virtual surge
+              }),
             });
+            if (surgeResponse.ok) {
+              surgePricingData = await surgeResponse.json();
 
-            // Extract unique surge ratesheets from segments
-            const surgeLayers = new Map<string, { id: string; name: string; priority: number }>();
-            surgePricingData.segments?.forEach((segment: any) => {
-              if (segment.ratesheet?.level === 'SURGE') {
-                const ratesheetName = segment.ratesheet.name;
-                // ALWAYS use name as ID for consistency (so saved scenarios work correctly)
-                const ratesheetId = ratesheetName;
-                if (!surgeLayers.has(ratesheetId)) {
-                  surgeLayers.set(ratesheetId, {
-                    id: ratesheetId,
-                    name: ratesheetName,
-                    priority: segment.ratesheet.priority || 10000
-                  });
+              console.log('🔍 [SURGE] API Response:', {
+                hasSegments: !!surgePricingData?.segments,
+                segmentCount: surgePricingData?.segments?.length || 0,
+                firstSegmentLevel: surgePricingData?.segments?.[0]?.ratesheet?.level,
+                firstSegmentName: surgePricingData?.segments?.[0]?.ratesheet?.name
+              });
+
+              // Extract unique surge ratesheets from segments OR use materialized ratesheets from DB
+              const surgeLayers = new Map<string, { id: string; name: string; priority: number }>();
+
+              // APPROACH 1: Try to extract from API segments (if metadata is available)
+              surgePricingData.segments?.forEach((segment: any) => {
+                if (segment.ratesheet?.level === 'SURGE') {
+                  const ratesheetName = segment.ratesheet.name;
+                  const ratesheetId = ratesheetName;
+                  if (!surgeLayers.has(ratesheetId)) {
+                    surgeLayers.set(ratesheetId, {
+                      id: ratesheetId,
+                      name: ratesheetName,
+                      priority: segment.ratesheet.priority || 10000
+                    });
+                  }
                 }
+              });
+
+              // APPROACH 2: If no surge layers found from API, use materialized surge ratesheets from database
+              if (surgeLayers.size === 0) {
+                console.log('⚠️ [SURGE] No surge metadata in API response, using materialized ratesheets from DB');
+                ratesheets.forEach((rs: any) => {
+                  if (rs.surgeConfigId) {
+                    surgeLayers.set(rs.name, {
+                      id: rs.name,
+                      name: rs.name,
+                      priority: rs.priority
+                    });
+                  }
+                });
               }
-            });
-            setAppliedSurgeRatesheets(Array.from(surgeLayers.values()));
-            console.log(`   📊 Found ${surgeLayers.size} unique surge ratesheet(s):`, Array.from(surgeLayers.values()));
+
+              setAppliedSurgeRatesheets(Array.from(surgeLayers.values()));
+
+              console.log(`🔍 [SURGE] Found ${surgeLayers.size} surge ratesheet(s):`,
+                Array.from(surgeLayers.values()).map(s => `${s.name} (${s.priority})`).join(', ') || 'none'
+              );
+            }
           }
         } else {
           // Just fetch base prices
-          console.log('💰 Fetching pricing data (surge OFF)');
           const response = await fetch('/api/pricing/calculate-hourly', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1027,19 +1365,6 @@ export default function TimelineSimulatorPage() {
           });
           if (response.ok) {
             basePricingData = await response.json();
-            console.log('📊 Base pricing data received:', {
-              totalPrice: basePricingData.totalPrice,
-              totalHours: basePricingData.totalHours,
-              segments: basePricingData.segments?.length,
-              firstSegment: basePricingData.segments?.[0],
-              lastSegment: basePricingData.segments?.[basePricingData.segments.length - 1]
-            });
-            console.log('📊 First 3 segments:', basePricingData.segments?.slice(0, 3).map((seg: any) => ({
-              startTime: seg.startTime,
-              pricePerHour: seg.pricePerHour
-            })));
-          } else {
-            console.error('❌ Base pricing API failed:', response.status, response.statusText);
           }
         }
       } catch (error) {
@@ -1048,10 +1373,6 @@ export default function TimelineSimulatorPage() {
     }
 
     let iterationCount = 0;
-    console.log(`\n🔍 [FRONTEND LOOP] Starting slot generation:`);
-    console.log(`   Start: ${currentTime.toISOString()} (UTC hour: ${currentTime.getUTCHours()})`);
-    console.log(`   End: ${endTime.toISOString()} (UTC hour: ${endTime.getUTCHours()})`);
-    console.log(`   Duration: ${selectedDuration} hours`);
 
     while (currentTime < endTime) {
       // Use UTC hours for consistent timezone handling
@@ -1059,60 +1380,112 @@ export default function TimelineSimulatorPage() {
       const timeStr = `${hour.toString().padStart(2, '0')}:00`;
       iterationCount++;
 
-      if (iterationCount === 1 || hour === 4) {
-        console.log(`\n🔍 [SLOT ${iterationCount}] Hour ${hour} (${formatHour(hour)})`);
-        console.log(`   currentTime: ${currentTime.toISOString()}`);
-        console.log(`   currentTime < endTime: ${currentTime < endTime}`);
-      }
-
       // For each layer, check if it applies at this hour
       const layerPrices = allLayers.map(layer => {
         let price: number | null = null;
         let isActive = false;
 
         if (layer.type === 'SURGE') {
-          // SURGE layer - store the multiplier, not absolute price
-          // We'll apply it dynamically to the current base price
-          if (surgePricingData?.segments) {
-            const segment = surgePricingData.segments.find((seg: any) => {
+          // SURGE layer - store the actual surge price (base × multiplier)
+          // In Simulation Mode: use surgePricingData (virtual + materialized surge)
+          // In Live Mode: use basePricingData (materialized surge only)
+          const dataSource = surgePricingData?.segments || basePricingData?.segments;
+
+          // Debug: Log data source selection for all hours
+          console.log(`🔍 [SURGE LAYER] Hour ${hour}, Layer: ${layer.name}`, {
+            hasSurgePricingData: !!surgePricingData?.segments,
+            hasBasePricingData: !!basePricingData?.segments,
+            usingDataSource: surgePricingData?.segments ? 'surgePricingData' : 'basePricingData',
+            segmentCount: dataSource?.length
+          });
+
+          if (dataSource) {
+            const segment = dataSource.find((seg: any) => {
               const segStart = new Date(seg.startTime);
               return segStart.getTime() === currentTime.getTime();
             });
 
-            if (hour === 4) {
-              console.log('🐛 [4 AM SURGE LAYER] Checking surge segment:');
-              console.log('   segment found:', !!segment);
-              console.log('   segment.ratesheet?.level:', segment?.ratesheet?.level);
-              console.log('   segment.ratesheet?.name:', segment?.ratesheet?.name);
-              console.log('   layer.name:', layer.name);
-              console.log('   segment.pricePerHour:', segment?.pricePerHour);
+            // Debug: Log segment details for all hours
+            if (segment) {
+              console.log(`🔍 [SEGMENT FOUND] Hour ${hour}, Layer: ${layer.name}`, {
+                segmentPrice: segment.pricePerHour,
+                ratesheetLevel: segment.ratesheet?.level,
+                ratesheetName: segment.ratesheet?.name,
+                hasRatesheet: !!segment.ratesheet,
+                layerNameWithoutLabel: layer.name.replace(' (Virtual)', '')
+              });
+            } else {
+              console.log(`⚠️ [NO SEGMENT] Hour ${hour}, Layer: ${layer.name}, CurrentTime: ${currentTime.toISOString()}`);
             }
 
-            // Must have both a segment AND that segment's winning ratesheet must be SURGE level
-            // AND the surge ratesheet name must match this layer's name
-            if (segment && segment.ratesheet?.level === 'SURGE' && segment.ratesheet?.name === layer.name) {
-              // Store the MULTIPLIER (the backend now returns the final price after applying surge)
-              // We need to calculate the multiplier from base vs surge price
-              const baseSegment = basePricingData?.segments.find((seg: any) => {
-                const segStart = new Date(seg.startTime);
-                return segStart.getTime() === currentTime.getTime();
+            // SURGE layer matching logic
+            const layerNameWithoutLabel = layer.name.replace(' (Virtual)', '');
+
+            // APPROACH 1: If API returns ratesheet metadata, use it (ideal)
+            const hasRatesheetMetadata = segment?.ratesheet?.level && segment?.ratesheet?.name;
+            if (segment && hasRatesheetMetadata && segment.ratesheet.level === 'SURGE' && segment.ratesheet.name === layerNameWithoutLabel) {
+              price = segment.pricePerHour;
+              isActive = true;
+              console.log(`✅ [SURGE MATCH - Metadata] Hour ${hour}, Layer: ${layer.name}, Price: $${price}`);
+            } else if (segment && hasRatesheetMetadata) {
+              console.log(`❌ [METADATA MISMATCH] Hour ${hour}, Layer: ${layer.name}`, {
+                segmentLevel: segment.ratesheet.level,
+                segmentName: segment.ratesheet.name,
+                expectedName: layerNameWithoutLabel,
+                levelMatch: segment.ratesheet.level === 'SURGE',
+                nameMatch: segment.ratesheet.name === layerNameWithoutLabel
               });
+            }
+            // APPROACH 2: If no metadata, fallback to ratesheet time windows
+            // This handles materialized surge ratesheets that are in the database
+            else {
+              // Find the corresponding ratesheet in the database
+              const surgeRatesheet = ratesheets.find(rs => rs.name === layerNameWithoutLabel && !!(rs as any).surgeConfigId);
 
-              if (baseSegment && baseSegment.pricePerHour > 0) {
-                // Calculate multiplier: surge_price / base_price
-                const surgeMultiplier = segment.pricePerHour / baseSegment.pricePerHour;
-                price = surgeMultiplier; // Store multiplier for later application
-                isActive = true;
+              if (surgeRatesheet) {
+                // Check if this surge ratesheet applies at this hour using time windows
+                const effectiveFrom = new Date(surgeRatesheet.effectiveFrom);
+                const effectiveTo = surgeRatesheet.effectiveTo ? new Date(surgeRatesheet.effectiveTo) : null;
 
-                if (hour === 4) {
-                  console.log('🐛 [4 AM SURGE LAYER] Calculating multiplier:');
-                  console.log('   baseSegment.pricePerHour:', baseSegment.pricePerHour);
-                  console.log('   segment.pricePerHour:', segment.pricePerHour);
-                  console.log('   calculated multiplier:', surgeMultiplier);
+                if (effectiveFrom <= currentTime && (!effectiveTo || effectiveTo >= currentTime)) {
+                  // Check time windows
+                  if (surgeRatesheet.timeWindows && surgeRatesheet.timeWindows.length > 0) {
+                    const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+                    const matchingWindow = surgeRatesheet.timeWindows.find((tw: any) => {
+                      const windowType = tw.windowType || 'ABSOLUTE_TIME';
+                      if (windowType === 'ABSOLUTE_TIME' && tw.startTime && tw.endTime) {
+                        return tw.startTime <= timeStr && timeStr < tw.endTime;
+                      }
+                      return false;
+                    });
+
+                    if (matchingWindow) {
+                      // Use the time window's price (which is the surge price for materialized ratesheets)
+                      price = matchingWindow.pricePerHour;
+                      isActive = true;
+                      console.log(`✅ [SURGE MATCH - Ratesheet Window] Hour ${hour}, Layer: ${layer.name}, Price: $${price}`);
+                    } else {
+                      console.log(`ℹ️ [NO WINDOW MATCH] Hour ${hour}, Layer: ${layer.name}, Time: ${timeStr}`, {
+                        timeWindowsCount: surgeRatesheet.timeWindows.length,
+                        timeWindows: surgeRatesheet.timeWindows.map((tw: any) => ({
+                          start: tw.startTime,
+                          end: tw.endTime,
+                          price: tw.pricePerHour
+                        }))
+                      });
+                    }
+                  }
+                } else {
+                  console.log(`ℹ️ [OUT OF DATE RANGE] Hour ${hour}, Layer: ${layer.name}`, {
+                    effectiveFrom: surgeRatesheet.effectiveFrom,
+                    effectiveTo: surgeRatesheet.effectiveTo,
+                    currentTime: currentTime.toISOString()
+                  });
                 }
+              } else {
+                console.log(`❌ [NO SURGE RATESHEET] Hour ${hour}, Layer: ${layer.name}, Looking for: ${layerNameWithoutLabel}`);
               }
             }
-            // If no SURGE ratesheet for this hour, leave isActive = false (grayed out tile)
           }
         } else if (layer.type === 'RATESHEET') {
           // Find the ratesheet
@@ -1171,26 +1544,30 @@ export default function TimelineSimulatorPage() {
       // Winner is the first active layer (highest priority) that is also enabled
       let winner = layerPrices.find(lp => lp.isActive && enabledLayers.has(lp.layer.id));
 
-      // If SURGE layer won, apply multiplier to base price dynamically
-      if (winner && winner.layer.type === 'SURGE' && winner.price !== null) {
-        const surgeMultiplier = winner.price; // This is the multiplier
-
-        // Find the next non-SURGE winner
-        const baseWinner = layerPrices.find(lp =>
-          lp.isActive &&
-          enabledLayers.has(lp.layer.id) &&
-          lp.layer.type !== 'SURGE'
-        );
-
-        if (baseWinner && baseWinner.price !== null) {
-          // Apply multiplier to base price
-          const surgePrice = baseWinner.price * surgeMultiplier;
-          winner = {
-            ...winner,
-            price: surgePrice // Override with calculated surge price
-          };
-        }
+      // Debug: Log winner and all layers for hours 7, 10, 11, 12 (surge test hours)
+      if ([7, 10, 11, 12].includes(hour)) {
+        console.log(`🏆 [WINNER] Hour ${hour}:`, {
+          winnerName: winner?.layer.name,
+          winnerType: winner?.layer.type,
+          winnerPrice: winner?.price,
+          winnerPriority: winner?.layer.priority,
+          isActive: winner?.isActive,
+          enabledLayersCount: enabledLayers.size,
+          enabledLayersIds: Array.from(enabledLayers)
+        });
+        console.log(`📊 [ALL LAYERS] Hour ${hour}:`, layerPrices.map(lp => ({
+          name: lp.layer.name,
+          type: lp.layer.type,
+          priority: lp.layer.priority,
+          price: lp.price,
+          isActive: lp.isActive,
+          isEnabled: enabledLayers.has(lp.layer.id),
+          layerId: lp.layer.id
+        })));
       }
+
+      // SURGE layer prices are already calculated (base × multiplier) from the backend
+      // No need to recalculate here
 
       // Find capacity for this hour
       let capacityForHour = undefined;
@@ -1293,18 +1670,6 @@ export default function TimelineSimulatorPage() {
           apiBasePrice = segment.pricePerHour;
         }
 
-        // Debug: Log segment matching for first few iterations
-        if (iterationCount <= 5) {
-          console.log(`🐛 [Iteration ${iterationCount}, Hour ${hour}] Base price segment matching:`, {
-            currentTime: currentTime.toISOString(),
-            currentTimeMs: currentTime.getTime(),
-            totalSegments: basePricingData.segments.length,
-            segmentFound: !!segment,
-            apiBasePrice,
-            firstSegmentStart: basePricingData.segments[0]?.startTime,
-            firstSegmentStartMs: new Date(basePricingData.segments[0]?.startTime).getTime()
-          });
-        }
       }
 
       // Get surge price if enabled
@@ -1334,13 +1699,14 @@ export default function TimelineSimulatorPage() {
         // If SURGE won, winner.price has already been recalculated dynamically
         finalWinningPrice = winner?.price !== undefined && winner?.price !== null ? winner.price : undefined;
 
-        // Debug logging
-        if (hour === 4) {
-          console.log('🐛 [4 AM DEBUG] Simulation Mode:');
-          console.log('   Winner:', winner?.layer.name, winner?.layer.type);
-          console.log('   Winner Price:', winner?.price);
-          console.log('   Final Winning Price:', finalWinningPrice);
-          console.log('   Enabled Layers:', Array.from(enabledLayers));
+        // Debug: Log simulation mode pricing for first iteration
+        if (iterationCount === 1) {
+          console.log(`💡 [SIMULATION] Hour ${hour} Pricing:`, {
+            winnerPrice: winner?.price,
+            finalWinningPrice,
+            winnerType: winner?.layer.type,
+            isSurgeWinner: winner?.layer.type === 'SURGE'
+          });
         }
 
         // For base price in simulation mode:
@@ -1376,36 +1742,19 @@ export default function TimelineSimulatorPage() {
         }
       }
 
-      // Calculate dynamic surge price in simulation mode
+      // Surge price for display purposes
       let finalSurgePrice = apiSurgePrice;
-      if (isSimulationEnabled && winner?.layer.type === 'SURGE' && winner.layer.id && enabledLayers.has(winner.layer.id)) {
-        // In simulation mode, if SURGE is winning, calculate surge price from current base
-        const nonSurgeWinner = layerPrices.find(lp =>
-          lp.isActive &&
-          enabledLayers.has(lp.layer.id) &&
-          lp.layer.type !== 'SURGE'
-        );
-        if (nonSurgeWinner && nonSurgeWinner.price !== null && apiSurgeMultiplier !== undefined) {
-          finalSurgePrice = nonSurgeWinner.price * apiSurgeMultiplier;
-        }
-      }
 
-      if (hour === 4 && currentTime.getDate() === 29) {
-        console.log('🐛 [4 AM JAN 29] Setting slot values:');
-        console.log('   finalWinningPrice:', finalWinningPrice);
-        console.log('   finalBasePrice:', finalBasePrice);
-        console.log('   apiSurgePrice:', apiSurgePrice);
-        console.log('   finalSurgePrice:', finalSurgePrice);
-        console.log('   apiSurgeMultiplier:', apiSurgeMultiplier);
-        console.log('   isSimulationEnabled:', isSimulationEnabled);
-        console.log('   surgeEnabled:', surgeEnabled);
-        console.log('   enabledLayers.has("surge-layer"):', enabledLayers.has('surge-layer'));
-        console.log('   Winner layer:', winner?.layer.name, winner?.layer.type);
-        console.log('   Winner price:', winner?.price);
-        console.log('   apiWinningPrice:', apiWinningPrice);
-        console.log('   apiBasePrice:', apiBasePrice);
-        console.log('   Date:', currentTime.toISOString());
-      }
+      // IMPORTANT: When SURGE layer wins in simulation mode, winner.price already contains
+      // the correct surge-adjusted price calculated by the backend pricing engine.
+      // We should NOT recalculate it here. The finalWinningPrice set at line 1497
+      // already has the correct value from winner.price.
+      //
+      // The previous code was incorrectly recalculating: nonSurgeWinner.price × apiSurgeMultiplier
+      // This caused the winning price to be overwritten with an incorrect value.
+      //
+      // REMOVED the surge recalculation logic that was causing the bug.
+
 
       slots.push({
         hour,
@@ -1423,23 +1772,12 @@ export default function TimelineSimulatorPage() {
         events: eventsWithPriority.length > 0 ? eventsWithPriority : undefined,
       });
 
-      // Debug log for event names with priority
-      if (eventsWithPriority.length > 0) {
-        const eventInfo = eventsWithPriority.map(e => `${e.name}(${e.priority})`).join(', ');
-        console.log(`📌 Slot ${slots.length - 1} (${formatHour(hour)}): events = [${eventInfo}]`);
-      }
 
       currentTime.setHours(currentTime.getHours() + 1);
     }
 
-    console.log(`\n🔍 [FRONTEND LOOP] Completed: Generated ${slots.length} slots`);
-    console.log(`   Expected: ${selectedDuration} slots`);
-    console.log(`   First slot: ${slots[0]?.label} - ${slots[0]?.date.toISOString()}`);
-    console.log(`   Last slot: ${slots[slots.length - 1]?.label} - ${slots[slots.length - 1]?.date.toISOString()}`);
-
     // NOTE: Surge pricing now happens automatically in the pricing engine (SURGE ratesheets)
     // No post-processing needed - surge ratesheets are generated and applied in the pricing waterfall
-    console.log('🔍 Surge enabled:', surgeEnabled, '| Active config:', !!activeSurgeConfig);
 
     setTimeSlots(slots);
   };
@@ -1499,6 +1837,39 @@ export default function TimelineSimulatorPage() {
 
     setViewStart(newViewStart);
     setViewEnd(newViewEnd);
+  };
+
+  // Range bound handlers - allow users to expand/shrink the timeline range
+  const handleRangeStartChange = (daysOffset: number) => {
+    const now = new Date();
+    const newRangeStart = new Date(now.getTime() + daysOffset * 24 * 60 * 60 * 1000);
+
+    // Ensure rangeStart is before rangeEnd (at least 1 day gap)
+    if (newRangeStart.getTime() < rangeEnd.getTime() - 24 * 60 * 60 * 1000) {
+      setRangeStart(newRangeStart);
+
+      // Adjust viewStart if it's now outside the new range
+      if (viewStart.getTime() < newRangeStart.getTime()) {
+        setViewStart(newRangeStart);
+        setViewEnd(new Date(newRangeStart.getTime() + selectedDuration * 60 * 60 * 1000));
+      }
+    }
+  };
+
+  const handleRangeEndChange = (daysOffset: number) => {
+    const now = new Date();
+    const newRangeEnd = new Date(now.getTime() + daysOffset * 24 * 60 * 60 * 1000);
+
+    // Ensure rangeEnd is after rangeStart (at least 1 day gap)
+    if (newRangeEnd.getTime() > rangeStart.getTime() + 24 * 60 * 60 * 1000) {
+      setRangeEnd(newRangeEnd);
+
+      // Adjust viewEnd if it's now outside the new range
+      if (viewEnd.getTime() > newRangeEnd.getTime()) {
+        setViewEnd(newRangeEnd);
+        setViewStart(new Date(newRangeEnd.getTime() - selectedDuration * 60 * 60 * 1000));
+      }
+    }
   };
 
   // Get current total based on active layers
@@ -1899,6 +2270,22 @@ export default function TimelineSimulatorPage() {
                           <ChevronDown className="w-4 h-4 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-white/70" />
                         </div>
                       )}
+
+                      {/* Promote to Production Button */}
+                      {currentScenarioId && surgeEnabled && appliedSurgeRatesheets.length > 0 && (
+                        <div className="pt-2 border-t border-white/20">
+                          <button
+                            onClick={promoteToProduction}
+                            className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-3 py-2 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg group"
+                          >
+                            <Rocket className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                            <span>Promote to Production</span>
+                          </button>
+                          <p className="text-xs text-white/60 text-center mt-1">
+                            Materialize {appliedSurgeRatesheets.length} surge config{appliedSurgeRatesheets.length > 1 ? 's' : ''}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2140,6 +2527,42 @@ export default function TimelineSimulatorPage() {
 
                 {/* Minimalist Timeline Slider */}
                 <div className="relative px-6">
+                  {/* Range adjustment controls */}
+                  <div className="flex justify-between items-center mb-2 px-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-medium text-gray-500">Range Start:</span>
+                      <select
+                        value={Math.round((rangeStart.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))}
+                        onChange={(e) => handleRangeStartChange(parseInt(e.target.value))}
+                        className="text-[10px] px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:border-purple-400 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-colors"
+                      >
+                        <option value={-60}>60 days ago</option>
+                        <option value={-30}>30 days ago</option>
+                        <option value={-14}>14 days ago</option>
+                        <option value={-7}>7 days ago</option>
+                        <option value={-3}>3 days ago</option>
+                        <option value={-1}>1 day ago</option>
+                        <option value={0}>Today</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-medium text-gray-500">Range End:</span>
+                      <select
+                        value={Math.round((rangeEnd.getTime() - new Date().getTime()) / (24 * 60 * 60 * 1000))}
+                        onChange={(e) => handleRangeEndChange(parseInt(e.target.value))}
+                        className="text-[10px] px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:border-purple-400 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-colors"
+                      >
+                        <option value={1}>1 day ahead</option>
+                        <option value={3}>3 days ahead</option>
+                        <option value={7}>7 days ahead</option>
+                        <option value={14}>14 days ahead</option>
+                        <option value={30}>30 days ahead</option>
+                        <option value={60}>60 days ahead</option>
+                        <option value={90}>90 days ahead</option>
+                      </select>
+                    </div>
+                  </div>
+
                   {/* Date markers - Above track */}
                   <div className="flex justify-between mb-3 px-1">
                     {Array.from({ length: 5 }).map((_, i) => {
@@ -2313,7 +2736,7 @@ export default function TimelineSimulatorPage() {
                     <svg className="w-full h-full" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid meet">
                       {/* Gradients */}
                       <defs>
-                        <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <linearGradient id="lineGradient" x1="0" y1="0" x2="1000" y2="0" gradientUnits="userSpaceOnUse">
                           <stop offset="0%" stopColor="#3b82f6" />
                           <stop offset="50%" stopColor="#8b5cf6" />
                           <stop offset="100%" stopColor="#ec4899" />
@@ -2332,7 +2755,8 @@ export default function TimelineSimulatorPage() {
                       {(() => {
                         const prices = timeSlots.map(s => s.winningPrice || 0);
                         const maxPrice = Math.max(...prices);
-                        const minPrice = Math.min(...prices.filter(p => p > 0));
+                        const validPrices = prices.filter(p => p > 0);
+                        const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : maxPrice;
                         const range = maxPrice - minPrice || 1;
                         const padding = range * 0.15;
 
@@ -2363,6 +2787,13 @@ export default function TimelineSimulatorPage() {
                           yAxisRange = yAxisMax - yAxisMin;
                         }
 
+                        // Safety check: ensure yAxisRange is always at least 1 to prevent division by zero or invalid rendering
+                        if (!isFinite(yAxisRange) || yAxisRange < 0.1) {
+                          yAxisRange = 1;
+                          yAxisMax = maxPrice + 0.5;
+                          yAxisMin = maxPrice - 0.5;
+                        }
+
                         const points = timeSlots.map((slot, i) => {
                           // Handle single slot case (avoid division by zero)
                           const x = timeSlots.length === 1
@@ -2377,6 +2808,9 @@ export default function TimelineSimulatorPage() {
                         });
 
                         const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
+
+                        // Validate points to ensure no NaN or Infinity values
+                        const hasInvalidPoints = points.some(p => !isFinite(p.x) || !isFinite(p.y));
 
                         return (
                           <>
@@ -2402,33 +2836,46 @@ export default function TimelineSimulatorPage() {
                               );
                             })}
 
-                            {/* Area fill */}
+                            {/* Area fill - consistent gradient for all cases */}
                             <polygon
                               points={`${leftMargin},${chartBaseline} ${pointsStr} ${leftMargin + chartWidth},${chartBaseline}`}
                               fill="url(#areaGradient)"
                             />
 
-                            {/* Glow effect under the line */}
-                            <polyline
-                              points={pointsStr}
-                              fill="none"
-                              stroke="url(#lineGradient)"
-                              strokeWidth="6"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              opacity="0.2"
-                              filter="blur(4px)"
-                            />
-
-                            {/* Main line */}
-                            <polyline
-                              points={pointsStr}
-                              fill="none"
-                              stroke="url(#lineGradient)"
-                              strokeWidth="3"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
+                            {/* Render line only if all points are valid - use polyline for all cases */}
+                            {!hasInvalidPoints && (
+                              <>
+                                {/* Fallback solid color base - ensures line always visible */}
+                                <polyline
+                                  points={pointsStr}
+                                  fill="none"
+                                  stroke="#8b5cf6"
+                                  strokeWidth="3"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                                {/* Glow effect with gradient */}
+                                <polyline
+                                  points={pointsStr}
+                                  fill="none"
+                                  stroke="url(#lineGradient)"
+                                  strokeWidth="6"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  opacity="0.2"
+                                  filter="blur(4px)"
+                                />
+                                {/* Main line with gradient overlay */}
+                                <polyline
+                                  points={pointsStr}
+                                  fill="none"
+                                  stroke="url(#lineGradient)"
+                                  strokeWidth="3"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </>
+                            )}
 
                             {/* Data points */}
                             {points.map(({ x, y, slot }, i) => {
@@ -2764,7 +3211,8 @@ export default function TimelineSimulatorPage() {
                   });
 
                   // Skip rendering this layer if it has no active tiles
-                  if (!hasActiveTiles) {
+                  // ONLY in Live Mode - in Simulation Mode, show all layers (for planning)
+                  if (!hasActiveTiles && !isSimulationEnabled) {
                     return null;
                   }
 
@@ -2865,9 +3313,9 @@ export default function TimelineSimulatorPage() {
                               onMouseLeave={handleTileLeave}
                               title={
                                 isDisabled
-                                  ? `${layer.name} - ${layer.type === 'SURGE' ? `${layerData.price}x` : `$${layerData.price}/hr`} (Priority: ${layer.priority}) - DISABLED`
+                                  ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority}) - DISABLED`
                                   : layerData?.isActive
-                                    ? `${layer.name} - ${layer.type === 'SURGE' ? `${layerData.price}x multiplier` : `$${layerData.price}/hr`} (Priority: ${layer.priority})`
+                                    ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})`
                                     : 'Not active for this time'
                               }
                               className={`rounded-lg transition-all cursor-pointer ${
@@ -2894,14 +3342,11 @@ export default function TimelineSimulatorPage() {
                             >
                               {layerData?.isActive && layerData.price !== null && (
                                 <div className="flex flex-col items-center justify-center gap-0.5 px-1">
-                                  {/* Price or Multiplier (for SURGE layers) */}
+                                  {/* Price (all layers show dollar amount) */}
                                   <div className={`font-bold text-sm drop-shadow-md ${
                                     isDisabled ? 'text-gray-600 line-through' : 'text-white'
                                   }`}>
-                                    {layer.type === 'SURGE'
-                                      ? `${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}x`
-                                      : `$${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}`
-                                    }
+                                    ${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}
                                   </div>
                                   {/* Capacity */}
                                   {slot.capacity && (

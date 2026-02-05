@@ -123,13 +123,37 @@ export async function POST(request: NextRequest) {
           subLocationId: new ObjectId(sublocation._id)
         }
       ],
-      isActive: true
+      isActive: true,
+      // CRITICAL: Exclude materialized surge ratesheets (we load them separately)
+      surgeConfigId: { $exists: false }
+    }).toArray();
+
+    // ALWAYS load materialized surge ratesheets (regardless of includeSurge flag)
+    // These are physical ratesheets that have been approved and should be applied
+    const materializedSurgeRatesheets = await db.collection('ratesheets').find({
+      $or: [
+        // Surge ratesheets at sublocation level
+        {
+          'appliesTo.level': 'SUBLOCATION',
+          'appliesTo.entityId': new ObjectId(sublocation._id),
+          surgeConfigId: { $exists: true }
+        },
+        // Surge ratesheets at location level
+        {
+          'appliesTo.level': 'LOCATION',
+          'appliesTo.entityId': new ObjectId(location._id),
+          surgeConfigId: { $exists: true }
+        }
+      ],
+      isActive: true,
+      approvalStatus: 'APPROVED'  // Only include approved surge ratesheets
     }).toArray();
 
     console.log(`\n📊 [API] Fetched ratesheets:`);
     console.log(`[API]   Customer: ${customerRatesheets.length}`);
     console.log(`[API]   Location: ${locationRatesheets.length}`);
     console.log(`[API]   Sublocation: ${sublocationRatesheets.length}`);
+    console.log(`[API]   Materialized Surge: ${materializedSurgeRatesheets.length}`);
 
     // Fetch EVENT ratesheets based on booking type and event selection
     // The isEventBooking flag will control whether grace periods ($0/hr) are applied
@@ -296,6 +320,13 @@ export async function POST(request: NextRequest) {
     const convertedLocationRatesheets = convertRatesheetDates(locationRatesheets, 'LOCATION');
     const convertedSublocationRatesheets = convertRatesheetDates(sublocationRatesheets, 'SUBLOCATION');
     const convertedEventRatesheets = convertRatesheetDates(eventRatesheets, 'EVENT');
+    // Convert materialized surge ratesheets - they will be treated as SURGE level in pricing engine
+    const convertedMaterializedSurgeRatesheets = materializedSurgeRatesheets.map(rs => ({
+      ...rs,
+      effectiveFrom: new Date(rs.effectiveFrom),
+      effectiveTo: rs.effectiveTo ? new Date(rs.effectiveTo) : null,
+      applyTo: 'SURGE'  // Mark as SURGE level for pricing engine
+    }));
 
     console.log(`\n🔍 [API] Converted ratesheet dates to Date objects`);
     if (convertedSublocationRatesheets.length > 0) {
@@ -332,6 +363,8 @@ export async function POST(request: NextRequest) {
       locationRatesheets: convertedLocationRatesheets as any[],
       sublocationRatesheets: convertedSublocationRatesheets as any[],
       eventRatesheets: convertedEventRatesheets as any[],
+      // CRITICAL: Always include materialized surge ratesheets (physical, approved surge pricing)
+      surgeRatesheets: convertedMaterializedSurgeRatesheets as any[],
 
       customerDefaultRate: customer.defaultHourlyRate,
       locationDefaultRate: location.defaultHourlyRate,
@@ -477,7 +510,7 @@ export async function POST(request: NextRequest) {
           description: `Auto-generated surge pricing (${surgeFactor.toFixed(2)}x)`,
           type: 'SURGE_MULTIPLIER',
           appliesTo: config.appliesTo,
-          priority: config.priority, // Use actual config priority
+          priority: 10000 + config.priority, // Surge priority: 10000+ to win over all other layers
           effectiveFrom: new Date(startTime),
           effectiveTo: new Date(endTime),
           timeWindows,
@@ -495,11 +528,18 @@ export async function POST(request: NextRequest) {
       });
 
       if (surgeRatesheets.length > 0) {
-        // Re-run pricing engine with surge ratesheets
+        // Re-run pricing engine with BOTH materialized AND virtual surge ratesheets
         console.log('\n🎯 ===== FINAL PRICING CALCULATION (WITH SURGE) =====');
+        // Combine materialized surge ratesheets (already in context) with virtual surge ratesheets
+        const allSurgeRatesheets = [
+          ...(context.surgeRatesheets || []),  // Materialized surge ratesheets (physical, approved)
+          ...surgeRatesheets  // Virtual surge ratesheets (generated from configs for simulation)
+        ];
+        console.log(`   Total surge ratesheets: ${allSurgeRatesheets.length} (${context.surgeRatesheets?.length || 0} materialized + ${surgeRatesheets.length} virtual)`);
+
         const surgeContext = {
           ...context,
-          surgeRatesheets
+          surgeRatesheets: allSurgeRatesheets
         };
 
         finalResult = engine.calculatePrice(surgeContext);
@@ -543,12 +583,13 @@ export async function POST(request: NextRequest) {
           endDate: e.endDate
         })),
         ratesheetSummary: {
-          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length + eventRatesheets.length + surgeRatesheets.length,
+          total: customerRatesheets.length + locationRatesheets.length + sublocationRatesheets.length + eventRatesheets.length + materializedSurgeRatesheets.length + surgeRatesheets.length,
           customer: customerRatesheets.length,
           location: locationRatesheets.length,
           sublocation: sublocationRatesheets.length,
           event: eventRatesheets.length,
-          surge: surgeRatesheets.length
+          materializedSurge: materializedSurgeRatesheets.length,  // Physical, approved surge ratesheets
+          virtualSurge: surgeRatesheets.length  // Virtual surge ratesheets (simulation only)
         }
       }
     });

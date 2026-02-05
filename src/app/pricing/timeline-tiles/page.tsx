@@ -460,7 +460,81 @@ export default function TimelineTilesPage() {
                 });
 
                 if (matchingWindow) {
-                  price = matchingWindow.pricePerHour;
+                  // Handle SURGE_MULTIPLIER type ratesheets specially
+                  if (ratesheet.type === 'SURGE_MULTIPLIER') {
+                    // For surge multipliers, pricePerHour contains the multiplier, not the absolute price
+                    // We need to find the base price and multiply it
+                    const surgeMultiplier = matchingWindow.pricePerHour;
+
+                    // Find the base price from non-surge layers
+                    // We need to look at all layers and find the highest priority non-surge active layer
+                    let basePrice = 0;
+
+                    // Check all ratesheets for the base price (exclude current surge ratesheet)
+                    for (const otherLayer of allLayers) {
+                      if (otherLayer.id === layer.id) continue; // Skip current surge layer
+
+                      let otherPrice: number | null = null;
+                      let otherIsActive = false;
+
+                      if (otherLayer.type === 'RATESHEET') {
+                        const otherRatesheet = ratesheets.find(rs => rs._id === otherLayer.id);
+                        if (otherRatesheet && otherRatesheet.type !== 'SURGE_MULTIPLIER') {
+                          // Check if this ratesheet applies to this hour
+                          const otherEffectiveFrom = new Date(otherRatesheet.effectiveFrom);
+                          const otherEffectiveTo = otherRatesheet.effectiveTo ? new Date(otherRatesheet.effectiveTo) : null;
+
+                          if (otherEffectiveFrom <= currentTime && (!otherEffectiveTo || otherEffectiveTo >= currentTime)) {
+                            if (otherRatesheet.timeWindows && otherRatesheet.timeWindows.length > 0) {
+                              const otherMatchingWindow = otherRatesheet.timeWindows.find(tw => {
+                                if (!isEventBooking && tw.pricePerHour === 0 && otherRatesheet.applyTo === 'EVENT') {
+                                  return false;
+                                }
+                                const windowType = tw.windowType || 'ABSOLUTE_TIME';
+                                if (windowType === 'DURATION_BASED') {
+                                  const ratesheetStart = new Date(otherRatesheet.effectiveFrom);
+                                  const minutesFromRatesheetStart = Math.floor((currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60));
+                                  const startMinute = tw.startMinute ?? 0;
+                                  const endMinute = tw.endMinute ?? 0;
+                                  return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
+                                } else {
+                                  if (!tw.startTime || !tw.endTime) return false;
+                                  return timeInWindow(timeStr, tw.startTime, tw.endTime);
+                                }
+                              });
+
+                              if (otherMatchingWindow) {
+                                otherPrice = otherMatchingWindow.pricePerHour;
+                                otherIsActive = true;
+                              }
+                            }
+                          }
+                        }
+                      } else {
+                        // Default rate
+                        otherPrice = otherLayer.rate || null;
+                        otherIsActive = otherPrice !== null;
+                      }
+
+                      // If this layer is active and has higher priority, use it as base
+                      if (otherIsActive && otherPrice !== null) {
+                        basePrice = otherPrice;
+                        break; // Use the first (highest priority) active non-surge layer
+                      }
+                    }
+
+                    // Fallback to default rates if no base found
+                    if (basePrice === 0) {
+                      basePrice = currentSubLocation?.defaultHourlyRate
+                        || currentLocation?.defaultHourlyRate
+                        || currentCustomer?.defaultHourlyRate
+                        || 0;
+                    }
+
+                    price = Math.round(basePrice * surgeMultiplier * 100) / 100;
+                  } else {
+                    price = Math.round(matchingWindow.pricePerHour * 100) / 100;
+                  }
                   isActive = true;
                 }
               }
@@ -551,7 +625,8 @@ export default function TimelineTilesPage() {
   };
 
   const getTotalCost = (): number => {
-    return timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
+    const total = timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
+    return Math.round(total * 100) / 100;
   };
 
   const getTotalDuration = (): string => {
@@ -817,7 +892,7 @@ export default function TimelineTilesPage() {
                   <div className="text-center">
                     <div className="text-xs font-medium text-white uppercase tracking-wide opacity-90">Total Cost</div>
                     <div className="text-3xl font-bold text-white">
-                      ${getTotalCost()}
+                      ${getTotalCost().toFixed(2)}
                     </div>
                     <div className="text-[10px] text-white mt-1 hidden">
                       {timeSlots.map(s => s.winningPrice ? `$${s.winningPrice}` : '$0').join(' + ')} = ${getTotalCost()}
@@ -862,7 +937,7 @@ export default function TimelineTilesPage() {
                         {/* Winning price - prominent */}
                         {slot.winningPrice ? (
                           <div className="text-xl font-extrabold text-gray-900 text-pink-500 mb-0">
-                            ${slot.winningPrice}
+                            ${slot.winningPrice.toFixed(2)}
                           </div>
                         ) : (
                           <div className="text-lg font-extrabold text-gray-400 mb-0">

@@ -77,6 +77,16 @@ export interface Ratesheet {
   approvedBy?: string;
   approvedAt?: Date;
   rejectionReason?: string;
+
+  // Surge Metadata (optional, only for surge ratesheets)
+  surgeConfigId?: ObjectId; // Back-reference to source surge config
+  surgeMultiplierSnapshot?: number; // Calculated multiplier at materialization time
+  demandSupplySnapshot?: {
+    demand: number;
+    supply: number;
+    pressure: number;
+    timestamp: Date;
+  };
 }
 
 export interface PricingQuery {
@@ -141,7 +151,7 @@ export class RatesheetRepository {
       $and: [
         // Must be active and approved
         { isActive: true },
-        { approvalStatus: 'APPROVED' },
+        { approvalStatus: 'APPROVED' as const },
         
         // Must apply to this SubLocation or its parent Location
         // Support both old and new data structures
@@ -180,8 +190,8 @@ export class RatesheetRepository {
     };
     
     console.log('[findApplicableRatesheets] Query:', JSON.stringify(query, null, 2));
-    
-    const results = await collection.find(query).sort({ priority: -1 }).toArray();
+
+    const results = await collection.find(query as any).sort({ priority: -1 }).toArray();
     
     console.log(`[findApplicableRatesheets] Found ${results.length} ratesheets`);
     results.forEach(rs => {

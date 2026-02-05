@@ -1,10 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Power, Zap, ExternalLink, TrendingUp, TrendingDown } from 'lucide-react';
+import { Plus, Edit, Trash2, Power, Zap, ExternalLink, TrendingUp, TrendingDown, Rocket, RefreshCw, FileText, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
 import { SurgeConfig } from '@/models/types';
 import CreateSurgeConfigModal from '@/components/CreateSurgeConfigModal';
 import EditSurgeConfigModal from '@/components/EditSurgeConfigModal';
+
+interface MaterializationStatus {
+  configId: string;
+  hasRatesheet: boolean;
+  status: 'none' | 'draft' | 'pending' | 'approved' | 'rejected';
+  ratesheetId?: string;
+  multiplier?: number;
+}
 
 export default function AdminSurgePricingPage() {
   const [configs, setConfigs] = useState<SurgeConfig[]>([]);
@@ -13,10 +21,19 @@ export default function AdminSurgePricingPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedConfig, setSelectedConfig] = useState<SurgeConfig | null>(null);
+  const [materializationStatuses, setMaterializationStatuses] = useState<Map<string, MaterializationStatus>>(new Map());
+  const [materializing, setMaterializing] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadConfigs();
   }, [filterStatus]);
+
+  useEffect(() => {
+    // Load materialization statuses for all configs
+    if (configs.length > 0) {
+      loadMaterializationStatuses();
+    }
+  }, [configs]);
 
   const loadConfigs = async () => {
     setLoading(true);
@@ -79,6 +96,94 @@ export default function AdminSurgePricingPage() {
     }
   };
 
+  const loadMaterializationStatuses = async () => {
+    const statusMap = new Map<string, MaterializationStatus>();
+
+    for (const config of configs) {
+      const configId = config._id?.toString();
+      if (!configId) continue;
+
+      try {
+        const response = await fetch(`/api/surge-pricing/configs/${configId}/ratesheet`);
+        if (response.ok) {
+          const data = await response.json();
+          statusMap.set(configId, {
+            configId,
+            hasRatesheet: data.status !== 'none',
+            status: data.status,
+            ratesheetId: data.ratesheet?._id?.toString(),
+            multiplier: data.ratesheet?.surgeMultiplierSnapshot
+          });
+        }
+      } catch (error) {
+        console.error(`Failed to load materialization status for ${configId}:`, error);
+      }
+    }
+
+    setMaterializationStatuses(statusMap);
+  };
+
+  const materializeConfig = async (configId: string, configName: string) => {
+    if (!confirm(`Materialize "${configName}" into a surge ratesheet?\n\nThis will create a DRAFT ratesheet that requires approval.`)) return;
+
+    setMaterializing(prev => new Set(prev).add(configId));
+
+    try {
+      const response = await fetch(`/api/surge-pricing/configs/${configId}/materialize`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) throw new Error('Failed to materialize config');
+
+      const data = await response.json();
+      alert(`✅ Surge ratesheet created!\n\nMultiplier: ${data.multiplier.toFixed(3)}x\nStatus: DRAFT (requires approval)\n\nNavigate to Ratesheet management to approve.`);
+
+      await loadMaterializationStatuses();
+    } catch (error) {
+      console.error('Error materializing config:', error);
+      alert('Failed to materialize surge config');
+    } finally {
+      setMaterializing(prev => {
+        const next = new Set(prev);
+        next.delete(configId);
+        return next;
+      });
+    }
+  };
+
+  const recalculateConfig = async (configId: string, configName: string) => {
+    if (!confirm(`Recalculate surge multiplier for "${configName}"?\n\nThis will create a new DRAFT ratesheet with updated demand/supply data.`)) return;
+
+    setMaterializing(prev => new Set(prev).add(configId));
+
+    try {
+      const response = await fetch(`/api/surge-pricing/configs/${configId}/recalculate`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) throw new Error('Failed to recalculate config');
+
+      const data = await response.json();
+      alert(`✅ Surge recalculated!\n\nOld Multiplier: ${data.oldMultiplier.toFixed(3)}x\nNew Multiplier: ${data.newMultiplier.toFixed(3)}x\nChange: ${data.changePercent}\n\nStatus: DRAFT (requires approval)`);
+
+      await loadMaterializationStatuses();
+    } catch (error) {
+      console.error('Error recalculating config:', error);
+      alert('Failed to recalculate surge config');
+    } finally {
+      setMaterializing(prev => {
+        const next = new Set(prev);
+        next.delete(configId);
+        return next;
+      });
+    }
+  };
+
+  const viewRatesheet = (ratesheetId: string) => {
+    // Navigate to ratesheet management page (pricing admin page)
+    window.open(`/admin/pricing?highlight=${ratesheetId}`, '_blank');
+  };
+
   const getHierarchyBadge = (level: string) => {
     const badges = {
       LOCATION: { text: '📍 Location', color: 'bg-green-50 text-green-700 border-green-200' },
@@ -119,6 +224,17 @@ export default function AdminSurgePricingPage() {
     active: configs.filter(c => c.isActive).length,
     inactive: configs.filter(c => !c.isActive).length,
   });
+
+  const getMaterializationBadge = (status: 'none' | 'draft' | 'pending' | 'approved' | 'rejected') => {
+    const badges = {
+      none: { text: 'Not Materialized', color: 'bg-gray-100 text-gray-600 border-gray-300', icon: AlertCircle },
+      draft: { text: 'Draft', color: 'bg-yellow-100 text-yellow-700 border-yellow-300', icon: FileText },
+      pending: { text: 'Pending Approval', color: 'bg-blue-100 text-blue-700 border-blue-300', icon: Clock },
+      approved: { text: 'Approved', color: 'bg-green-100 text-green-700 border-green-300', icon: CheckCircle },
+      rejected: { text: 'Rejected', color: 'bg-red-100 text-red-700 border-red-300', icon: XCircle },
+    };
+    return badges[status];
+  };
 
   const counts = getCounts();
 
@@ -215,6 +331,10 @@ export default function AdminSurgePricingPage() {
               const hierarchyBadge = getHierarchyBadge(config.appliesTo.level);
               const surgeIndicator = getSurgeIndicator(config);
               const SurgeIcon = surgeIndicator.icon;
+              const configId = config._id?.toString() || '';
+              const materializationStatus = materializationStatuses.get(configId);
+              const isMaterializing = materializing.has(configId);
+              const materializationBadge = materializationStatus ? getMaterializationBadge(materializationStatus.status) : null;
 
               return (
                 <div
@@ -394,6 +514,73 @@ export default function AdminSurgePricingPage() {
                         )}
                       </div>
                     </div>
+
+                    {/* Materialization Status & Actions */}
+                    {materializationBadge && (
+                      <div className="border-t border-gray-100 pt-4 mt-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs text-gray-500 font-semibold">Surge Ratesheet:</span>
+                          <div className={`px-2 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 ${materializationBadge.color}`}>
+                            <materializationBadge.icon className="w-3 h-3" />
+                            {materializationBadge.text}
+                          </div>
+                        </div>
+
+                        {materializationStatus?.status === 'none' && (
+                          <button
+                            onClick={() => materializeConfig(configId, config.name)}
+                            disabled={isMaterializing}
+                            className="w-full bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-700 px-3 py-2 rounded-lg hover:from-purple-200 hover:to-indigo-200 transition-all font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isMaterializing ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-700"></div>
+                                Materializing...
+                              </>
+                            ) : (
+                              <>
+                                <Rocket className="w-4 h-4" />
+                                Materialize to Ratesheet
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {materializationStatus?.status !== 'none' && (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => recalculateConfig(configId, config.name)}
+                              disabled={isMaterializing}
+                              className="flex-1 bg-gradient-to-r from-blue-100 to-cyan-100 text-blue-700 px-3 py-2 rounded-lg hover:from-blue-200 hover:to-cyan-200 transition-all font-medium flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {isMaterializing ? (
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-700"></div>
+                              ) : (
+                                <>
+                                  <RefreshCw className="w-4 h-4" />
+                                  Recalculate
+                                </>
+                              )}
+                            </button>
+                            {materializationStatus?.ratesheetId && (
+                              <button
+                                onClick={() => viewRatesheet(materializationStatus.ratesheetId!)}
+                                className="flex-1 bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 px-3 py-2 rounded-lg hover:from-green-200 hover:to-emerald-200 transition-all font-medium flex items-center justify-center gap-2 text-sm"
+                              >
+                                <FileText className="w-4 h-4" />
+                                View Ratesheet
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {materializationStatus?.multiplier && (
+                          <div className="mt-2 text-xs text-gray-500 text-center">
+                            Last materialized: <span className="font-semibold text-gray-700">{materializationStatus.multiplier.toFixed(3)}x</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Card Actions */}

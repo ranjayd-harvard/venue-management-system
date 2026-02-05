@@ -84,6 +84,25 @@ export default function AdminPricingScenariosPage() {
     return badges[level as keyof typeof badges] || { text: level, color: 'bg-gray-50 text-gray-700 border-gray-200' };
   };
 
+  const formatDateTime = (dateString: string | Date) => {
+    const date = new Date(dateString);
+    return {
+      date: date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      }),
+      time: date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      }),
+      timezone: date.toLocaleTimeString('en-US', {
+        timeZoneName: 'short'
+      }).split(' ').slice(-1)[0] // Extracts timezone abbreviation (e.g., "CST", "PST")
+    };
+  };
+
   const getCounts = () => ({
     all: scenarios.length,
     active: scenarios.filter(s => s.isActive).length,
@@ -243,10 +262,62 @@ export default function AdminPricingScenariosPage() {
                         </p>
                       </div>
                       <div>
-                        <span className="text-gray-500">Time Range:</span>
-                        <p className="font-semibold text-gray-900 text-xs">
-                          {new Date(scenario.config.viewStart).toLocaleDateString()} - {new Date(scenario.config.viewEnd).toLocaleDateString()}
+                        <span className="text-gray-500">Surge Enabled:</span>
+                        <p className="font-semibold text-gray-900">
+                          {scenario.config.surgeEnabled ? 'Yes' : 'No'}
                         </p>
+                      </div>
+                    </div>
+
+                    {/* Time Windows */}
+                    <div className="border-t border-gray-100 pt-4 mt-4">
+                      <span className="text-xs text-gray-500 font-semibold mb-3 block">Time Windows:</span>
+                      <div className="grid grid-cols-1 gap-3">
+                        {/* View Window */}
+                        <div className="bg-indigo-50 px-3 py-2 rounded-lg">
+                          <div className="text-xs text-indigo-600 font-semibold mb-1">View Window</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-indigo-500">Start:</span>
+                              <div className="text-indigo-900 font-semibold">
+                                {formatDateTime(scenario.config.viewStart).date}
+                                <span className="ml-1 text-indigo-700">{formatDateTime(scenario.config.viewStart).time}</span>
+                                <span className="ml-1 text-indigo-500 text-[10px]">{formatDateTime(scenario.config.viewStart).timezone}</span>
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-indigo-500">End:</span>
+                              <div className="text-indigo-900 font-semibold">
+                                {formatDateTime(scenario.config.viewEnd).date}
+                                <span className="ml-1 text-indigo-700">{formatDateTime(scenario.config.viewEnd).time}</span>
+                                <span className="ml-1 text-indigo-500 text-[10px]">{formatDateTime(scenario.config.viewEnd).timezone}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Data Range */}
+                        <div className="bg-teal-50 px-3 py-2 rounded-lg">
+                          <div className="text-xs text-teal-600 font-semibold mb-1">Data Range</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-teal-500">Start:</span>
+                              <div className="text-teal-900 font-semibold">
+                                {formatDateTime(scenario.config.rangeStart).date}
+                                <span className="ml-1 text-teal-700">{formatDateTime(scenario.config.rangeStart).time}</span>
+                                <span className="ml-1 text-teal-500 text-[10px]">{formatDateTime(scenario.config.rangeStart).timezone}</span>
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-teal-500">End:</span>
+                              <div className="text-teal-900 font-semibold">
+                                {formatDateTime(scenario.config.rangeEnd).date}
+                                <span className="ml-1 text-teal-700">{formatDateTime(scenario.config.rangeEnd).time}</span>
+                                <span className="ml-1 text-teal-500 text-[10px]">{formatDateTime(scenario.config.rangeEnd).timezone}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -281,10 +352,24 @@ export default function AdminPricingScenariosPage() {
                     )}
 
                     {/* Metadata */}
-                    <div className="border-t border-gray-100 pt-3 mt-4 text-xs text-gray-500">
-                      <div className="flex justify-between">
-                        <span>Created: {new Date(scenario.createdAt).toLocaleDateString()}</span>
-                        <span>Updated: {new Date(scenario.updatedAt).toLocaleDateString()}</span>
+                    <div className="border-t border-gray-100 pt-3 mt-4 text-xs">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-gray-500">Created:</span>
+                          <div className="text-gray-900 font-semibold">
+                            {formatDateTime(scenario.createdAt).date}
+                            <span className="ml-1 text-gray-600">{formatDateTime(scenario.createdAt).time}</span>
+                            <span className="ml-1 text-gray-500 text-[10px]">{formatDateTime(scenario.createdAt).timezone}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Updated:</span>
+                          <div className="text-gray-900 font-semibold">
+                            {formatDateTime(scenario.updatedAt).date}
+                            <span className="ml-1 text-gray-600">{formatDateTime(scenario.updatedAt).time}</span>
+                            <span className="ml-1 text-gray-500 text-[10px]">{formatDateTime(scenario.updatedAt).timezone}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -312,7 +397,7 @@ export default function AdminPricingScenariosPage() {
 
                     <div className="flex gap-2">
                       <a
-                        href="/pricing/timeline-simulator"
+                        href={`/pricing/timeline-simulator?scenarioId=${scenario._id?.toString()}`}
                         className="px-4 py-2 bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 rounded-lg hover:from-purple-200 hover:to-pink-200 transition-all font-medium flex items-center gap-2"
                         title="Open in Simulator"
                       >
