@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFilters from '@/components/PricingFilters';
+import { getTimeInTimezone } from '@/lib/timezone-utils';
 
 interface TimeWindow {
   windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
@@ -22,6 +23,7 @@ interface TimeWindow {
   startMinute?: number;
   endMinute?: number;
   pricePerHour: number;
+  daysOfWeek?: number[]; // 0=Sunday, 6=Saturday
 }
 
 interface Ratesheet {
@@ -80,6 +82,7 @@ interface PricingConfig {
   locationPriorityRange: { min: number; max: number };
   sublocationPriorityRange: { min: number; max: number };
   eventPriorityRange?: { min: number; max: number };
+  defaultTimezone?: string;
 }
 
 interface PricingLayer {
@@ -118,6 +121,7 @@ export default function TimelineTilesPage() {
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
+  const [entityTimezone, setEntityTimezone] = useState<string>('America/New_York'); // Timezone for calculations
 
   // Initialize all dates from the same timestamp
   // Range covers 60 days in past to 60 days in future
@@ -189,10 +193,12 @@ export default function TimelineTilesPage() {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
       fetchRatesheets(selectedSubLocation);
+      fetchEntityTimezone(selectedSubLocation); // Fetch timezone for accurate time window matching
     } else {
       setRatesheets([]);
       setCurrentSubLocation(null);
       setSelectedEventId('');
+      setEntityTimezone('America/New_York'); // Reset to default
     }
   }, [selectedSubLocation]); // Only refetch when sublocation changes, not when range changes
 
@@ -214,7 +220,7 @@ export default function TimelineTilesPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, entityTimezone]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -249,6 +255,19 @@ export default function TimelineTilesPage() {
       setCurrentSubLocation(subloc);
     } catch (error) {
       console.error('Failed to fetch sublocation details:', error);
+    }
+  };
+
+  const fetchEntityTimezone = async (subLocationId: string) => {
+    try {
+      const response = await fetch(`/api/timezone?entityType=SUBLOCATION&entityId=${subLocationId}`);
+      const data = await response.json();
+      if (data.timezone) {
+        setEntityTimezone(data.timezone);
+        console.log(`[Timeline] Using timezone for sublocation: ${data.timezone}`);
+      }
+    } catch (error) {
+      console.error('Failed to fetch entity timezone:', error);
     }
   };
 
@@ -410,11 +429,16 @@ export default function TimelineTilesPage() {
     const currentTime = new Date(viewStart);
     const endTime = new Date(viewEnd);
     const allLayers = getPricingLayers();
+    // Use entity timezone (fetched from TimezoneSettingsRepository, same as pricing API)
+    const timezone = entityTimezone;
+
+    console.log(`[calculateTimeSlots] Using timezone: ${timezone}`);
+    console.log(`[calculateTimeSlots] Layers (sorted by priority):`, allLayers.map(l => `${l.name} (${l.priority})`));
 
     while (currentTime < endTime) {
-      // Use UTC hours for consistent timezone handling
-      const hour = currentTime.getUTCHours();
-      const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+      // Use timezone-aware time to match ratesheet time windows
+      const timeStr = getTimeInTimezone(currentTime, timezone);
+      const hour = parseInt(timeStr.split(':')[0], 10);
 
       // For each layer, check if it applies at this hour
       const layerPrices = allLayers.map(layer => {
@@ -437,6 +461,15 @@ export default function TimelineTilesPage() {
                   // This allows event rates to apply but excludes free grace periods
                   if (!isEventBooking && tw.pricePerHour === 0 && ratesheet.applyTo === 'EVENT') {
                     return false; // Skip this $0/hr grace period time window
+                  }
+
+                  // Check daysOfWeek filter - skip this time window if day doesn't match
+                  // 0=Sunday, 1=Monday, ..., 6=Saturday
+                  if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+                    const dayOfWeek = currentTime.getDay();
+                    if (!tw.daysOfWeek.includes(dayOfWeek)) {
+                      return false; // Day of week doesn't match
+                    }
                   }
 
                   const windowType = tw.windowType || 'ABSOLUTE_TIME';
@@ -489,6 +522,13 @@ export default function TimelineTilesPage() {
                               const otherMatchingWindow = otherRatesheet.timeWindows.find(tw => {
                                 if (!isEventBooking && tw.pricePerHour === 0 && otherRatesheet.applyTo === 'EVENT') {
                                   return false;
+                                }
+                                // Check daysOfWeek filter
+                                if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+                                  const dayOfWeek = currentTime.getDay();
+                                  if (!tw.daysOfWeek.includes(dayOfWeek)) {
+                                    return false;
+                                  }
                                 }
                                 const windowType = tw.windowType || 'ABSOLUTE_TIME';
                                 if (windowType === 'DURATION_BASED') {
@@ -551,6 +591,12 @@ export default function TimelineTilesPage() {
 
       // Winner is the first active layer (highest priority)
       const winner = layerPrices.find(lp => lp.isActive);
+
+      // Debug: Log first few hours
+      if (slots.length < 5) {
+        console.log(`[Hour ${timeStr}] Active layers:`, layerPrices.filter(lp => lp.isActive).map(lp => `${lp.layer.name}: $${lp.price}`));
+        console.log(`[Hour ${timeStr}] Winner: ${winner?.layer.name} @ $${winner?.price}`);
+      }
 
       slots.push({
         hour,
@@ -1022,6 +1068,11 @@ export default function TimelineTilesPage() {
                         timeSlots.map((slot, slotIdx) => {
                           const layerData = slot.layers.find(l => l.layer.id === layer.id);
                           const isWinner = slot.winningLayer?.id === layer.id;
+
+                          // Debug: Check for mismatches
+                          if (slotIdx < 3 && layerData?.isActive && isWinner) {
+                            console.log(`[Render ${slot.label}] ${layer.name} isWinner=${isWinner}, winningPrice=$${slot.winningPrice}, layerPrice=$${layerData?.price}`);
+                          }
                           const isHovered = hoveredSlot?.slotIdx === slotIdx && hoveredSlot?.layerId === layer.id;
 
                           const isSelected = selectedSlot?.slotIdx === slotIdx && selectedSlot?.layerId === layer.id;

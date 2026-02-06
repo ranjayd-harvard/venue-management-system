@@ -25,6 +25,7 @@ import {
   SatelliteIcon,
   Shield,
   FileText,
+  ViewIcon
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -176,6 +177,18 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       label: 'Pricing Scenarios',
       description: 'Saved pricing simulations'
     },
+    {
+      href: '/admin/kafka-monitoring',
+      icon: FileText,
+      label: 'Demand generator',
+      description: 'Kafka Monitoring Dashboard'
+    },    
+    {
+      href: '/admin/kafka-topics',
+      icon: ViewIcon,
+      label: 'Data Viewer',
+      description: 'Kafka Monitoring Dashboard'
+    },    
   ];
 
   const isPricingActive = pathname.startsWith('/pricing') || pathname.startsWith('/admin/pricing');

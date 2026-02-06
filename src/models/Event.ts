@@ -8,6 +8,7 @@ import {
   removeCapacityForDate,
   removeRevenueGoal
 } from '@/lib/capacity-utils';
+import { emitBookingEvent } from '@/lib/kafka-producer';
 
 export class EventRepository {
   private static COLLECTION = 'events';
@@ -40,7 +41,15 @@ export class EventRepository {
     };
 
     const result = await db.collection<Event>(this.COLLECTION).insertOne(newEvent as Event);
-    return { ...newEvent, _id: result.insertedId };
+    const createdEvent = { ...newEvent, _id: result.insertedId };
+
+    // KAFKA: Emit CREATED event
+    await emitBookingEvent({
+      action: 'CREATED',
+      event: createdEvent
+    });
+
+    return createdEvent;
   }
 
   static async findById(id: string | ObjectId): Promise<Event | null> {
@@ -341,6 +350,9 @@ export class EventRepository {
     const db = await getDb();
     const objectId = typeof id === 'string' ? new ObjectId(id) : id;
 
+    // Fetch previous state for Kafka delta calculation
+    const previousEvent = await this.findById(objectId);
+
     // Convert date strings to Date objects if present
     const processedUpdates = { ...updates };
     if (processedUpdates.startDate) {
@@ -361,13 +373,35 @@ export class EventRepository {
       { returnDocument: 'after' }
     );
 
+    // KAFKA: Emit UPDATED event
+    if (result && previousEvent) {
+      await emitBookingEvent({
+        action: 'UPDATED',
+        event: result,
+        previousEvent
+      });
+    }
+
     return result;
   }
 
   static async delete(id: string | ObjectId): Promise<boolean> {
     const db = await getDb();
     const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+
+    // Fetch event before deletion for Kafka
+    const event = await this.findById(objectId);
+
     const result = await db.collection<Event>(this.COLLECTION).deleteOne({ _id: objectId });
+
+    // KAFKA: Emit DELETED event
+    if (result.deletedCount > 0 && event) {
+      await emitBookingEvent({
+        action: 'DELETED',
+        event
+      });
+    }
+
     return result.deletedCount > 0;
   }
 

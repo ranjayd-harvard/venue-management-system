@@ -23,6 +23,7 @@
     "@dnd-kit/sortable": "^8.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "d3": "^7.9.0",
+    "kafkajs": "^2.2.4",
     "lucide-react": "^0.303.0",
     "mongodb": "^6.3.0",
     "neo4j-driver": "^5.15.0",

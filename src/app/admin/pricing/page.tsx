@@ -26,7 +26,7 @@ interface Ratesheet {
   eventId?: string;
   name: string;
   description?: string;
-  type: 'TIMING_BASED' | 'DURATION_BASED';
+  type: 'TIMING_BASED' | 'DURATION_BASED' | 'SURGE_MULTIPLIER';
   priority: number;
   conflictResolution: 'PRIORITY' | 'HIGHEST_PRICE' | 'LOWEST_PRICE';
   isActive: boolean;
@@ -34,6 +34,8 @@ interface Ratesheet {
   effectiveTo?: string;
   timeWindows?: TimeWindow[];
   durationRules?: DurationRule[];
+  surgeMultiplierSnapshot?: number;
+  demandSupplySnapshot?: any;
   customer?: { _id: string; name: string };
   location?: { _id: string; name: string; city: string };
   sublocation?: { _id: string; label: string };
@@ -380,11 +382,11 @@ export default function AdminPricingPage() {
                         className="w-full flex items-center justify-between p-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg hover:from-blue-100 hover:to-purple-100 transition-colors"
                       >
                         <div className="flex items-center gap-2">
-                          {ratesheet.type === 'TIMING_BASED' ? (
+                          {ratesheet.type === 'TIMING_BASED' || ratesheet.type === 'SURGE_MULTIPLIER' ? (
                             <>
                               <Clock className="text-blue-600" size={18} />
                               <span className="text-sm font-semibold text-blue-900">
-                                {ratesheet.timeWindows?.length || 0} Time Windows
+                                {ratesheet.timeWindows?.length || 0} {ratesheet.type === 'SURGE_MULTIPLIER' ? 'Packages' : 'Time Windows'}
                               </span>
                             </>
                           ) : (
@@ -406,12 +408,12 @@ export default function AdminPricingPage() {
                       {/* Expanded Details */}
                       {isExpanded && (
                         <div className="mt-3 space-y-2">
-                          {ratesheet.type === 'TIMING_BASED' && ratesheet.timeWindows?.map((tw: any, idx) => (
-                            <div key={idx} className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                          {(ratesheet.type === 'TIMING_BASED' || ratesheet.type === 'SURGE_MULTIPLIER') && ratesheet.timeWindows?.map((tw: any, idx) => (
+                            <div key={idx} className={`p-3 rounded-lg border ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'}`}>
                               <div className="flex justify-between items-center">
                                 <div className="flex items-center gap-3">
-                                  <Clock className="text-blue-600" size={16} />
-                                  <span className="font-semibold text-blue-900">
+                                  <Clock className={ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-600' : 'text-blue-600'} size={16} />
+                                  <span className={`font-semibold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
                                     {tw.windowType === 'DURATION_BASED' || tw.startMinute !== undefined
                                       ? `${tw.startMinute || 0}min - ${tw.endMinute || 0}min`
                                       : `${tw.startTime || '-'} - ${tw.endTime || '-'}`
@@ -419,8 +421,12 @@ export default function AdminPricingPage() {
                                   </span>
                                 </div>
                                 <div className="text-right">
-                                  <div className="text-lg font-bold text-blue-900">
-                                    ${tw.pricePerHour}<span className="text-sm font-normal">/hr</span>
+                                  <div className={`text-lg font-bold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
+                                    {ratesheet.type === 'SURGE_MULTIPLIER' ? (
+                                      <>{tw.pricePerHour}x<span className="text-sm font-normal"> surge</span></>
+                                    ) : (
+                                      <>${tw.pricePerHour}<span className="text-sm font-normal">/hr</span></>
+                                    )}
                                   </div>
                                 </div>
                               </div>

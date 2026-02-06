@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
-import { Save, FolderOpen, X, Zap, FileText, Lock, Activity, Rocket } from 'lucide-react';
+import { getTimeInTimezone } from '@/lib/timezone-utils';
+import { Save, FolderOpen, X, Zap, FileText, Lock, Activity, Rocket, RefreshCw, Loader2 } from 'lucide-react';
 import { PricingScenario, SurgeConfig } from '@/models/types';
 
 interface TimeWindow {
@@ -126,12 +127,15 @@ export default function TimelineSimulatorPage() {
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [ratesheets, setRatesheets] = useState<Ratesheet[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pricingDataLoading, setPricingDataLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
   const [currentEvent, setCurrentEvent] = useState<Event | null>(null);
+  const [entityTimezone, setEntityTimezone] = useState<string>('America/New_York'); // Timezone for calculations
 
   // Initialize all dates from the same timestamp to prevent timing drift on initial render
   // Range covers 1 day in past to 3 days in future (default)
@@ -161,7 +165,7 @@ export default function TimelineSimulatorPage() {
   const [selectedSlot, setSelectedSlot] = useState<{ slotIdx: number; layerId: string } | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{ slotIdx: number; layerId: string } | null>(null);
   const [decisionPanelData, setDecisionPanelData] = useState<any>(null);
-  const [showWaterfall, setShowWaterfall] = useState(false);
+  const [showWaterfall, setShowWaterfall] = useState(true);
 
   // Event booking toggle
   const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
@@ -348,6 +352,7 @@ export default function TimelineSimulatorPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
+      fetchEntityTimezone(selectedSubLocation);
       fetchRatesheets(selectedSubLocation);
     } else {
       setRatesheets([]);
@@ -420,7 +425,7 @@ export default function TimelineSimulatorPage() {
         console.error('Error calculating time slots:', error);
       });
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent, surgeEnabled, activeSurgeConfig, isSimulationEnabled]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, enabledLayers, currentEvent, surgeEnabled, activeSurgeConfig, isSimulationEnabled, entityTimezone]);
 
   // Load scenarios when sublocation changes
   useEffect(() => {
@@ -502,15 +507,32 @@ export default function TimelineSimulatorPage() {
       });
       setSurgeLayersAutoEnabled(true);
     } else if (!surgeEnabled) {
-      // Remove all surge layers from enabled layers when surge is disabled
-      console.log('❌ [SURGE AUTO-ENABLE] Removing all surge layers (surge disabled)');
+      // Remove only VIRTUAL surge layers from enabled layers when surge is disabled
+      // Materialized surge ratesheets (real DB records) should remain enabled AND be added
+      console.log('❌ [SURGE AUTO-ENABLE] Removing virtual surge layers, keeping materialized (surge disabled)');
       setEnabledLayers(prev => {
         const newSet = new Set(prev);
+
+        // Remove virtual surge layers
         appliedSurgeRatesheets.forEach(surge => {
-          newSet.delete(surge.id);
+          // Only remove if it's a virtual surge (ID is a name string, not a MongoDB _id)
+          const isMaterialized = ratesheets.some((rs: any) => rs._id === surge.id && rs.surgeConfigId);
+          if (!isMaterialized) {
+            newSet.delete(surge.id);
+          }
         });
+
         // Also remove old 'surge-layer' if it exists
         newSet.delete('surge-layer');
+
+        // ADD all materialized surge ratesheets to enabled layers
+        // They are real DB records and should be active when surge toggle is off
+        ratesheets.forEach((rs: any) => {
+          if (rs.surgeConfigId) {
+            newSet.add(rs._id);
+          }
+        });
+
         return newSet;
       });
       setSurgeLayersAutoEnabled(false);
@@ -988,6 +1010,19 @@ export default function TimelineSimulatorPage() {
     }
   };
 
+  const fetchEntityTimezone = async (subLocationId: string) => {
+    try {
+      const response = await fetch(`/api/timezone?entityType=SUBLOCATION&entityId=${subLocationId}`);
+      const data = await response.json();
+      if (data.timezone) {
+        setEntityTimezone(data.timezone);
+        console.log('[Timeline Simulator] Set entity timezone:', data.timezone);
+      }
+    } catch (error) {
+      console.error('Failed to fetch entity timezone:', error);
+    }
+  };
+
   const fetchEventDetails = async (eventId: string) => {
     try {
       console.log('🔍 Fetching event details for eventId:', eventId);
@@ -1061,15 +1096,32 @@ export default function TimelineSimulatorPage() {
     // Add SURGE layers from the applied surge ratesheets (extracted from API response)
     // These can be either:
     // 1. VIRTUAL surge configs (not materialized) - add "(Virtual)" label
-    // 2. MATERIALIZED surge ratesheets (approved, in DB) - NO "(Virtual)" label
+    // 2. MATERIALIZED surge ratesheets (approved, in DB) - add time window and multiplier
     if (surgeEnabled && appliedSurgeRatesheets.length > 0) {
       appliedSurgeRatesheets.forEach(surge => {
-        // Check if this surge ratesheet is materialized (exists in ratesheets array)
-        const isMaterialized = ratesheets.some(rs => rs.name === surge.name && !!(rs as any).surgeConfigId);
+        // Find the matching materialized ratesheet by ID to get time window and multiplier
+        const matchingRatesheet = ratesheets.find(rs => rs._id === surge.id && !!(rs as any).surgeConfigId);
+        const isMaterialized = !!matchingRatesheet;
+
+        let displayName = surge.name;
+        if (isMaterialized && matchingRatesheet) {
+          // Add time window and multiplier to name for materialized surge ratesheets
+          const effectiveFrom = new Date(matchingRatesheet.effectiveFrom);
+          const effectiveTo = matchingRatesheet.effectiveTo ? new Date(matchingRatesheet.effectiveTo) : null;
+          const multiplier = (matchingRatesheet as any).surgeMultiplierSnapshot || 1;
+          const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+          if (effectiveTo) {
+            displayName = `${surge.name} (${formatTime(effectiveFrom)} - ${formatTime(effectiveTo)}, ${multiplier.toFixed(1)}x)`;
+          } else {
+            displayName = `${surge.name} (from ${formatTime(effectiveFrom)}, ${multiplier.toFixed(1)}x)`;
+          }
+        } else if (!isMaterialized) {
+          displayName = `${surge.name} (Virtual)`;
+        }
 
         layers.push({
           id: surge.id,
-          name: isMaterialized ? surge.name : `${surge.name} (Virtual)`,  // Only add "Virtual" for non-materialized
+          name: displayName,
           type: 'SURGE',
           priority: surge.priority,
           color: 'bg-gradient-to-br from-orange-400 to-orange-600',
@@ -1108,8 +1160,19 @@ export default function TimelineSimulatorPage() {
       }
 
       let name = rs.name;
-      // Don't append entity labels to surge ratesheets - they already have descriptive names
-      if (!isSurgeRatesheet) {
+      // For materialized surge ratesheets, append the effective time window AND multiplier to distinguish them
+      if (isSurgeRatesheet) {
+        const effectiveFrom = new Date(rs.effectiveFrom);
+        const effectiveTo = rs.effectiveTo ? new Date(rs.effectiveTo) : null;
+        const multiplier = (rs as any).surgeMultiplierSnapshot || 1;
+        const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        if (effectiveTo) {
+          name = `${rs.name} (${formatTime(effectiveFrom)} - ${formatTime(effectiveTo)}, ${multiplier.toFixed(1)}x)`;
+        } else {
+          name = `${rs.name} (from ${formatTime(effectiveFrom)}, ${multiplier.toFixed(1)}x)`;
+        }
+      } else {
+        // Append entity labels to non-surge ratesheets
         if (rs.applyTo === 'EVENT' && rs.event) {
           name = `${rs.name} (${rs.event.name})`;
         } else if (rs.applyTo === 'CUSTOMER' && rs.customer) {
@@ -1209,6 +1272,7 @@ export default function TimelineSimulatorPage() {
   };
 
   const calculateTimeSlots = async () => {
+    setPricingDataLoading(true);
     const slots: TimeSlot[] = [];
 
     // Round viewStart down to the start of the hour
@@ -1311,37 +1375,41 @@ export default function TimelineSimulatorPage() {
                 firstSegmentName: surgePricingData?.segments?.[0]?.ratesheet?.name
               });
 
-              // Extract unique surge ratesheets from segments OR use materialized ratesheets from DB
+              // Extract surge ratesheets - use ALL materialized surge ratesheets from DB
+              // IMPORTANT: Use rs._id as the ID (not name) so tile activation can match correctly
               const surgeLayers = new Map<string, { id: string; name: string; priority: number }>();
 
-              // APPROACH 1: Try to extract from API segments (if metadata is available)
+              // STEP 1: Always add ALL materialized surge ratesheets from the database
+              // This ensures we don't miss any due to imperfect segment matching
+              ratesheets.forEach((rs: any) => {
+                if (rs.surgeConfigId) {
+                  surgeLayers.set(rs._id, {
+                    id: rs._id, // Use _id for proper matching in tile activation
+                    name: rs.name,
+                    priority: rs.priority
+                  });
+                }
+              });
+
+              // STEP 2: Also check API segments for any VIRTUAL surge configs (not yet materialized)
               surgePricingData.segments?.forEach((segment: any) => {
                 if (segment.ratesheet?.level === 'SURGE') {
                   const ratesheetName = segment.ratesheet.name;
-                  const ratesheetId = ratesheetName;
-                  if (!surgeLayers.has(ratesheetId)) {
-                    surgeLayers.set(ratesheetId, {
-                      id: ratesheetId,
+                  // Check if this is a virtual surge (not in our materialized ratesheets)
+                  const isMaterialized = ratesheets.some((rs: any) =>
+                    rs.surgeConfigId && rs.name === ratesheetName
+                  );
+
+                  if (!isMaterialized && !surgeLayers.has(ratesheetName)) {
+                    // This is a virtual surge config - add it with name as ID
+                    surgeLayers.set(ratesheetName, {
+                      id: ratesheetName,
                       name: ratesheetName,
                       priority: segment.ratesheet.priority || 10000
                     });
                   }
                 }
               });
-
-              // APPROACH 2: If no surge layers found from API, use materialized surge ratesheets from database
-              if (surgeLayers.size === 0) {
-                console.log('⚠️ [SURGE] No surge metadata in API response, using materialized ratesheets from DB');
-                ratesheets.forEach((rs: any) => {
-                  if (rs.surgeConfigId) {
-                    surgeLayers.set(rs.name, {
-                      id: rs.name,
-                      name: rs.name,
-                      priority: rs.priority
-                    });
-                  }
-                });
-              }
 
               setAppliedSurgeRatesheets(Array.from(surgeLayers.values()));
 
@@ -1375,116 +1443,34 @@ export default function TimelineSimulatorPage() {
     let iterationCount = 0;
 
     while (currentTime < endTime) {
-      // Use UTC hours for consistent timezone handling
-      const hour = currentTime.getUTCHours();
-      const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+      // Use timezone-aware time conversion to match API calculations
+      const timeStr = getTimeInTimezone(currentTime, entityTimezone);
+      const hour = parseInt(timeStr.split(':')[0], 10);
       iterationCount++;
 
       // For each layer, check if it applies at this hour
+      // Process in two passes: first non-SURGE layers, then SURGE layers with base price calculation
       const layerPrices = allLayers.map(layer => {
         let price: number | null = null;
         let isActive = false;
 
         if (layer.type === 'SURGE') {
-          // SURGE layer - store the actual surge price (base × multiplier)
-          // In Simulation Mode: use surgePricingData (virtual + materialized surge)
-          // In Live Mode: use basePricingData (materialized surge only)
-          const dataSource = surgePricingData?.segments || basePricingData?.segments;
+          // SURGE layer - will be calculated in second pass
+          // For materialized surge ratesheets, match by ID (layer.id === rs._id)
+          // The effectiveFrom/effectiveTo already defines the exact time window
+          const surgeRatesheet = ratesheets.find(rs => rs._id === layer.id && !!(rs as any).surgeConfigId);
 
-          // Debug: Log data source selection for all hours
-          console.log(`🔍 [SURGE LAYER] Hour ${hour}, Layer: ${layer.name}`, {
-            hasSurgePricingData: !!surgePricingData?.segments,
-            hasBasePricingData: !!basePricingData?.segments,
-            usingDataSource: surgePricingData?.segments ? 'surgePricingData' : 'basePricingData',
-            segmentCount: dataSource?.length
-          });
+          if (surgeRatesheet) {
+            const effectiveFrom = new Date(surgeRatesheet.effectiveFrom);
+            const effectiveTo = surgeRatesheet.effectiveTo ? new Date(surgeRatesheet.effectiveTo) : null;
 
-          if (dataSource) {
-            const segment = dataSource.find((seg: any) => {
-              const segStart = new Date(seg.startTime);
-              return segStart.getTime() === currentTime.getTime();
-            });
-
-            // Debug: Log segment details for all hours
-            if (segment) {
-              console.log(`🔍 [SEGMENT FOUND] Hour ${hour}, Layer: ${layer.name}`, {
-                segmentPrice: segment.pricePerHour,
-                ratesheetLevel: segment.ratesheet?.level,
-                ratesheetName: segment.ratesheet?.name,
-                hasRatesheet: !!segment.ratesheet,
-                layerNameWithoutLabel: layer.name.replace(' (Virtual)', '')
-              });
-            } else {
-              console.log(`⚠️ [NO SEGMENT] Hour ${hour}, Layer: ${layer.name}, CurrentTime: ${currentTime.toISOString()}`);
-            }
-
-            // SURGE layer matching logic
-            const layerNameWithoutLabel = layer.name.replace(' (Virtual)', '');
-
-            // APPROACH 1: If API returns ratesheet metadata, use it (ideal)
-            const hasRatesheetMetadata = segment?.ratesheet?.level && segment?.ratesheet?.name;
-            if (segment && hasRatesheetMetadata && segment.ratesheet.level === 'SURGE' && segment.ratesheet.name === layerNameWithoutLabel) {
-              price = segment.pricePerHour;
+            // For materialized surge ratesheets, effectiveFrom/effectiveTo IS the time window
+            // Don't check the stale timeWindows array - it contains the original config times
+            // Use exclusive end time: effectiveTo > currentTime (not >=) to avoid double-counting the boundary hour
+            if (effectiveFrom <= currentTime && (!effectiveTo || effectiveTo > currentTime)) {
+              // Mark as active, price will be calculated in second pass
               isActive = true;
-              console.log(`✅ [SURGE MATCH - Metadata] Hour ${hour}, Layer: ${layer.name}, Price: $${price}`);
-            } else if (segment && hasRatesheetMetadata) {
-              console.log(`❌ [METADATA MISMATCH] Hour ${hour}, Layer: ${layer.name}`, {
-                segmentLevel: segment.ratesheet.level,
-                segmentName: segment.ratesheet.name,
-                expectedName: layerNameWithoutLabel,
-                levelMatch: segment.ratesheet.level === 'SURGE',
-                nameMatch: segment.ratesheet.name === layerNameWithoutLabel
-              });
-            }
-            // APPROACH 2: If no metadata, fallback to ratesheet time windows
-            // This handles materialized surge ratesheets that are in the database
-            else {
-              // Find the corresponding ratesheet in the database
-              const surgeRatesheet = ratesheets.find(rs => rs.name === layerNameWithoutLabel && !!(rs as any).surgeConfigId);
-
-              if (surgeRatesheet) {
-                // Check if this surge ratesheet applies at this hour using time windows
-                const effectiveFrom = new Date(surgeRatesheet.effectiveFrom);
-                const effectiveTo = surgeRatesheet.effectiveTo ? new Date(surgeRatesheet.effectiveTo) : null;
-
-                if (effectiveFrom <= currentTime && (!effectiveTo || effectiveTo >= currentTime)) {
-                  // Check time windows
-                  if (surgeRatesheet.timeWindows && surgeRatesheet.timeWindows.length > 0) {
-                    const timeStr = `${hour.toString().padStart(2, '0')}:00`;
-                    const matchingWindow = surgeRatesheet.timeWindows.find((tw: any) => {
-                      const windowType = tw.windowType || 'ABSOLUTE_TIME';
-                      if (windowType === 'ABSOLUTE_TIME' && tw.startTime && tw.endTime) {
-                        return tw.startTime <= timeStr && timeStr < tw.endTime;
-                      }
-                      return false;
-                    });
-
-                    if (matchingWindow) {
-                      // Use the time window's price (which is the surge price for materialized ratesheets)
-                      price = matchingWindow.pricePerHour;
-                      isActive = true;
-                      console.log(`✅ [SURGE MATCH - Ratesheet Window] Hour ${hour}, Layer: ${layer.name}, Price: $${price}`);
-                    } else {
-                      console.log(`ℹ️ [NO WINDOW MATCH] Hour ${hour}, Layer: ${layer.name}, Time: ${timeStr}`, {
-                        timeWindowsCount: surgeRatesheet.timeWindows.length,
-                        timeWindows: surgeRatesheet.timeWindows.map((tw: any) => ({
-                          start: tw.startTime,
-                          end: tw.endTime,
-                          price: tw.pricePerHour
-                        }))
-                      });
-                    }
-                  }
-                } else {
-                  console.log(`ℹ️ [OUT OF DATE RANGE] Hour ${hour}, Layer: ${layer.name}`, {
-                    effectiveFrom: surgeRatesheet.effectiveFrom,
-                    effectiveTo: surgeRatesheet.effectiveTo,
-                    currentTime: currentTime.toISOString()
-                  });
-                }
-              } else {
-                console.log(`❌ [NO SURGE RATESHEET] Hour ${hour}, Layer: ${layer.name}, Looking for: ${layerNameWithoutLabel}`);
-              }
+              price = 0; // Placeholder, will be updated
             }
           }
         } else if (layer.type === 'RATESHEET') {
@@ -1541,30 +1527,74 @@ export default function TimelineSimulatorPage() {
         return { layer, price, isActive };
       });
 
-      // Winner is the first active layer (highest priority) that is also enabled
-      let winner = layerPrices.find(lp => lp.isActive && enabledLayers.has(lp.layer.id));
+      // Second pass: Calculate SURGE layer prices using base price from non-SURGE layers
+      layerPrices.forEach(layerPrice => {
+        if (layerPrice.layer.type === 'SURGE' && layerPrice.isActive) {
+          // Match by ID instead of name (name now includes time window suffix)
+          const surgeRatesheet = ratesheets.find(rs => rs._id === layerPrice.layer.id && !!(rs as any).surgeConfigId);
 
-      // Debug: Log winner and all layers for hours 7, 10, 11, 12 (surge test hours)
-      if ([7, 10, 11, 12].includes(hour)) {
-        console.log(`🏆 [WINNER] Hour ${hour}:`, {
-          winnerName: winner?.layer.name,
-          winnerType: winner?.layer.type,
-          winnerPrice: winner?.price,
-          winnerPriority: winner?.layer.priority,
-          isActive: winner?.isActive,
-          enabledLayersCount: enabledLayers.size,
-          enabledLayersIds: Array.from(enabledLayers)
+          if (surgeRatesheet) {
+            // Get the surge multiplier
+            const surgeMultiplier = (surgeRatesheet as any).surgeMultiplierSnapshot || 1;
+
+            // Find the base price from the highest priority non-SURGE layer
+            let basePrice: number | undefined;
+
+            // Look for active non-SURGE layers
+            const nonSurgeLayer = layerPrices.find(lp => lp.isActive && lp.layer.type !== 'SURGE' && lp.price !== null && lp.price > 0);
+            if (nonSurgeLayer && nonSurgeLayer.price !== null) {
+              basePrice = nonSurgeLayer.price;
+            }
+
+            // Fallback: try basePricingData
+            if (!basePrice && basePricingData?.segments) {
+              const baseSegment = basePricingData.segments.find((seg: any) => {
+                const segStart = new Date(seg.startTime);
+                return segStart.getTime() === currentTime.getTime();
+              });
+
+              if (baseSegment?.pricePerHour) {
+                // Check if this segment is from a SURGE ratesheet
+                if (baseSegment.ratesheet?.level === 'SURGE') {
+                  // Divide out the surge multiplier to get base
+                  const winningMultiplier = baseSegment.ratesheet.surgeMultiplierSnapshot || 1;
+                  basePrice = baseSegment.pricePerHour / winningMultiplier;
+                } else {
+                  basePrice = baseSegment.pricePerHour;
+                }
+              }
+            }
+
+            if (basePrice) {
+              // Calculate this surge's hypothetical price
+              layerPrice.price = basePrice * surgeMultiplier;
+              console.log(`✅ [SURGE CALCULATED] Hour ${hour}, Layer: ${layerPrice.layer.name}`, {
+                basePrice,
+                surgeMultiplier,
+                calculatedPrice: layerPrice.price
+              });
+            } else {
+              console.log(`⚠️ [NO BASE PRICE] Hour ${hour}, Layer: ${layerPrice.layer.name} - Setting isActive to false`);
+              layerPrice.isActive = false;
+              layerPrice.price = null;
+            }
+          }
+        }
+      });
+
+      // Winner is the active layer with highest priority (and highest price if tied) that is enabled
+      // Filter active enabled layers, then sort by priority DESC, then by price DESC for tie-breaking
+      const activeEnabledLayers = layerPrices
+        .filter(lp => lp.isActive && enabledLayers.has(lp.layer.id))
+        .sort((a, b) => {
+          // First sort by priority (higher priority wins)
+          if (b.layer.priority !== a.layer.priority) {
+            return b.layer.priority - a.layer.priority;
+          }
+          // If priorities are equal, higher price wins (e.g., 2.0x surge beats 1.0x surge)
+          return (b.price || 0) - (a.price || 0);
         });
-        console.log(`📊 [ALL LAYERS] Hour ${hour}:`, layerPrices.map(lp => ({
-          name: lp.layer.name,
-          type: lp.layer.type,
-          priority: lp.layer.priority,
-          price: lp.price,
-          isActive: lp.isActive,
-          isEnabled: enabledLayers.has(lp.layer.id),
-          layerId: lp.layer.id
-        })));
-      }
+      let winner = activeEnabledLayers[0];
 
       // SURGE layer prices are already calculated (base × multiplier) from the backend
       // No need to recalculate here
@@ -1755,7 +1785,6 @@ export default function TimelineSimulatorPage() {
       //
       // REMOVED the surge recalculation logic that was causing the bug.
 
-
       slots.push({
         hour,
         label: formatHour(hour),
@@ -1780,9 +1809,33 @@ export default function TimelineSimulatorPage() {
     // No post-processing needed - surge ratesheets are generated and applied in the pricing waterfall
 
     setTimeSlots(slots);
+    setPricingDataLoading(false);
+  };
+
+  // Refresh function to reload all pricing data
+  const handleRefresh = async () => {
+    if (!selectedSubLocation) return;
+
+    setIsRefreshing(true);
+    try {
+      // Refetch ratesheets
+      await fetchRatesheets(selectedSubLocation);
+      // Recalculate time slots (will be triggered by ratesheets change, but we also call it directly)
+      await calculateTimeSlots();
+    } catch (error) {
+      console.error('Error refreshing pricing data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const timeInWindow = (time: string, start: string, end: string): boolean => {
+    // Handle overnight time windows (e.g., 22:00 to 02:00)
+    if (end < start) {
+      // Overnight window: matches if time >= start OR time < end
+      return time >= start || time < end;
+    }
+    // Same-day window: matches if time >= start AND time < end
     return time >= start && time < end;
   };
 
@@ -2626,13 +2679,36 @@ export default function TimelineSimulatorPage() {
 
               {/* Hourly Rate Breakdown Chart */}
               {timeSlots.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6 ml-6 mr-6">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6 ml-6 mr-6 relative">
+                  {/* Loading Overlay */}
+                  {(pricingDataLoading || isRefreshing) && (
+                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                        <span className="text-sm font-medium text-gray-600">Loading pricing data...</span>
+                      </div>
+                    </div>
+                  )}
                   {/* Header with Stats */}
                   <div className="flex items-start justify-between mb-6">
                     <div className="flex-1">
-                      <h3 className="text-xl font-bold text-gray-900 mb-1">
-                        Hourly Rate Breakdown
-                      </h3>
+                      <div className="flex items-center gap-3 mb-1">
+                        <h3 className="text-xl font-bold text-gray-900">
+                          Hourly Rate Breakdown
+                        </h3>
+                        <button
+                          onClick={handleRefresh}
+                          disabled={isRefreshing || !selectedSubLocation}
+                          className={`p-1.5 rounded-lg transition-all ${
+                            isRefreshing
+                              ? 'bg-blue-100 text-blue-600 cursor-wait'
+                              : 'bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-600'
+                          }`}
+                          title="Refresh pricing data"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        </button>
+                      </div>
                       <p className="text-sm text-gray-600">
                         Next {timeSlots.length} hours starting from {formatDateTime(viewStart)}
                       </p>
@@ -3022,7 +3098,20 @@ export default function TimelineSimulatorPage() {
               )}
 
               {/* Time markers in grid with winning prices */}
-              <div className="grid grid-cols-12 gap-1 mb-6 mt-6 ml-6 mr-6">
+              <h3 className="text-xl font-bold text-gray-900 text-center ml-6">
+                Winning Price by Hour
+              </h3>              
+              <div className="relative mb-6 mt-6 ml-6 mr-6">
+                {/* Loading Overlay */}
+                {(pricingDataLoading || isRefreshing) && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center min-h-[120px]">
+                    <div className="flex flex-col items-center gap-3">
+                      <Loader2 className="w-8 h-8 text-pink-600 animate-spin" />
+                      <span className="text-sm font-medium text-gray-600">Calculating prices...</span>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-12 gap-1">
                   {timeSlots.map((slot, idx) => {
                     const isSelected = selectedSlot?.slotIdx === idx;
                     const isHovered = hoveredSlot?.slotIdx === idx;
@@ -3167,6 +3256,7 @@ export default function TimelineSimulatorPage() {
                       </div>
                     );
                   })}
+                </div>
               </div>
 
               {/* Toggle button for waterfall */}
@@ -3191,8 +3281,21 @@ export default function TimelineSimulatorPage() {
             </div>
 
             {/* Waterfall Visualization - Collapsible */}
+
             {showWaterfall && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 relative">
+                <h3 className="text-xl font-bold text-gray-900 text-center ml-6">
+                  All Tiles Evaluated By Hour
+                </h3>  
+                {/* Loading Overlay */}
+                {(pricingDataLoading || isRefreshing) && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <Loader2 className="w-8 h-8 text-purple-600 animate-spin" />
+                      <span className="text-sm font-medium text-gray-600">Loading waterfall data...</span>
+                    </div>
+                  </div>
+                )}
                 {/* Waterfall layers */}
                 <div className="space-y-2 mb-6">
                 {allLayers.length === 0 && (

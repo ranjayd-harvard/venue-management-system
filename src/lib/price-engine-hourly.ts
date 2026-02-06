@@ -332,8 +332,8 @@ export class HourlyPricingEngine {
         continue;
       }
 
-      // Check time windows for TIMING_BASED and SURGE_MULTIPLIER ratesheets
-      if ((rs.type === 'TIMING_BASED' || rs.type === 'SURGE_MULTIPLIER') && rs.timeWindows) {
+      // Check time windows for TIMING_BASED, TIME_WINDOW (legacy alias), and SURGE_MULTIPLIER ratesheets
+      if ((rs.type === 'TIMING_BASED' || rs.type === 'TIME_WINDOW' as any || rs.type === 'SURGE_MULTIPLIER') && rs.timeWindows) {
         if (level === 'SURGE') {
           console.log(`[ENGINE] ✓ SURGE ${rs.name} passed date check, checking ${rs.timeWindows.length} time windows`);
         }
@@ -344,12 +344,24 @@ export class HourlyPricingEngine {
             continue; // Skip this $0/hr grace period time window
           }
 
+          // Check daysOfWeek filter - skip this time window if day doesn't match
+          // 0=Sunday, 1=Monday, ..., 6=Saturday
+          if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+            const dayOfWeek = hourStart.getDay();
+            if (!tw.daysOfWeek.includes(dayOfWeek)) {
+              continue; // Skip this time window - day of week doesn't match
+            }
+          }
+
           const windowType = tw.windowType || 'ABSOLUTE_TIME';
           let matches = false;
 
           if (windowType === 'ABSOLUTE_TIME') {
-            // Existing logic: match against hour time
-            const hourTime = getTimeInTimezone(hourStart, context.timezone);
+            // For SURGE_MULTIPLIER ratesheets, use UTC time since surge windows are stored in UTC
+            // For other ratesheets, use local timezone
+            const hourTime = (rs.type === 'SURGE_MULTIPLIER')
+              ? `${hourStart.getUTCHours().toString().padStart(2, '0')}:${hourStart.getUTCMinutes().toString().padStart(2, '0')}`
+              : getTimeInTimezone(hourStart, context.timezone);
             const hourMinutes = timeToMinutes(hourTime);
             const startMinutes = timeToMinutes(tw.startTime!);
             const endMinutes = timeToMinutes(tw.endTime!);
