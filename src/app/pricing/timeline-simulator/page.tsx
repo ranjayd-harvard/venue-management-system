@@ -1289,6 +1289,36 @@ export default function TimelineSimulatorPage() {
 
     const allLayers = getPricingLayers();
 
+    // RACE CONDITION FIX: Compute effective enabled layers inline
+    // When ratesheets change, the enabledLayers state may be stale (from previous ratesheets)
+    // because setEnabledLayers() is async and may not have completed yet.
+    // We detect staleness by checking:
+    // 1. enabledLayers is empty when layers exist
+    // 2. enabledLayers contains IDs that don't exist in allLayers (old IDs removed)
+    // 3. In non-simulation mode: enabledLayers is missing current layer IDs (new layers added)
+    //    Note: In simulation mode, users can intentionally disable layers, so we skip this check
+    const allLayerIds = new Set(allLayers.map(l => l.id));
+    const hasStaleIds = Array.from(enabledLayers).some(id => !allLayerIds.has(id));
+    const hasMissingIds = allLayers.some(l => !enabledLayers.has(l.id));
+
+    const isEnabledLayersStale =
+      (allLayers.length > 0 && enabledLayers.size === 0) || // Empty when there should be layers
+      hasStaleIds || // Contains old IDs that no longer exist
+      (!isSimulationEnabled && hasMissingIds); // In live mode, missing layers means stale (new ratesheets added)
+
+    const effectiveEnabledLayers = isEnabledLayersStale ? allLayerIds : enabledLayers;
+
+    if (isEnabledLayersStale) {
+      console.log('⚠️ [RACE FIX] Detected stale enabledLayers, using all layers:', {
+        enabledLayersSize: enabledLayers.size,
+        allLayersSize: allLayers.length,
+        hasStaleIds,
+        hasMissingIds,
+        isSimulationEnabled,
+        usingFreshSet: true
+      });
+    }
+
     // Fetch all active events to determine which event is active for each hour
     let allEvents: Event[] = [];
     try {
@@ -1584,8 +1614,9 @@ export default function TimelineSimulatorPage() {
 
       // Winner is the active layer with highest priority (and highest price if tied) that is enabled
       // Filter active enabled layers, then sort by priority DESC, then by price DESC for tie-breaking
+      // Use effectiveEnabledLayers to handle race condition when state is stale
       const activeEnabledLayers = layerPrices
-        .filter(lp => lp.isActive && enabledLayers.has(lp.layer.id))
+        .filter(lp => lp.isActive && effectiveEnabledLayers.has(lp.layer.id))
         .sort((a, b) => {
           // First sort by priority (higher priority wins)
           if (b.layer.priority !== a.layer.priority) {
@@ -1669,7 +1700,7 @@ export default function TimelineSimulatorPage() {
         // Filter by sublocation, enabled layers, and ratesheet availability
         .filter(event => {
           if (!event.ratesheetId) return false;
-          if (!enabledLayers.has(event.ratesheetId)) return false;
+          if (!effectiveEnabledLayers.has(event.ratesheetId)) return false;
 
           // Only include events that belong to the selected sublocation
           if (event.subLocationId && selectedSubLocation) {
@@ -1742,11 +1773,11 @@ export default function TimelineSimulatorPage() {
         // For base price in simulation mode:
         // - If SURGE layer is winning AND enabled, find the non-surge layer winner for base price
         // - Otherwise, base price = winning price (no strikethrough needed)
-        if (winner?.layer.type === 'SURGE' && winner.layer.id && enabledLayers.has(winner.layer.id)) {
+        if (winner?.layer.type === 'SURGE' && winner.layer.id && effectiveEnabledLayers.has(winner.layer.id)) {
           // Find the winning non-SURGE layer for the base price
           const nonSurgeWinner = layerPrices.find(lp =>
             lp.isActive &&
-            enabledLayers.has(lp.layer.id) &&
+            effectiveEnabledLayers.has(lp.layer.id) &&
             lp.layer.type !== 'SURGE'
           );
           finalBasePrice = nonSurgeWinner?.price ?? apiBasePrice;
