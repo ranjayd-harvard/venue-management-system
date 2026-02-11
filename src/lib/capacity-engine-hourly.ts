@@ -3,9 +3,10 @@
 // Mirrors the structure of price-engine-hourly.ts
 
 import { CapacitySheet, TimeCapacityWindow } from '@/models/CapacitySheet';
-import { PricingConfig, CapacityConfig } from '@/models/types';
+import { PricingConfig, CapacityConfig, WeeklySchedule, Blackout } from '@/models/types';
 import { getTimeInTimezone, timeToMinutes, isDateInRange } from './timezone-utils';
 import { getHourlyCapacityOverride } from './capacity-utils';
+import { isWithinOperatingHours, isBlackoutTime } from './operating-hours';
 
 export interface HourlyCapacitySegment {
   startTime: Date;
@@ -23,11 +24,14 @@ export interface HourlyCapacitySegment {
     priority: number;
     level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
   };
-  source: 'CAPACITYSHEET' | 'DEFAULT_CAPACITY';
+  source: 'CAPACITYSHEET' | 'DEFAULT_CAPACITY' | 'OPERATING_HOURS';
   timeWindow?: {
     start: string;
     end: string;
   };
+  // Operating hours availability
+  isAvailable?: boolean;
+  unavailableReason?: 'CLOSED' | 'BLACKOUT';
 }
 
 export interface HourlyCapacityResult {
@@ -109,6 +113,12 @@ export interface CapacityContext {
 
   // Pricing config (for timezone and other settings)
   capacityConfig?: PricingConfig;
+
+  // Operating hours (resolved from entity hierarchy)
+  operatingHours?: {
+    schedule: WeeklySchedule;
+    blackouts: Blackout[];
+  };
 }
 
 export class HourlyCapacityEngine {
@@ -126,7 +136,7 @@ export class HourlyCapacityEngine {
       context.timezone
     );
 
-    console.log(`\n🔍 Evaluating ${hourlySlots.length} hourly capacity segments...`);
+    //console.log(`\n🔍 Evaluating ${hourlySlots.length} hourly capacity segments...`);
 
     // Evaluate each hour independently
     for (const slot of hourlySlots) {
@@ -221,6 +231,46 @@ export class HourlyCapacityEngine {
     slot: { start: Date; end: Date; durationHours: number },
     context: CapacityContext
   ): HourlyCapacitySegment {
+    // Step -1: Check operating hours (if defined)
+    if (context.operatingHours) {
+      const { schedule, blackouts } = context.operatingHours;
+
+      // Check if in blackout period first (takes precedence)
+      const blackoutCheck = isBlackoutTime(slot.start, blackouts);
+      if (blackoutCheck.isBlackout) {
+        return {
+          startTime: slot.start,
+          endTime: slot.end,
+          durationHours: slot.durationHours,
+          minCapacity: 0,
+          maxCapacity: 0,
+          defaultCapacity: 0,
+          allocatedCapacity: 0,
+          availableCapacity: 0,
+          source: 'OPERATING_HOURS',
+          isAvailable: false,
+          unavailableReason: 'BLACKOUT',
+        };
+      }
+
+      // Check if within operating hours
+      if (!isWithinOperatingHours(slot.start, schedule)) {
+        return {
+          startTime: slot.start,
+          endTime: slot.end,
+          durationHours: slot.durationHours,
+          minCapacity: 0,
+          maxCapacity: 0,
+          defaultCapacity: 0,
+          allocatedCapacity: 0,
+          availableCapacity: 0,
+          source: 'OPERATING_HOURS',
+          isAvailable: false,
+          unavailableReason: 'CLOSED',
+        };
+      }
+    }
+
     // Step 0: Check for HOURLY OVERRIDE first (highest priority)
     const hourlyOverride = this.getHourlyOverride(slot.start, context);
     if (hourlyOverride) {

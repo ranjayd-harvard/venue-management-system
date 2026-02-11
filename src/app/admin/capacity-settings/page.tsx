@@ -25,6 +25,7 @@ import {
   ArrowLeft,
   BarChart3
 } from 'lucide-react';
+import DayCapacityMiniBar, { DayCapacityDetailedView } from '@/components/DayCapacityMiniBar';
 
 interface Customer {
   _id: string;
@@ -49,6 +50,19 @@ interface Location {
   allocatedCapacity?: number;
 }
 
+// Default capacities structure stored in capacityConfig
+interface DefaultCapacities {
+  allocated: {
+    transient: number;
+    events: number;
+    reserved: number;
+  };
+  unallocated: {
+    unavailable: number;
+    readyToUse: number;
+  };
+}
+
 interface SubLocation {
   _id: string;
   locationId: string;
@@ -58,6 +72,10 @@ interface SubLocation {
   maxCapacity?: number;
   defaultCapacity?: number;
   allocatedCapacity?: number;
+  // Capacity breakdown stored in capacityConfig.defaultCapacities
+  capacityConfig?: {
+    defaultCapacities?: DefaultCapacities;
+  };
   isActive: boolean;
 }
 
@@ -69,6 +87,87 @@ interface HierarchyNode {
   }>;
 }
 
+// New breakdown structure: Allocated vs Unallocated
+interface CapacityBreakdown {
+  // Allocated = transient + events + reserved
+  transient: number;
+  events: number;
+  reserved: number;
+  // Unallocated = unavailable + readyToUse
+  unavailable: number;
+  readyToUse: number;
+}
+
+// Calculate capacity breakdown from sublocation settings
+// Priority: capacityConfig.defaultCapacities > computed defaults
+const calculateCapacityBreakdown = (
+  subloc: SubLocation
+): CapacityBreakdown => {
+  const maxCap = subloc.maxCapacity || 0;
+  const allocatedCap = subloc.allocatedCapacity || 0;
+
+  // Debug logging
+  console.log(`🔍 calculateCapacityBreakdown for ${subloc.label}:`, {
+    maxCap,
+    allocatedCap,
+    isActive: subloc.isActive,
+    hasCapacityConfig: !!subloc.capacityConfig,
+    hasDefaultCapacities: !!subloc.capacityConfig?.defaultCapacities,
+    capacityConfig: subloc.capacityConfig,
+  });
+
+  if (!subloc.isActive) {
+    // Inactive: all capacity is unavailable
+    console.log(`  → Using INACTIVE breakdown`);
+    return {
+      transient: 0,
+      events: 0,
+      reserved: 0,
+      unavailable: maxCap,
+      readyToUse: 0,
+    };
+  }
+
+  // Priority 1: Use capacityConfig.defaultCapacities if available
+  const defaultCapacities = subloc.capacityConfig?.defaultCapacities;
+  if (defaultCapacities && defaultCapacities.allocated && defaultCapacities.unallocated) {
+    console.log(`  → Using capacityConfig.defaultCapacities`, defaultCapacities);
+    return {
+      transient: defaultCapacities.allocated.transient,
+      events: defaultCapacities.allocated.events,
+      reserved: defaultCapacities.allocated.reserved,
+      unavailable: defaultCapacities.unallocated.unavailable,
+      readyToUse: defaultCapacities.unallocated.readyToUse,
+    };
+  }
+
+  // Fallback: Compute from allocatedCapacity
+  console.log(`  → Using computed fallback from allocatedCapacity`);
+  return {
+    transient: allocatedCap,
+    events: 0,
+    reserved: 0,
+    unavailable: 0,
+    readyToUse: Math.max(0, maxCap - allocatedCap),
+  };
+};
+
+// Aggregate capacity breakdowns from multiple sources
+const aggregateCapacityBreakdowns = (
+  breakdowns: CapacityBreakdown[]
+): CapacityBreakdown => {
+  return breakdowns.reduce(
+    (acc, b) => ({
+      transient: acc.transient + b.transient,
+      events: acc.events + b.events,
+      reserved: acc.reserved + b.reserved,
+      unavailable: acc.unavailable + b.unavailable,
+      readyToUse: acc.readyToUse + b.readyToUse,
+    }),
+    { transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 }
+  );
+};
+
 export default function CapacitySettingsPage() {
   const [hierarchy, setHierarchy] = useState<HierarchyNode[]>([]);
   const [filteredHierarchy, setFilteredHierarchy] = useState<HierarchyNode[]>([]);
@@ -78,12 +177,18 @@ export default function CapacitySettingsPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [migrating, setMigrating] = useState(false);
 
-  // Editing states
+  // Editing states - new structure with Allocated vs Unallocated
   const [editingCapacity, setEditingCapacity] = useState<Map<string, {
     min: number;
     max: number;
     default: number;
-    allocated: number;
+    // Allocated breakdown (transient + events + reserved)
+    transient: number;
+    events: number;
+    reserved: number;
+    // Unallocated breakdown (unavailable + readyToUse)
+    unavailable: number;
+    readyToUse: number;
   }>>(new Map());
 
   // Search & Filter
@@ -272,20 +377,131 @@ export default function CapacitySettingsPage() {
 
   const startEditingCapacity = (subLocationId: string, current: SubLocation) => {
     const newEditing = new Map(editingCapacity);
+    const maxCap = current.maxCapacity || 100;
+
+    // Get current breakdown values
+    const breakdown = calculateCapacityBreakdown(current);
+
+    // Initialize with current breakdown values
     newEditing.set(subLocationId, {
       min: current.minCapacity || 0,
-      max: current.maxCapacity || 100,
+      max: maxCap,
       default: current.defaultCapacity || 50,
-      allocated: current.allocatedCapacity || 0
+      // Allocated breakdown
+      transient: breakdown.transient,
+      events: breakdown.events,
+      reserved: breakdown.reserved,
+      // Unallocated breakdown
+      unavailable: breakdown.unavailable,
+      readyToUse: breakdown.readyToUse,
     });
     setEditingCapacity(newEditing);
   };
 
-  const updateEditingCapacity = (subLocationId: string, field: 'min' | 'max' | 'default' | 'allocated', value: number) => {
+  const updateEditingCapacity = (
+    subLocationId: string,
+    field: 'min' | 'max' | 'default' | 'transient' | 'events' | 'reserved' | 'unavailable' | 'readyToUse',
+    value: number
+  ) => {
     const newEditing = new Map(editingCapacity);
     const current = newEditing.get(subLocationId);
     if (current) {
-      current[field] = value;
+      const oldValue = current[field];
+      const oldMax = current.max;
+
+      // Helper to get totals
+      const getAllocated = () => current.transient + current.events + current.reserved;
+      const getUnallocated = () => current.unavailable + current.readyToUse;
+
+      // Allocated fields: transient, events, reserved
+      if (field === 'transient' || field === 'events' || field === 'reserved') {
+        const oldAllocated = getAllocated();
+        current[field] = value;
+        const newAllocated = getAllocated();
+        const allocatedDelta = newAllocated - oldAllocated;
+
+        if (allocatedDelta > 0) {
+          // Allocated increased: consume from unallocated (readyToUse first, then unavailable)
+          const availableUnallocated = getUnallocated();
+          if (allocatedDelta > availableUnallocated) {
+            alert(`Cannot allocate ${allocatedDelta} more. Only ${availableUnallocated} unallocated capacity available. Increase max capacity first.`);
+            current[field] = oldValue;
+            return;
+          }
+          // Consume from readyToUse first
+          if (current.readyToUse >= allocatedDelta) {
+            current.readyToUse -= allocatedDelta;
+          } else {
+            const remaining = allocatedDelta - current.readyToUse;
+            current.readyToUse = 0;
+            current.unavailable -= remaining;
+          }
+        } else {
+          // Allocated decreased: add to readyToUse
+          current.readyToUse += Math.abs(allocatedDelta);
+        }
+      }
+      // Unallocated fields: unavailable, readyToUse
+      else if (field === 'unavailable') {
+        const delta = value - current.unavailable;
+        if (delta > 0) {
+          // Unavailable increased: consume from readyToUse
+          if (current.readyToUse >= delta) {
+            current.readyToUse -= delta;
+            current.unavailable = value;
+          } else {
+            alert(`Cannot increase unavailable by ${delta}. Only ${current.readyToUse} readyToUse capacity available to transfer. Increase max capacity first.`);
+            return;
+          }
+        } else {
+          // Unavailable decreased: add to readyToUse
+          current.unavailable = value;
+          current.readyToUse += Math.abs(delta);
+        }
+      } else if (field === 'readyToUse') {
+        const delta = value - current.readyToUse;
+        if (delta > 0) {
+          // ReadyToUse increased: consume from unavailable
+          if (current.unavailable >= delta) {
+            current.unavailable -= delta;
+            current.readyToUse = value;
+          } else {
+            alert(`Cannot increase readyToUse by ${delta}. Only ${current.unavailable} unavailable capacity available to transfer. Increase max capacity first.`);
+            return;
+          }
+        } else {
+          // ReadyToUse decreased: add to unavailable
+          current.readyToUse = value;
+          current.unavailable += Math.abs(delta);
+        }
+      } else if (field === 'max') {
+        current[field] = value;
+        const delta = current.max - oldMax;
+        if (delta > 0) {
+          // Max increased: add to Unavailable (can then be transferred to ReadyToUse)
+          current.unavailable += delta;
+        } else {
+          // Max decreased: reduce from Unavailable first, then ReadyToUse
+          const reduction = Math.abs(delta);
+          const availableToReduce = getUnallocated();
+          if (reduction > availableToReduce) {
+            alert(`Cannot reduce max by ${reduction}. Only ${availableToReduce} unallocated capacity available. Reduce allocated capacity first.`);
+            current.max = oldMax;
+            return;
+          }
+          // Take from unavailable first
+          if (current.unavailable >= reduction) {
+            current.unavailable -= reduction;
+          } else {
+            const remainingReduction = reduction - current.unavailable;
+            current.unavailable = 0;
+            current.readyToUse -= remainingReduction;
+          }
+        }
+      } else {
+        current[field] = value;
+      }
+
       newEditing.set(subLocationId, current);
       setEditingCapacity(newEditing);
     }
@@ -301,9 +517,14 @@ export default function CapacitySettingsPage() {
     const capacity = editingCapacity.get(subLocationId);
     if (!capacity) return;
 
-    // Validate: allocated should be within min-max
-    if (capacity.allocated < capacity.min || capacity.allocated > capacity.max) {
-      alert(`Allocated capacity (${capacity.allocated}) must be between min (${capacity.min}) and max (${capacity.max})`);
+    // Calculate totals
+    const totalAllocated = capacity.transient + capacity.events + capacity.reserved;
+    const totalUnallocated = capacity.unavailable + capacity.readyToUse;
+
+    // Validate breakdown totals match max
+    const totalBreakdown = totalAllocated + totalUnallocated;
+    if (totalBreakdown !== capacity.max) {
+      alert(`Breakdown total (${totalBreakdown}) doesn't match max capacity (${capacity.max}). Please adjust values.`);
       return;
     }
 
@@ -322,7 +543,19 @@ export default function CapacitySettingsPage() {
           minCapacity: capacity.min,
           maxCapacity: capacity.max,
           defaultCapacity: capacity.default,
-          allocatedCapacity: capacity.allocated
+          allocatedCapacity: totalAllocated,
+          // Save to capacityConfig.defaultCapacities
+          'capacityConfig.defaultCapacities': {
+            allocated: {
+              transient: capacity.transient,
+              events: capacity.events,
+              reserved: capacity.reserved,
+            },
+            unallocated: {
+              unavailable: capacity.unavailable,
+              readyToUse: capacity.readyToUse,
+            },
+          },
         })
       });
 
@@ -556,6 +789,38 @@ export default function CapacitySettingsPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Customer Aggregated Capacity Breakdown */}
+                  {(node.customer.maxCapacity || 0) > 0 && (
+                    <div className="px-5 pb-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs text-gray-500">Allocation Breakdown:</span>
+                        {(() => {
+                          // Aggregate from all sublocations across all locations
+                          const allSublocations = node.locations.flatMap(loc => loc.sublocations);
+                          const customerBreakdown = aggregateCapacityBreakdowns(
+                            allSublocations.map(calculateCapacityBreakdown)
+                          );
+                          const totalAllocation = customerBreakdown.transient + customerBreakdown.events + customerBreakdown.unavailable + customerBreakdown.reserved;
+                          const allocatedPercent = totalAllocation > 0
+                            ? Math.round(((customerBreakdown.transient + customerBreakdown.events) / totalAllocation) * 100)
+                            : 0;
+                          return (
+                            <span className="text-xs font-medium text-teal-600">
+                              {allocatedPercent}% allocated
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      <DayCapacityMiniBar
+                        breakdown={aggregateCapacityBreakdowns(
+                          node.locations.flatMap(loc => loc.sublocations).map(calculateCapacityBreakdown)
+                        )}
+                        totalCapacity={node.customer.maxCapacity || 100}
+                        compact={true}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Locations */}
@@ -637,6 +902,36 @@ export default function CapacitySettingsPage() {
                                 </div>
                               </div>
                             </div>
+
+                            {/* Location Aggregated Capacity Breakdown */}
+                            {(locNode.location.maxCapacity || 0) > 0 && (
+                              <div className="px-4 pb-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="text-xs text-gray-500">Allocation:</span>
+                                  {(() => {
+                                    const locationBreakdown = aggregateCapacityBreakdowns(
+                                      locNode.sublocations.map(calculateCapacityBreakdown)
+                                    );
+                                    const totalAllocation = locationBreakdown.transient + locationBreakdown.events + locationBreakdown.unavailable + locationBreakdown.reserved;
+                                    const allocatedPercent = totalAllocation > 0
+                                      ? Math.round(((locationBreakdown.transient + locationBreakdown.events) / totalAllocation) * 100)
+                                      : 0;
+                                    return (
+                                      <span className="text-xs font-medium text-teal-600">
+                                        {allocatedPercent}% allocated
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                                <DayCapacityMiniBar
+                                  breakdown={aggregateCapacityBreakdowns(
+                                    locNode.sublocations.map(calculateCapacityBreakdown)
+                                  )}
+                                  totalCapacity={locNode.location.maxCapacity || 100}
+                                  compact={true}
+                                />
+                              </div>
+                            )}
                           </div>
 
                           {/* Sublocations */}
@@ -729,19 +1024,19 @@ export default function CapacitySettingsPage() {
                                               )}
                                             </div>
 
-                                            {/* Allocated Capacity */}
+                                            {/* Allocated Capacity (computed) */}
                                             <div>
                                               <label className="block text-xs font-medium text-gray-600 mb-1">
                                                 Allocated
+                                                {isEditing && <span className="text-gray-400 ml-1">(computed)</span>}
                                               </label>
-                                              {isEditing ? (
-                                                <input
-                                                  type="number"
-                                                  value={editValues?.allocated || 0}
-                                                  onChange={(e) => updateEditingCapacity(subloc._id, 'allocated', parseInt(e.target.value) || 0)}
-                                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-sm text-gray-900"
-                                                  min="0"
-                                                />
+                                              {isEditing && editValues ? (
+                                                <div className={`px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-semibold ${getUtilizationColor(editValues.transient + editValues.events + editValues.reserved, editValues.max)}`}>
+                                                  {editValues.transient + editValues.events + editValues.reserved}
+                                                  <span className="text-xs ml-1 text-gray-500">
+                                                    ({getUtilizationPercentage(editValues.transient + editValues.events + editValues.reserved, editValues.max)}%)
+                                                  </span>
+                                                </div>
                                               ) : (
                                                 <div className={`px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm font-semibold ${getUtilizationColor(subloc.allocatedCapacity || 0, subloc.maxCapacity || 100)}`}>
                                                   {subloc.allocatedCapacity || 0}
@@ -756,18 +1051,173 @@ export default function CapacitySettingsPage() {
                                           {/* Validation Messages */}
                                           {isEditing && editValues && (
                                             <div className="mt-2 space-y-1">
-                                              {editValues.allocated < editValues.min || editValues.allocated > editValues.max ? (
-                                                <div className="flex items-center gap-2 text-xs text-red-600">
-                                                  <AlertCircle className="w-4 h-4" />
-                                                  Allocated must be between min and max
-                                                </div>
-                                              ) : null}
+                                              {(() => {
+                                                const totalAllocated = editValues.transient + editValues.events + editValues.reserved;
+                                                const totalUnallocated = editValues.unavailable + editValues.readyToUse;
+                                                const total = totalAllocated + totalUnallocated;
+                                                return total !== editValues.max ? (
+                                                  <div className="flex items-center gap-2 text-xs text-red-600">
+                                                    <AlertCircle className="w-4 h-4" />
+                                                    Total ({total}) must equal max capacity ({editValues.max})
+                                                  </div>
+                                                ) : null;
+                                              })()}
                                               {editValues.default < editValues.min || editValues.default > editValues.max ? (
                                                 <div className="flex items-center gap-2 text-xs text-red-600">
                                                   <AlertCircle className="w-4 h-4" />
                                                   Default must be between min and max
                                                 </div>
                                               ) : null}
+                                            </div>
+                                          )}
+
+                                          {/* Capacity Breakdown Visualization / Editable */}
+                                          {(subloc.maxCapacity || 0) > 0 && (
+                                            <div className="mt-4 pt-4 border-t border-purple-200">
+                                              <h6 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1">
+                                                <BarChart3 className="w-3 h-3" />
+                                                Capacity Allocation Breakdown
+                                              </h6>
+
+                                              {isEditing && editValues ? (
+                                                // Editable breakdown inputs
+                                                <div className="space-y-4">
+                                                  {/* Stacked bar preview */}
+                                                  <DayCapacityMiniBar
+                                                    breakdown={{
+                                                      transient: editValues.transient,
+                                                      events: editValues.events,
+                                                      reserved: editValues.reserved,
+                                                      unavailable: editValues.unavailable,
+                                                      readyToUse: editValues.readyToUse,
+                                                    }}
+                                                    totalCapacity={editValues.max}
+                                                    isClosed={!subloc.isActive}
+                                                    compact={false}
+                                                  />
+
+                                                  {/* Two-column editable breakdown */}
+                                                  <div className="grid grid-cols-2 gap-4">
+                                                    {/* Allocated Column (transient + events + reserved) */}
+                                                    <div className="bg-teal-50 rounded-lg p-3 border border-teal-200">
+                                                      <div className="flex items-center gap-2 mb-3">
+                                                        <div className="w-2 h-2 rounded-full bg-teal-500" />
+                                                        <span className="text-sm font-semibold text-teal-800">Allocated</span>
+                                                        <span className="ml-auto text-sm font-bold text-teal-700">
+                                                          {editValues.transient + editValues.events + editValues.reserved}
+                                                        </span>
+                                                      </div>
+
+                                                      <div className="space-y-2">
+                                                        {/* Transient Input */}
+                                                        <div>
+                                                          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1">
+                                                            <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: '#14B8A6' }} />
+                                                            Transient
+                                                          </label>
+                                                          <input
+                                                            type="number"
+                                                            value={editValues.transient}
+                                                            onChange={(e) => updateEditingCapacity(subloc._id, 'transient', parseInt(e.target.value) || 0)}
+                                                            className="w-full px-3 py-2 border border-teal-300 rounded-lg focus:ring-2 focus:ring-teal-500 text-sm text-gray-900 bg-white"
+                                                            min="0"
+                                                          />
+                                                          <span className="text-xs text-gray-500">Walk-in/general capacity</span>
+                                                        </div>
+
+                                                        {/* Events Input */}
+                                                        <div>
+                                                          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1">
+                                                            <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: '#EC4899' }} />
+                                                            Events
+                                                          </label>
+                                                          <input
+                                                            type="number"
+                                                            value={editValues.events}
+                                                            onChange={(e) => updateEditingCapacity(subloc._id, 'events', parseInt(e.target.value) || 0)}
+                                                            className="w-full px-3 py-2 border border-pink-300 rounded-lg focus:ring-2 focus:ring-pink-500 text-sm text-gray-900 bg-white"
+                                                            min="0"
+                                                          />
+                                                          <span className="text-xs text-gray-500">Event-specific allocation</span>
+                                                        </div>
+
+                                                        {/* Reserved Input */}
+                                                        <div>
+                                                          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1">
+                                                            <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: '#8B5CF6' }} />
+                                                            Reserved
+                                                          </label>
+                                                          <input
+                                                            type="number"
+                                                            value={editValues.reserved}
+                                                            onChange={(e) => updateEditingCapacity(subloc._id, 'reserved', parseInt(e.target.value) || 0)}
+                                                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-sm text-gray-900 bg-white"
+                                                            min="0"
+                                                          />
+                                                          <span className="text-xs text-gray-500">Pre-reserved capacity</span>
+                                                        </div>
+                                                      </div>
+                                                    </div>
+
+                                                    {/* Unallocated Column (unavailable + readyToUse) */}
+                                                    <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                                                      <div className="flex items-center gap-2 mb-3">
+                                                        <div className="w-2 h-2 rounded-full bg-amber-500" />
+                                                        <span className="text-sm font-semibold text-amber-800">Unallocated</span>
+                                                        <span className="ml-auto text-sm font-bold text-amber-700">
+                                                          {editValues.unavailable + editValues.readyToUse}
+                                                        </span>
+                                                      </div>
+
+                                                      <div className="space-y-2">
+                                                        {/* Unavailable Input */}
+                                                        <div>
+                                                          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1">
+                                                            <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: '#9CA3AF' }} />
+                                                            Unavailable
+                                                          </label>
+                                                          <input
+                                                            type="number"
+                                                            value={editValues.unavailable}
+                                                            onChange={(e) => updateEditingCapacity(subloc._id, 'unavailable', parseInt(e.target.value) || 0)}
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 text-sm text-gray-900 bg-white"
+                                                            min="0"
+                                                          />
+                                                          <span className="text-xs text-gray-500">Blocked/maintenance capacity</span>
+                                                        </div>
+
+                                                        {/* Ready To Use Input */}
+                                                        <div>
+                                                          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 mb-1">
+                                                            <span className="w-2.5 h-2.5 rounded" style={{ backgroundColor: '#F59E0B' }} />
+                                                            Ready To Use
+                                                          </label>
+                                                          <input
+                                                            type="number"
+                                                            value={editValues.readyToUse}
+                                                            onChange={(e) => updateEditingCapacity(subloc._id, 'readyToUse', parseInt(e.target.value) || 0)}
+                                                            className="w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-sm text-gray-900 bg-white"
+                                                            min="0"
+                                                          />
+                                                          <span className="text-xs text-gray-500">Available for future allocation</span>
+                                                        </div>
+                                                      </div>
+                                                    </div>
+                                                  </div>
+
+                                                  {/* Summary */}
+                                                  <div className="text-xs text-gray-600 bg-gray-100 rounded p-2">
+                                                    <strong>Summary:</strong> Max Capacity = Allocated ({editValues.transient + editValues.events + editValues.reserved}) + Unallocated ({editValues.unavailable + editValues.readyToUse}) = <span className="font-bold text-gray-900">{editValues.transient + editValues.events + editValues.reserved + editValues.unavailable + editValues.readyToUse}</span>
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                // Read-only breakdown view
+                                                <DayCapacityDetailedView
+                                                  breakdown={calculateCapacityBreakdown(subloc)}
+                                                  totalCapacity={subloc.maxCapacity || 100}
+                                                  isClosed={!subloc.isActive}
+                                                />
+                                              )}
                                             </div>
                                           )}
                                         </div>

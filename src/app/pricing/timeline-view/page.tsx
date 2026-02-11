@@ -265,8 +265,8 @@ export default function TimelineViewPage() {
             const eventStart = new Date(e.startDate);
             const eventEnd = new Date(e.endDate);
 
-            // Event must overlap with VIEW range (uses bookingStartTime)
-            const dateOverlap = eventEnd >= viewStart && eventStart <= viewEnd;
+            // Event must overlap with the full date range (not just the narrow view window)
+            const dateOverlap = eventEnd >= rangeStart && eventStart <= rangeEnd;
             if (!dateOverlap) return false;
 
             // Event must belong to this sublocation hierarchy
@@ -395,13 +395,11 @@ export default function TimelineViewPage() {
       const allEvents = await eventsResponse.json();
       const activeEvents = allEvents.filter((e: Event) => e.isActive);
 
-      // Find events that overlap with timeline range
-      // IMPORTANT: Use viewStart/viewEnd (which respect bookingStartTime) instead of rangeStart/rangeEnd
+      // Find events that overlap with the full timeline range (not just the narrow view window)
       const overlappingEvents = activeEvents.filter((event: Event) => {
         const eventStart = new Date(event.startDate);
         const eventEnd = new Date(event.endDate);
-        // Event overlaps if: event ends after view starts AND event starts before view ends
-        return eventEnd >= viewStart && eventStart <= viewEnd;
+        return eventEnd >= rangeStart && eventStart <= rangeEnd;
       });
 
       console.log('[Timeline] Found overlapping events:', {
@@ -783,17 +781,15 @@ export default function TimelineViewPage() {
         if (event) {
           const eventStart = new Date(event.startDate);
           const eventEnd = new Date(event.endDate);
-          // Event overlaps if: event ends after viewStart AND event starts before viewEnd
           return eventEnd >= viewStart && eventStart <= viewEnd;
         }
-        return false;
+        // Event not found in local state — fall through to effectiveFrom/To check
       }
 
-      // For non-event ratesheets, check if the ratesheet's effective date range overlaps with selected interval
+      // Check if the ratesheet's effective date range overlaps with selected interval
       const rsStart = new Date(rs.effectiveFrom);
       const rsEnd = rs.effectiveTo ? new Date(rs.effectiveTo) : new Date('2099-12-31');
 
-      // Ratesheet overlaps if: rs ends after viewStart AND rs starts before viewEnd
       return rsEnd >= viewStart && rsStart <= viewEnd;
     });
   };

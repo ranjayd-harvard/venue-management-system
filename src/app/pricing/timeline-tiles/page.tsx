@@ -161,7 +161,11 @@ export default function TimelineTilesPage() {
   // Event booking toggle
   const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
 
+  // Hydration fix: only render dynamic timestamps after mount
+  const [mounted, setMounted] = useState(false);
+
   useEffect(() => {
+    setMounted(true);
     fetchPricingConfig();
   }, []);
 
@@ -763,33 +767,35 @@ export default function TimelineTilesPage() {
                 Visual waterfall showing pricing hierarchy and winning rates for each hour
               </p>
             </div>
-            <div className="bg-gray-100 rounded-lg p-3 text-xs space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Local Time:</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toLocaleString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                  })}
-                </span>
+            {mounted && (
+              <div className="bg-gray-100 rounded-lg p-3 text-xs space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Local Time:</span>
+                  <span className="text-gray-900 font-mono">
+                    {new Date().toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                      hour12: true
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Server (UTC):</span>
+                  <span className="text-gray-900 font-mono">
+                    {new Date().toUTCString().slice(0, -4)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Timezone:</span>
+                  <span className="text-gray-900 font-mono">
+                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Server (UTC):</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toUTCString().slice(0, -4)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Timezone:</span>
-                <span className="text-gray-900 font-mono">
-                  {Intl.DateTimeFormat().resolvedOptions().timeZone}
-                </span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 

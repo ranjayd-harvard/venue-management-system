@@ -5,6 +5,86 @@ export interface Attribute {
   value: string;
 }
 
+// ===== OPERATING HOURS TYPES =====
+
+/**
+ * A single time slot within a day's schedule
+ * Uses "HH:MM" format (24-hour) for consistency with TimeWindow
+ */
+export interface TimeSlot {
+  startTime: string;  // "HH:MM" format (24-hour)
+  endTime: string;    // "HH:MM" format (24-hour)
+  label?: string;     // Optional: "Morning", "Afternoon", etc.
+}
+
+/**
+ * Days of the week as string keys for readability and easy merging
+ */
+export type DayOfWeekKey =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+
+/**
+ * Weekly operating hours schedule
+ * - undefined day = inherit from parent (or closed if no parent defines it)
+ * - empty array [] = explicitly closed (no inheritance)
+ * - array with TimeSlots = open during those times
+ */
+export type WeeklySchedule = {
+  [K in DayOfWeekKey]?: TimeSlot[];
+};
+
+/**
+ * Blackout/holiday entry for when venue is closed or has special hours
+ */
+export interface Blackout {
+  id: string;                         // UUID for management
+  date: string;                       // "YYYY-MM-DD"
+  type: 'FULL_DAY' | 'TIME_RANGE';
+  startTime?: string;                 // "HH:MM" if TIME_RANGE
+  endTime?: string;                   // "HH:MM" if TIME_RANGE
+  name?: string;                      // "Thanksgiving", "Christmas"
+  reason?: string;                    // Longer description
+  recurring?: {
+    pattern: 'YEARLY';                // Only yearly makes sense for holidays
+    endDate?: string;                 // "YYYY-MM-DD" when recurrence ends
+  };
+  cancelled?: boolean;                // True = cancel inherited blackout with same ID
+}
+
+/**
+ * Operating hours configuration for an entity
+ */
+export interface OperatingHours {
+  schedule?: WeeklySchedule;
+  blackouts?: Blackout[];
+}
+
+/**
+ * Resolved day schedule with source tracking for UI display
+ */
+export interface ResolvedDaySchedule {
+  day: DayOfWeekKey;
+  slots: TimeSlot[];
+  source: string;           // Entity name where hours are defined
+  isInherited: boolean;     // True if inherited from ancestor
+  isOverride: boolean;      // True if overriding a parent's definition
+  isClosed: boolean;        // True if no slots (closed)
+}
+
+/**
+ * Resolved blackout with source tracking for UI display
+ */
+export interface ResolvedBlackout extends Blackout {
+  source: string;           // Entity name where blackout is defined
+  isInherited: boolean;     // True if inherited from ancestor
+}
+
 // ===== CAPACITY & REVENUE GOAL TYPES =====
 
 export interface CapacityBounds {
@@ -17,6 +97,15 @@ export interface DailyCapacity {
   capacity: number; // Must be between minCapacity and maxCapacity
 }
 
+// Hourly allocation breakdown for per-hour overrides
+export interface HourlyAllocationBreakdown {
+  transient?: number;     // Walk-in capacity
+  events?: number;        // Event bookings
+  reserved?: number;      // Pre-reserved
+  unavailable?: number;   // Closed/blackout
+  readyToUse?: number;    // Available for allocation
+}
+
 export interface HourlyCapacityOverride {
   date: string; // ISO date string (YYYY-MM-DD)
   hour: number; // 0-23
@@ -24,6 +113,8 @@ export interface HourlyCapacityOverride {
   maxCapacity?: number;
   defaultCapacity?: number;
   allocatedCapacity?: number;
+  // Per-hour allocation breakdown (optional override of defaultCapacities)
+  allocationBreakdown?: HourlyAllocationBreakdown;
 }
 
 export interface RevenueGoal {
@@ -33,6 +124,27 @@ export interface RevenueGoal {
   weeklyGoal?: number;
   monthlyGoal?: number;
   revenueGoalType?: RevenueGoalType; // Which calculation method was used for this goal
+  // Custom category goals (only used when revenueGoalType === 'custom')
+  customCategoryGoals?: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+  };
+}
+
+// Default capacity allocation breakdown
+export interface DefaultCapacities {
+  allocated: {
+    transient: number;    // Walk-in/general capacity
+    events: number;       // Event-specific allocation
+    reserved: number;     // Pre-reserved capacity
+  };
+  unallocated: {
+    unavailable: number;  // Blocked/maintenance capacity
+    readyToUse: number;   // Available for future allocation
+  };
 }
 
 export interface CapacityConfig extends CapacityBounds {
@@ -40,6 +152,7 @@ export interface CapacityConfig extends CapacityBounds {
   hourlyCapacities?: HourlyCapacityOverride[]; // Hour-level capacity overrides
   revenueGoals: RevenueGoal[];      // Time-varying goals
   hoursPerDay?: number;             // Hours per day for revenue calculation (default: 24)
+  defaultCapacities?: DefaultCapacities; // Default capacity allocation breakdown
 }
 
 export interface Customer {
@@ -49,6 +162,7 @@ export interface Customer {
   phone?: string;
   address?: string;
   attributes?: Attribute[];
+  operatingHours?: OperatingHours;
   defaultHourlyRate?: number;
   // Aggregated capacity from all locations
   minCapacity?: number;       // Sum of all location minCapacity values
@@ -77,6 +191,7 @@ export interface Location {
   defaultCapacity?: number;   // Sum of all sublocation defaultCapacity values
   allocatedCapacity?: number; // Sum of all sublocation allocatedCapacity values
   attributes?: Attribute[];
+  operatingHours?: OperatingHours;
   defaultHourlyRate?: number;
   timezone?: string;
   capacityConfig?: CapacityConfig;
@@ -96,7 +211,9 @@ export interface SubLocation {
   maxCapacity?: number;       // Maximum capacity constraint
   defaultCapacity?: number;   // Default capacity value (must be within min-max)
   allocatedCapacity?: number; // Currently allocated capacity (must be within min-max)
+  // Capacity breakdown is stored in capacityConfig.defaultCapacities
   attributes?: Attribute[];
+  operatingHours?: OperatingHours;
   defaultHourlyRate?: number;
   pricingEnabled: boolean;
   isActive: boolean;

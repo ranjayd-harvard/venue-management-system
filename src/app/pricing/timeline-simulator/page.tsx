@@ -119,6 +119,9 @@ interface TimeSlot {
   };
   eventNames?: string[]; // Changed from eventName to eventNames array
   events?: Array<{ name: string; priority: number }>; // Store events with priority for sorting
+  // Operating hours status
+  isAvailable?: boolean;
+  unavailableReason?: 'CLOSED' | 'BLACKOUT';
 }
 
 export default function TimelineSimulatorPage() {
@@ -1720,8 +1723,11 @@ export default function TimelineSimulatorPage() {
       let apiSurgePrice = undefined;
       let apiWinningPrice = undefined;
       let apiSurgeMultiplier = undefined;
+      // Operating hours status from API
+      let slotIsAvailable: boolean | undefined = undefined;
+      let slotUnavailableReason: 'CLOSED' | 'BLACKOUT' | undefined = undefined;
 
-      // Get base price
+      // Get base price and operating hours status
       if (basePricingData?.segments) {
         const segment = basePricingData.segments.find((seg: any) => {
           const segStart = new Date(seg.startTime);
@@ -1729,6 +1735,9 @@ export default function TimelineSimulatorPage() {
         });
         if (segment) {
           apiBasePrice = segment.pricePerHour;
+          // Extract operating hours status
+          slotIsAvailable = segment.isAvailable;
+          slotUnavailableReason = segment.unavailableReason;
         }
 
       }
@@ -1830,6 +1839,9 @@ export default function TimelineSimulatorPage() {
         capacity: capacityForHour,
         eventNames: eventNames.length > 0 ? eventNames : undefined,
         events: eventsWithPriority.length > 0 ? eventsWithPriority : undefined,
+        // Operating hours status
+        isAvailable: slotIsAvailable,
+        unavailableReason: slotUnavailableReason,
       });
 
 
@@ -3131,7 +3143,32 @@ export default function TimelineSimulatorPage() {
               {/* Time markers in grid with winning prices */}
               <h3 className="text-xl font-bold text-gray-900 text-center ml-6">
                 Winning Price by Hour
-              </h3>              
+              </h3>
+
+              {/* Operating Hours Legend */}
+              {timeSlots.some(slot => slot.isAvailable === false) && (
+                <div className="flex items-center justify-center gap-6 mt-3 mb-2 text-xs">
+                  <div className="flex items-center gap-4 bg-gray-50 px-4 py-2 rounded-lg border border-gray-200">
+                    <span className="font-medium text-gray-600">Legend:</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded bg-gradient-to-r from-blue-500 to-purple-500"></div>
+                      <span className="text-gray-600">Open</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded bg-gradient-to-r from-gray-400 to-gray-500"></div>
+                      <span className="text-gray-600">Closed</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded bg-gradient-to-r from-red-500 to-red-600"></div>
+                      <span className="text-gray-600">Blackout</span>
+                    </div>
+                  </div>
+                  <div className="text-gray-500">
+                    {timeSlots.filter(s => s.isAvailable !== false).length} available / {timeSlots.length} total hours
+                  </div>
+                </div>
+              )}
+
               <div className="relative mb-6 mt-6 ml-6 mr-6">
                 {/* Loading Overlay */}
                 {(pricingDataLoading || isRefreshing) && (
@@ -3146,6 +3183,9 @@ export default function TimelineSimulatorPage() {
                   {timeSlots.map((slot, idx) => {
                     const isSelected = selectedSlot?.slotIdx === idx;
                     const isHovered = hoveredSlot?.slotIdx === idx;
+                    const isClosed = slot.isAvailable === false && slot.unavailableReason === 'CLOSED';
+                    const isBlackout = slot.isAvailable === false && slot.unavailableReason === 'BLACKOUT';
+                    const isUnavailable = isClosed || isBlackout;
 
                     // Debug log for rendering
                     if (slot.eventNames && slot.eventNames.length > 0) {
@@ -3155,11 +3195,21 @@ export default function TimelineSimulatorPage() {
                     return (
                       <div
                         key={idx}
-                        className={`relative bg-gradient-to-br from-silver-500 via-silver-50 to-silver-100 border rounded-xl overflow-hidden cursor-pointer transition-all ${
+                        className={`relative border rounded-xl overflow-hidden cursor-pointer transition-all ${
+                          isClosed
+                            ? 'bg-gradient-to-br from-gray-200 via-gray-100 to-gray-200'
+                            : isBlackout
+                            ? 'bg-gradient-to-br from-red-100 via-red-50 to-red-100'
+                            : 'bg-gradient-to-br from-silver-500 via-silver-50 to-silver-100'
+                        } ${
                           isSelected
                             ? 'border-blue-600 border-2 shadow-xl ring-2 ring-blue-300'
                             : isHovered
                             ? 'border-blue-400 border-2 shadow-lg'
+                            : isClosed
+                            ? 'border-gray-300 shadow-sm'
+                            : isBlackout
+                            ? 'border-red-300 shadow-sm'
                             : 'border-gray-200 shadow-sm'
                         }`}
                         onClick={() => handleTileClick(idx, 'pricing-tile', slot)}
@@ -3167,23 +3217,49 @@ export default function TimelineSimulatorPage() {
                         onMouseLeave={handleTileLeave}
                       >
                         {/* Header with time */}
-                        <div className="bg-gradient-to-r from-slate-600 to-slate-700 px-2 py-1.5 text-center">
+                        <div className={`px-2 py-1.5 text-center ${
+                          isClosed
+                            ? 'bg-gradient-to-r from-gray-500 to-gray-600'
+                            : isBlackout
+                            ? 'bg-gradient-to-r from-red-600 to-red-700'
+                            : 'bg-gradient-to-r from-slate-600 to-slate-700'
+                        }`}>
                           <div className="text-[11px] font-bold text-white tracking-tight">{slot.label}</div>
-                          <div className="text-[9px] text-slate-300 font-medium">
+                          <div className={`text-[9px] font-medium ${
+                            isClosed ? 'text-gray-300' : isBlackout ? 'text-red-200' : 'text-slate-300'
+                          }`}>
                             {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                           </div>
                         </div>
 
                         {/* Pricing Section */}
-                        <div className="bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 px-2 py-3 border-b border-gray-100">
+                        <div className={`px-2 py-3 border-b border-gray-100 ${
+                          isClosed
+                            ? 'bg-gradient-to-br from-gray-100 via-gray-50 to-gray-100'
+                            : isBlackout
+                            ? 'bg-gradient-to-br from-red-50 via-red-25 to-red-50'
+                            : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'
+                        }`}>
                           <div className="text-[8px] uppercase font-light text-gray-500 mb-1 tracking-wider flex items-center justify-left gap-1">
-                            Price
+                            {isUnavailable ? 'Status' : 'Price'}
                             {/* Show surge icon if surge is ON and SURGE layer is winning */}
-                            {surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || enabledLayers.has('surge-layer')) && (
+                            {!isUnavailable && surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || enabledLayers.has('surge-layer')) && (
                               <Zap className="w-2 h-2 text-orange-600" />
                             )}
                           </div>
-                          {slot.winningPrice !== undefined && slot.winningPrice !== null ? (
+                          {isUnavailable ? (
+                            /* Show CLOSED or BLACKOUT status */
+                            <div className="flex flex-col items-start gap-1">
+                              <div className={`text-base font-bold ${
+                                isClosed ? 'text-gray-500' : 'text-red-600'
+                              }`}>
+                                {isClosed ? 'CLOSED' : 'BLACKOUT'}
+                              </div>
+                              <div className="text-[9px] text-gray-400">
+                                {isClosed ? 'Outside hours' : 'Holiday/Closure'}
+                              </div>
+                            </div>
+                          ) : slot.winningPrice !== undefined && slot.winningPrice !== null ? (
                             /* Show surge price only if: surge enabled AND SURGE layer is winning */
                             surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || (slot.winningLayer?.id && enabledLayers.has(slot.winningLayer.id))) ? (
                               <div className="space-y-1">

@@ -5,11 +5,20 @@ import { LocationRepository } from '@/models/Location';
 import { SubLocationRepository } from '@/models/SubLocation';
 import { EventRepository } from '@/models/Event';
 
+interface AllocationBreakdown {
+  transient: number;
+  events: number;
+  reserved: number;
+  unavailable: number;
+  readyToUse: number;
+}
+
 interface CapacityMetrics {
   minCapacity: number;
   maxCapacity: number;
   defaultCapacity: number;
   allocatedCapacity: number;
+  allocation?: AllocationBreakdown;
 }
 
 /**
@@ -45,11 +54,24 @@ export async function GET(request: NextRequest) {
     // Note: SubLocations have both top-level capacity fields AND capacityConfig
     // Prefer top-level fields (minCapacity, maxCapacity, defaultCapacity) over capacityConfig
     sublocations.forEach((sublocation) => {
+      // Get allocation breakdown from capacityConfig.defaultCapacities
+      const defaultCapacities = sublocation.capacityConfig?.defaultCapacities;
+      const allocation: AllocationBreakdown | undefined = defaultCapacities
+        ? {
+            transient: defaultCapacities.allocated?.transient ?? 0,
+            events: defaultCapacities.allocated?.events ?? 0,
+            reserved: defaultCapacities.allocated?.reserved ?? 0,
+            unavailable: defaultCapacities.unallocated?.unavailable ?? 0,
+            readyToUse: defaultCapacities.unallocated?.readyToUse ?? 0,
+          }
+        : undefined;
+
       const metrics: CapacityMetrics = {
         minCapacity: sublocation.minCapacity ?? sublocation.capacityConfig?.minCapacity ?? 0,
         maxCapacity: sublocation.maxCapacity ?? sublocation.capacityConfig?.maxCapacity ?? 0,
         defaultCapacity: sublocation.defaultCapacity ?? sublocation.capacityConfig?.maxCapacity ?? 0,
         allocatedCapacity: sublocation.allocatedCapacity || 0,
+        allocation,
       };
       sublocationMetrics.set(sublocation._id!.toString(), metrics);
     });
@@ -64,6 +86,14 @@ export async function GET(request: NextRequest) {
       let maxCapacity = 0;
       let defaultCapacity = 0;
       let allocatedCapacity = 0;
+      let hasAllocation = false;
+      const aggregatedAllocation: AllocationBreakdown = {
+        transient: 0,
+        events: 0,
+        reserved: 0,
+        unavailable: 0,
+        readyToUse: 0,
+      };
 
       // Aggregate from child sublocations
       // Handle both string and ObjectId comparison
@@ -81,6 +111,16 @@ export async function GET(request: NextRequest) {
           maxCapacity += slMetrics.maxCapacity;
           defaultCapacity += slMetrics.defaultCapacity;
           allocatedCapacity += slMetrics.allocatedCapacity;
+
+          // Aggregate allocation breakdown
+          if (slMetrics.allocation) {
+            hasAllocation = true;
+            aggregatedAllocation.transient += slMetrics.allocation.transient;
+            aggregatedAllocation.events += slMetrics.allocation.events;
+            aggregatedAllocation.reserved += slMetrics.allocation.reserved;
+            aggregatedAllocation.unavailable += slMetrics.allocation.unavailable;
+            aggregatedAllocation.readyToUse += slMetrics.allocation.readyToUse;
+          }
         }
       });
 
@@ -89,6 +129,7 @@ export async function GET(request: NextRequest) {
         maxCapacity,
         defaultCapacity,
         allocatedCapacity,
+        allocation: hasAllocation ? aggregatedAllocation : undefined,
       });
     });
 
@@ -102,6 +143,14 @@ export async function GET(request: NextRequest) {
       let maxCapacity = 0;
       let defaultCapacity = 0;
       let allocatedCapacity = 0;
+      let hasAllocation = false;
+      const aggregatedAllocation: AllocationBreakdown = {
+        transient: 0,
+        events: 0,
+        reserved: 0,
+        unavailable: 0,
+        readyToUse: 0,
+      };
 
       // Aggregate from child locations
       // Handle both string and ObjectId comparison
@@ -119,6 +168,16 @@ export async function GET(request: NextRequest) {
           maxCapacity += locMetrics.maxCapacity;
           defaultCapacity += locMetrics.defaultCapacity;
           allocatedCapacity += locMetrics.allocatedCapacity;
+
+          // Aggregate allocation breakdown
+          if (locMetrics.allocation) {
+            hasAllocation = true;
+            aggregatedAllocation.transient += locMetrics.allocation.transient;
+            aggregatedAllocation.events += locMetrics.allocation.events;
+            aggregatedAllocation.reserved += locMetrics.allocation.reserved;
+            aggregatedAllocation.unavailable += locMetrics.allocation.unavailable;
+            aggregatedAllocation.readyToUse += locMetrics.allocation.readyToUse;
+          }
         }
       });
 
@@ -127,6 +186,7 @@ export async function GET(request: NextRequest) {
         maxCapacity,
         defaultCapacity,
         allocatedCapacity,
+        allocation: hasAllocation ? aggregatedAllocation : undefined,
       });
     });
 

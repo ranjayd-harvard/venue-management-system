@@ -266,7 +266,14 @@ export function setRevenueGoal(
   dailyGoal: number,
   weeklyGoal?: number,
   monthlyGoal?: number,
-  revenueGoalType?: RevenueGoalType
+  revenueGoalType?: RevenueGoalType,
+  customCategoryGoals?: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+  }
 ): CapacityConfig {
   // Ensure revenueGoals array exists
   if (!config.revenueGoals) {
@@ -296,6 +303,7 @@ export function setRevenueGoal(
     ...(weeklyGoal && { weeklyGoal }),
     ...(monthlyGoal && { monthlyGoal }),
     ...(revenueGoalType && { revenueGoalType }),
+    ...(customCategoryGoals && { customCategoryGoals }),
   };
 
   config.revenueGoals.push(newGoal);

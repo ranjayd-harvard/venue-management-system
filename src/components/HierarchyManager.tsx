@@ -3,6 +3,15 @@
 import { useState, useEffect } from 'react';
 import { ChevronRight, ChevronDown, Plus, Edit2, Trash2, Building2, MapPin, Layers, Save, X, ChevronUp } from 'lucide-react';
 import AttributesManager from './AttributesManager';
+import OperatingHoursManager from './OperatingHoursManager';
+import {
+  ResolvedDaySchedule,
+  ResolvedBlackout,
+  DayOfWeekKey,
+  TimeSlot,
+  Blackout,
+} from '@/models/types';
+import { DAYS_OF_WEEK } from '@/lib/operating-hours';
 
 interface TreeNode {
   id: string;
@@ -44,24 +53,34 @@ export default function HierarchyManager() {
         fetch('/api/sublocations').then(r => r.json()),
       ]);
 
+      // Preserve expanded state from current tree
+      const expandedIds = new Set<string>();
+      const collectExpanded = (nodes: TreeNode[]) => {
+        nodes.forEach(node => {
+          if (node.expanded) expandedIds.add(node.id);
+          if (node.children) collectExpanded(node.children);
+        });
+      };
+      collectExpanded(tree);
+
       const treeData: TreeNode[] = customers.map((customer: any) => {
         const customerLocations = locations.filter((l: any) => l.customerId === customer._id);
-        
+
         return {
           id: customer._id,
           type: 'customer' as const,
           name: customer.name,
           data: customer,
-          expanded: false,
+          expanded: expandedIds.has(customer._id),
           children: customerLocations.map((location: any) => {
             const locationSublocations = sublocations.filter((sl: any) => sl.locationId === location._id);
-            
+
             return {
               id: location._id,
               type: 'location' as const,
               name: location.name,
               data: location,
-              expanded: false,
+              expanded: expandedIds.has(location._id),
               parentId: customer._id,
               children: locationSublocations.map((sublocation: any) => ({
                 id: sublocation._id,
@@ -77,6 +96,24 @@ export default function HierarchyManager() {
       });
 
       setTree(treeData);
+
+      // Update selectedNode with fresh data if it exists
+      if (selectedNode) {
+        const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
+          for (const node of nodes) {
+            if (node.id === id) return node;
+            if (node.children) {
+              const found = findNode(node.children, id);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const updatedNode = findNode(treeData, selectedNode.id);
+        if (updatedNode) {
+          setSelectedNode(updatedNode);
+        }
+      }
     } catch (error) {
       console.error('Failed to load hierarchy:', error);
     } finally {
@@ -262,6 +299,91 @@ export default function HierarchyManager() {
       source,
       overridden: nodeAttrKeys.has(key) && source !== node.name,
     }));
+  };
+
+  // Get inherited operating hours for a node
+  const getInheritedOperatingHours = (node: TreeNode): {
+    schedule: ResolvedDaySchedule[];
+    blackouts: ResolvedBlackout[];
+  } => {
+    // Find parent chain
+    const findParentChain = (nodes: TreeNode[], targetId: string): TreeNode[] => {
+      for (const n of nodes) {
+        if (n.id === targetId) {
+          return [n];
+        }
+        if (n.children) {
+          const found = findParentChain(n.children, targetId);
+          if (found.length > 0) {
+            return [n, ...found];
+          }
+        }
+      }
+      return [];
+    };
+
+    const chain = findParentChain(tree, node.id);
+
+    // Track which entity defined each day's schedule
+    const daySourceMap = new Map<DayOfWeekKey, { slots: TimeSlot[]; source: string }>();
+
+    // Build merged schedule tracking sources
+    for (const entity of chain) {
+      const schedule = entity.data.operatingHours?.schedule;
+      if (!schedule) continue;
+
+      for (const day of DAYS_OF_WEEK) {
+        if (schedule[day] !== undefined) {
+          daySourceMap.set(day, {
+            slots: schedule[day] || [],
+            source: entity.name,
+          });
+        }
+      }
+    }
+
+    // Get the target entity's own schedule
+    const targetSchedule = node.data.operatingHours?.schedule || {};
+
+    // Build resolved day schedules
+    const resolvedSchedule: ResolvedDaySchedule[] = DAYS_OF_WEEK.map((day) => {
+      const resolved = daySourceMap.get(day);
+      const isOwn = targetSchedule[day] !== undefined;
+      const hasParentDefinition = resolved && resolved.source !== node.name;
+
+      return {
+        day,
+        slots: resolved?.slots || [],
+        source: resolved?.source || '',
+        isInherited: !isOwn && !!resolved,
+        isOverride: isOwn && !!hasParentDefinition,
+        isClosed: !resolved || resolved.slots.length === 0,
+      };
+    });
+
+    // Build merged blackouts with source tracking
+    const blackoutSourceMap = new Map<string, { blackout: Blackout; source: string }>();
+
+    for (const entity of chain) {
+      const blackouts = entity.data.operatingHours?.blackouts || [];
+      for (const blackout of blackouts) {
+        blackoutSourceMap.set(blackout.id, { blackout, source: entity.name });
+      }
+    }
+
+    const targetBlackouts = new Set(
+      (node.data.operatingHours?.blackouts || []).map((b: Blackout) => b.id)
+    );
+
+    const resolvedBlackouts: ResolvedBlackout[] = Array.from(blackoutSourceMap.values())
+      .filter(({ blackout }) => !blackout.cancelled)
+      .map(({ blackout, source }) => ({
+        ...blackout,
+        source,
+        isInherited: !targetBlackouts.has(blackout.id),
+      }));
+
+    return { schedule: resolvedSchedule, blackouts: resolvedBlackouts };
   };
 
   const renderTree = (nodes: TreeNode[], level = 0) => {
@@ -550,6 +672,50 @@ export default function HierarchyManager() {
                   }}
                   entityName={selectedNode.name}
                 />
+              </div>
+
+              {/* Operating Hours Editor */}
+              <div className="mt-6">
+                {(() => {
+                  const { schedule: inheritedSchedule, blackouts: inheritedBlackouts } =
+                    getInheritedOperatingHours(selectedNode);
+
+                  // Get capacity data for sublocations
+                  const isSublocation = selectedNode.type === 'sublocation';
+                  const sublocationData = selectedNode.data;
+                  const totalCapacity = isSublocation
+                    ? (sublocationData.maxCapacity || sublocationData.allocatedCapacity || 100)
+                    : 100;
+
+                  // Calculate capacity breakdown for sublocations
+                  // Using defaults based on sublocation capacity config
+                  const capacityBreakdown = isSublocation ? {
+                    transient: Math.round(totalCapacity * 0.5), // 50% for transient
+                    events: Math.round(totalCapacity * 0.2),    // 20% for events
+                    unavailable: 0,                              // 0% unavailable (when open)
+                    reserved: Math.round(totalCapacity * 0.3),  // 30% reserved buffer
+                  } : undefined;
+
+                  return (
+                    <OperatingHoursManager
+                      operatingHours={selectedNode.data.operatingHours}
+                      inheritedSchedule={inheritedSchedule}
+                      inheritedBlackouts={inheritedBlackouts.filter(b => b.isInherited)}
+                      onSave={async (hours) => {
+                        await fetch(`/api/${selectedNode.type}s/${selectedNode.id}`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ operatingHours: hours }),
+                        });
+                        loadHierarchy();
+                      }}
+                      entityName={selectedNode.name}
+                      capacityBreakdown={capacityBreakdown}
+                      totalCapacity={totalCapacity}
+                      showCapacity={isSublocation}
+                    />
+                  );
+                })()}
               </div>
             </div>
           )}

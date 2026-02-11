@@ -170,7 +170,14 @@ export class SubLocationRepository {
     dailyGoal: number,
     weeklyGoal?: number,
     monthlyGoal?: number,
-    revenueGoalType?: 'max' | 'allocated' | 'custom'
+    revenueGoalType?: 'max' | 'allocated' | 'custom',
+    customCategoryGoals?: {
+      transient: number;
+      events: number;
+      reserved: number;
+      unavailable: number;
+      readyToUse: number;
+    }
   ): Promise<boolean> {
     const sublocation = await this.findById(id);
     if (!sublocation) return false;
@@ -182,7 +189,7 @@ export class SubLocationRepository {
       revenueGoals: [],
     };
 
-    setRevenueGoal(config, startDate, endDate, dailyGoal, weeklyGoal, monthlyGoal, revenueGoalType);
+    setRevenueGoal(config, startDate, endDate, dailyGoal, weeklyGoal, monthlyGoal, revenueGoalType, customCategoryGoals);
 
     return this.update(id, { capacityConfig: config });
   }
@@ -218,6 +225,13 @@ export class SubLocationRepository {
       maxCapacity?: number;
       defaultCapacity?: number;
       allocatedCapacity?: number;
+      allocationBreakdown?: {
+        transient?: number;
+        events?: number;
+        reserved?: number;
+        unavailable?: number;
+        readyToUse?: number;
+      };
     }
   ): Promise<boolean> {
     const sublocation = await this.findById(id);

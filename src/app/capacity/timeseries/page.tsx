@@ -4,11 +4,6 @@ import { useState, useEffect } from 'react';
 import {
   Calendar,
   Clock,
-  Users,
-  TrendingUp,
-  Building2,
-  MapPin,
-  User,
   ChevronDown,
   ChevronUp,
   Info
@@ -95,6 +90,38 @@ interface TimeSeriesDataPoint {
   [key: string]: any; // Dynamic capacity keys
 }
 
+interface AllocationBreakdown {
+  subLocationId: string;
+  subLocationLabel: string;
+  totalCapacity: number;
+  allocated: {
+    total: number;
+    transient: number;
+    events: number;
+    reserved: number;
+  };
+  unallocated: {
+    total: number;
+    unavailable: number;
+    readyToUse: number;
+  };
+  percentages: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+  };
+  metadata: {
+    totalHours: number;
+    availableHours: number;
+    unavailableHours: number;
+    timezone: string;
+    startTime: string;
+    endTime: string;
+  };
+}
+
 export default function CapacityTimeSeriesPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [sublocations, setSublocations] = useState<SubLocation[]>([]);
@@ -141,7 +168,11 @@ export default function CapacityTimeSeriesPage() {
   const [visibleCapacities, setVisibleCapacities] = useState<Set<string>>(new Set());
 
   // Capacity metric selection
-  const [selectedMetric, setSelectedMetric] = useState<'min' | 'max' | 'default' | 'allocated'>('max');
+  const [selectedMetric, setSelectedMetric] = useState<'min' | 'max' | 'default' | 'allocated' | 'transient' | 'events' | 'reserved' | 'unavailable' | 'readyToUse'>('max');
+
+  // Allocation breakdown
+  const [allocationData, setAllocationData] = useState<AllocationBreakdown | null>(null);
+  const [allocationLoading, setAllocationLoading] = useState(false);
 
   useEffect(() => {
     fetchLocations();
@@ -194,7 +225,16 @@ export default function CapacityTimeSeriesPage() {
     if (currentSubLocation || currentLocation || currentCustomer) {
       generateTimeSeriesData();
     }
-  }, [capacitySheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, selectedMetric]);
+  }, [capacitySheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, selectedMetric, allocationData]);
+
+  // Fetch allocation breakdown when sublocation or view window changes
+  useEffect(() => {
+    if (selectedSubLocation) {
+      fetchAllocationData();
+    } else {
+      setAllocationData(null);
+    }
+  }, [selectedSubLocation, viewStart, viewEnd]);
 
   const fetchLocations = async () => {
     try {
@@ -272,9 +312,46 @@ export default function CapacityTimeSeriesPage() {
     }
   };
 
+  // Fetch allocation breakdown data
+  const fetchAllocationData = async () => {
+    if (!selectedSubLocation) {
+      setAllocationData(null);
+      return;
+    }
+
+    setAllocationLoading(true);
+    try {
+      const response = await fetch('/api/capacity/allocation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subLocationId: selectedSubLocation,
+          startTime: viewStart.toISOString(),
+          endTime: viewEnd.toISOString(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch allocation data');
+      }
+
+      const data = await response.json();
+      setAllocationData(data);
+    } catch (err: any) {
+      console.error('Error fetching allocation data:', err);
+      setAllocationData(null);
+    } finally {
+      setAllocationLoading(false);
+    }
+  };
+
   const generateTimeSeriesData = () => {
     const dataPoints: TimeSeriesDataPoint[] = [];
     const capacityKeysSet = new Set<string>();
+
+    // Check if we're showing allocation categories
+    const isAllocationMetric = ['transient', 'events', 'reserved', 'unavailable', 'readyToUse'].includes(selectedMetric);
 
     // Generate hourly timestamps
     const currentTime = new Date(viewStart);
@@ -291,125 +368,144 @@ export default function CapacityTimeSeriesPage() {
         })
       };
 
-      // Add default capacities based on selected metric
-      if (currentCustomer) {
-        const key = `Customer Default`;
-        let value: number | undefined;
+      // For allocation metrics, show breakdown from allocation data as constant lines
+      if (isAllocationMetric && allocationData) {
+        const allocationCategories = [
+          { key: 'Transient', value: allocationData.allocated.transient, metric: 'transient' },
+          { key: 'Events', value: allocationData.allocated.events, metric: 'events' },
+          { key: 'Reserved', value: allocationData.allocated.reserved, metric: 'reserved' },
+          { key: 'Unavailable', value: allocationData.unallocated.unavailable, metric: 'unavailable' },
+          { key: 'Ready To Use', value: allocationData.unallocated.readyToUse, metric: 'readyToUse' },
+        ];
 
-        switch (selectedMetric) {
-          case 'min':
-            value = currentCustomer.minCapacity;
-            break;
-          case 'max':
-            value = currentCustomer.maxCapacity;
-            break;
-          case 'default':
-            value = currentCustomer.defaultCapacity;
-            break;
-          case 'allocated':
-            value = currentCustomer.allocatedCapacity;
-            break;
-        }
+        // Show all categories or just the selected one
+        allocationCategories.forEach(cat => {
+          point[cat.key] = cat.value;
+          capacityKeysSet.add(cat.key);
+        });
+      } else if (!isAllocationMetric) {
+        // Standard capacity metrics (min, max, default, allocated)
 
-        if (value !== undefined) {
-          point[key] = value;
-          capacityKeysSet.add(key);
-        }
-      }
+        // Add default capacities based on selected metric
+        if (currentCustomer) {
+          const key = `Customer Default`;
+          let value: number | undefined;
 
-      if (currentLocation) {
-        const key = `Location Default`;
-        let value: number | undefined;
+          switch (selectedMetric) {
+            case 'min':
+              value = currentCustomer.minCapacity;
+              break;
+            case 'max':
+              value = currentCustomer.maxCapacity;
+              break;
+            case 'default':
+              value = currentCustomer.defaultCapacity;
+              break;
+            case 'allocated':
+              value = currentCustomer.allocatedCapacity;
+              break;
+          }
 
-        switch (selectedMetric) {
-          case 'min':
-            value = currentLocation.minCapacity;
-            break;
-          case 'max':
-            value = currentLocation.maxCapacity;
-            break;
-          case 'default':
-            value = currentLocation.defaultCapacity;
-            break;
-          case 'allocated':
-            value = currentLocation.allocatedCapacity;
-            break;
-        }
-
-        if (value !== undefined) {
-          point[key] = value;
-          capacityKeysSet.add(key);
-        }
-      }
-
-      if (currentSubLocation) {
-        const key = `SubLocation Default`;
-        let value: number | undefined;
-
-        switch (selectedMetric) {
-          case 'min':
-            value = currentSubLocation.minCapacity;
-            break;
-          case 'max':
-            value = currentSubLocation.maxCapacity;
-            break;
-          case 'default':
-            value = currentSubLocation.defaultCapacity;
-            break;
-          case 'allocated':
-            value = currentSubLocation.allocatedCapacity;
-            break;
-        }
-
-        if (value !== undefined) {
-          point[key] = value;
-          capacityKeysSet.add(key);
-        }
-      }
-
-      // Check capacity sheets
-      const timeStr = currentTime.toTimeString().substring(0, 5); // HH:mm
-
-      capacitySheets.forEach(cs => {
-        // Check if capacity sheet is effective at this time
-        const effectiveFrom = new Date(cs.effectiveFrom);
-        const effectiveTo = cs.effectiveTo ? new Date(cs.effectiveTo) : null;
-
-        if (currentTime >= effectiveFrom && (!effectiveTo || currentTime <= effectiveTo)) {
-          // Check time windows
-          if (cs.timeWindows) {
-            cs.timeWindows.forEach((tw) => {
-              if (timeStr >= tw.startTime && timeStr < tw.endTime) {
-                const key = `${cs.name} (${tw.startTime}-${tw.endTime})`;
-
-                // Store the value based on selected metric
-                let value: number | undefined;
-                switch (selectedMetric) {
-                  case 'min':
-                    value = tw.minCapacity;
-                    break;
-                  case 'max':
-                    value = tw.maxCapacity;
-                    break;
-                  case 'default':
-                    value = tw.defaultCapacity;
-                    break;
-                  case 'allocated':
-                    value = tw.allocatedCapacity || 0;
-                    break;
-                  default:
-                    value = tw.maxCapacity;
-                }
-
-                if (value !== undefined) {
-                  point[key] = value;
-                  capacityKeysSet.add(key);
-                }
-              }
-            });
+          if (value !== undefined) {
+            point[key] = value;
+            capacityKeysSet.add(key);
           }
         }
-      });
+
+        if (currentLocation) {
+          const key = `Location Default`;
+          let value: number | undefined;
+
+          switch (selectedMetric) {
+            case 'min':
+              value = currentLocation.minCapacity;
+              break;
+            case 'max':
+              value = currentLocation.maxCapacity;
+              break;
+            case 'default':
+              value = currentLocation.defaultCapacity;
+              break;
+            case 'allocated':
+              value = currentLocation.allocatedCapacity;
+              break;
+          }
+
+          if (value !== undefined) {
+            point[key] = value;
+            capacityKeysSet.add(key);
+          }
+        }
+
+        if (currentSubLocation) {
+          const key = `SubLocation Default`;
+          let value: number | undefined;
+
+          switch (selectedMetric) {
+            case 'min':
+              value = currentSubLocation.minCapacity;
+              break;
+            case 'max':
+              value = currentSubLocation.maxCapacity;
+              break;
+            case 'default':
+              value = currentSubLocation.defaultCapacity;
+              break;
+            case 'allocated':
+              value = currentSubLocation.allocatedCapacity;
+              break;
+          }
+
+          if (value !== undefined) {
+            point[key] = value;
+            capacityKeysSet.add(key);
+          }
+        }
+
+        // Check capacity sheets
+        const timeStr = currentTime.toTimeString().substring(0, 5); // HH:mm
+
+        capacitySheets.forEach(cs => {
+          // Check if capacity sheet is effective at this time
+          const effectiveFrom = new Date(cs.effectiveFrom);
+          const effectiveTo = cs.effectiveTo ? new Date(cs.effectiveTo) : null;
+
+          if (currentTime >= effectiveFrom && (!effectiveTo || currentTime <= effectiveTo)) {
+            // Check time windows
+            if (cs.timeWindows) {
+              cs.timeWindows.forEach((tw) => {
+                if (timeStr >= tw.startTime && timeStr < tw.endTime) {
+                  const key = `${cs.name} (${tw.startTime}-${tw.endTime})`;
+
+                  // Store the value based on selected metric
+                  let value: number | undefined;
+                  switch (selectedMetric) {
+                    case 'min':
+                      value = tw.minCapacity;
+                      break;
+                    case 'max':
+                      value = tw.maxCapacity;
+                      break;
+                    case 'default':
+                      value = tw.defaultCapacity;
+                      break;
+                    case 'allocated':
+                      value = tw.allocatedCapacity || 0;
+                      break;
+                    default:
+                      value = tw.maxCapacity;
+                  }
+
+                  if (value !== undefined) {
+                    point[key] = value;
+                    capacityKeysSet.add(key);
+                  }
+                }
+              });
+            }
+          }
+        });
+      }
 
       dataPoints.push(point);
       currentTime.setHours(currentTime.getHours() + 1);
@@ -422,7 +518,21 @@ export default function CapacityTimeSeriesPage() {
   };
 
   const getCapacityColor = (capacityKey: string, index: number): string => {
-    // Modern, vibrant color palette for capacity
+    // Fixed colors for allocation categories
+    const allocationColors: Record<string, string> = {
+      'Transient': '#14B8A6',      // teal
+      'Events': '#EC4899',          // pink
+      'Reserved': '#8B5CF6',        // violet
+      'Unavailable': '#9CA3AF',     // gray
+      'Ready To Use': '#F59E0B',    // amber
+    };
+
+    // Return fixed color for allocation categories
+    if (allocationColors[capacityKey]) {
+      return allocationColors[capacityKey];
+    }
+
+    // Modern, vibrant color palette for other capacities
     const colors = [
       '#14B8A6', // teal
       '#10B981', // emerald
@@ -449,19 +559,191 @@ export default function CapacityTimeSeriesPage() {
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
+      // Check if we're viewing allocation categories (they don't compete, so no "winner")
+      const allocationCategoryNames = ['Transient', 'Events', 'Reserved', 'Unavailable', 'Ready To Use'];
+      const isAllocationView = payload.every((entry: any) => allocationCategoryNames.includes(entry.name));
+
+      // Calculate total from all visible capacity values
+      const total = payload.reduce((sum: number, entry: any) => sum + (entry.value || 0), 0);
+
+      // Determine the winner - only for competing capacity sources (not allocation categories)
+      let winnerName: string | null = null;
+      if (!isAllocationView) {
+        // Capacity sheets (with time windows) take priority over defaults
+        // Among capacity sheets, lower value (more restrictive) typically wins
+        // If no capacity sheet, the default with highest specificity wins
+        const sortedPayload = [...payload].sort((a: any, b: any) => {
+          // Capacity sheets (entries with time ranges like "09:00-17:00") win over defaults
+          const aIsSheet = a.name.includes('(') && a.name.includes(':');
+          const bIsSheet = b.name.includes('(') && b.name.includes(':');
+
+          if (aIsSheet && !bIsSheet) return -1;
+          if (!aIsSheet && bIsSheet) return 1;
+
+          // Among same type, lower value (more restrictive) wins
+          return (a.value || 0) - (b.value || 0);
+        });
+
+        winnerName = sortedPayload[0]?.name;
+      }
+
       return (
-        <div className="bg-white border-2 border-gray-200 rounded-lg shadow-lg p-4">
-          <p className="font-semibold text-gray-900 mb-2">{label}</p>
-          {payload.map((entry: any, index: number) => (
-            <div key={index} className="flex items-center gap-2 text-sm">
-              <div
-                className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: entry.color }}
-              />
-              <span className="text-gray-700">{entry.name}:</span>
-              <span className="font-bold text-gray-900">{entry.value} people</span>
+        <div className="bg-white border-2 border-gray-200 rounded-lg shadow-xl p-4 min-w-[280px]">
+          <p className="font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">{label}</p>
+
+          {/* For allocation view, show a header indicating these are breakdown categories */}
+          {isAllocationView && (
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Capacity Breakdown</p>
+          )}
+
+          {/* Capacity values from chart */}
+          <div className="space-y-1 mb-3">
+            {payload.map((entry: any, index: number) => {
+              const isWinner = !isAllocationView && entry.name === winnerName;
+              return (
+                <div
+                  key={index}
+                  className={`flex items-center justify-between text-sm py-1 px-2 rounded ${
+                    isWinner ? 'bg-emerald-50 border border-emerald-200' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-3 h-3 rounded-full"
+                      style={{ backgroundColor: entry.color }}
+                    />
+                    <span className={isWinner ? 'font-semibold text-emerald-700' : 'text-gray-700'}>
+                      {entry.name}
+                    </span>
+                    {isWinner && (
+                      <span className="text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded font-medium">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <span className={`font-bold ${isWinner ? 'text-emerald-700' : 'text-gray-900'}`}>
+                    {entry.value}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Show total for allocation view */}
+          {isAllocationView && (
+            <div className="border-t border-gray-200 pt-2 mt-2 flex justify-between text-sm">
+              <span className="font-medium text-gray-700">Total Capacity</span>
+              <span className="font-bold text-gray-900">{total}</span>
             </div>
-          ))}
+          )}
+
+          {/* Allocation Breakdown - only show when NOT viewing allocation categories (to avoid duplication) */}
+          {allocationData && !isAllocationView && (
+            <>
+              <div className="border-t border-gray-200 pt-3 mt-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Allocation Breakdown</p>
+
+                {/* Stacked bar visualization */}
+                <div className="h-4 bg-gray-100 rounded-full overflow-hidden flex mb-3">
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${allocationData.percentages.transient}%`,
+                      backgroundColor: '#14B8A6'
+                    }}
+                    title={`Transient: ${allocationData.percentages.transient}%`}
+                  />
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${allocationData.percentages.events}%`,
+                      backgroundColor: '#EC4899'
+                    }}
+                    title={`Events: ${allocationData.percentages.events}%`}
+                  />
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${allocationData.percentages.reserved}%`,
+                      backgroundColor: '#8B5CF6'
+                    }}
+                    title={`Reserved: ${allocationData.percentages.reserved}%`}
+                  />
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${allocationData.percentages.unavailable}%`,
+                      backgroundColor: '#9CA3AF'
+                    }}
+                    title={`Unavailable: ${allocationData.percentages.unavailable}%`}
+                  />
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${allocationData.percentages.readyToUse}%`,
+                      backgroundColor: '#F59E0B'
+                    }}
+                    title={`Ready To Use: ${allocationData.percentages.readyToUse}%`}
+                  />
+                </div>
+
+                {/* Breakdown details */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-teal-500" />
+                      <span className="text-gray-600">Transient</span>
+                    </div>
+                    <span className="font-semibold text-teal-600">
+                      {allocationData.allocated.transient} ({allocationData.percentages.transient}%)
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-pink-500" />
+                      <span className="text-gray-600">Events</span>
+                    </div>
+                    <span className="font-semibold text-pink-600">
+                      {allocationData.allocated.events} ({allocationData.percentages.events}%)
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-violet-500" />
+                      <span className="text-gray-600">Reserved</span>
+                    </div>
+                    <span className="font-semibold text-violet-600">
+                      {allocationData.allocated.reserved} ({allocationData.percentages.reserved}%)
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-gray-400" />
+                      <span className="text-gray-600">Unavailable</span>
+                    </div>
+                    <span className="font-semibold text-gray-500">
+                      {allocationData.unallocated.unavailable} ({allocationData.percentages.unavailable}%)
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between col-span-2">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-amber-500" />
+                      <span className="text-gray-600">Ready To Use</span>
+                    </div>
+                    <span className="font-semibold text-amber-600">
+                      {allocationData.unallocated.readyToUse} ({allocationData.percentages.readyToUse}%)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Total */}
+                <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between text-xs">
+                  <span className="font-medium text-gray-700">Total Capacity</span>
+                  <span className="font-bold text-gray-900">{allocationData.totalCapacity}</span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       );
     }
@@ -647,63 +929,6 @@ export default function CapacityTimeSeriesPage() {
 
         {!loading && selectedSubLocation && (
           <>
-            {/* Current Selection Summary */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-              <h2 className="text-lg font-bold text-gray-900 mb-4">Current Selection</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {currentCustomer && (
-                  <div className="flex items-start space-x-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-500 flex items-center justify-center text-white shadow-md">
-                      <User className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-gray-600">Customer</div>
-                      <div className="text-lg font-bold text-gray-900">{currentCustomer.name}</div>
-                      {currentCustomer.maxCapacity && (
-                        <div className="text-sm text-gray-600 mt-1">
-                          Default: {currentCustomer.maxCapacity} people
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {currentLocation && (
-                  <div className="flex items-start space-x-3 p-4 bg-emerald-50 rounded-lg border border-emerald-200">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-400 to-emerald-500 flex items-center justify-center text-white shadow-md">
-                      <Building2 className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-gray-600">Location</div>
-                      <div className="text-lg font-bold text-gray-900">{currentLocation.name}</div>
-                      {currentLocation.maxCapacity && (
-                        <div className="text-sm text-gray-600 mt-1">
-                          Default: {currentLocation.maxCapacity} people
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {currentSubLocation && (
-                  <div className="flex items-start space-x-3 p-4 bg-purple-50 rounded-lg border border-purple-200">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-400 to-purple-500 flex items-center justify-center text-white shadow-md">
-                      <MapPin className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-gray-600">Sub-Location</div>
-                      <div className="text-lg font-bold text-gray-900">{currentSubLocation.label}</div>
-                      {currentSubLocation.maxCapacity && (
-                        <div className="text-sm text-gray-600 mt-1">
-                          Default: {currentSubLocation.maxCapacity} people
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* Timeline Range Slider */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
               <div className="flex items-center justify-between mb-4">
@@ -817,13 +1042,22 @@ export default function CapacityTimeSeriesPage() {
                     <label className="text-sm font-medium text-gray-700">Metric:</label>
                     <select
                       value={selectedMetric}
-                      onChange={(e) => setSelectedMetric(e.target.value as 'min' | 'max' | 'default' | 'allocated')}
+                      onChange={(e) => setSelectedMetric(e.target.value as 'min' | 'max' | 'default' | 'allocated' | 'transient' | 'events' | 'reserved' | 'unavailable' | 'readyToUse')}
                       className="px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm text-gray-900 bg-white"
                     >
-                      <option value="min">Min Capacity</option>
-                      <option value="max">Max Capacity</option>
-                      <option value="default">Default Capacity</option>
-                      <option value="allocated">Allocated Capacity</option>
+                      <optgroup label="Capacity Limits">
+                        <option value="min">Min Capacity</option>
+                        <option value="max">Max Capacity</option>
+                        <option value="default">Default Capacity</option>
+                        <option value="allocated">Allocated Capacity</option>
+                      </optgroup>
+                      <optgroup label="Allocation Categories">
+                        <option value="transient">Transient (Walk-ins)</option>
+                        <option value="events">Events</option>
+                        <option value="reserved">Reserved</option>
+                        <option value="unavailable">Unavailable</option>
+                        <option value="readyToUse">Ready To Use</option>
+                      </optgroup>
                     </select>
                   </div>
                   <div className="text-sm text-gray-600">
@@ -853,7 +1087,7 @@ export default function CapacityTimeSeriesPage() {
                     <Legend
                       wrapperStyle={{ paddingTop: '20px' }}
                       iconType="line"
-                      onClick={(e) => toggleCapacityVisibility(e.value)}
+                      onClick={(e) => e.value && toggleCapacityVisibility(e.value)}
                       formatter={(value) => (
                         <span className="text-sm font-medium text-gray-700">{value}</span>
                       )}
@@ -879,35 +1113,122 @@ export default function CapacityTimeSeriesPage() {
 
               {/* Legend */}
               <div className="border-t border-gray-200 pt-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">Legend (Click to toggle)</h3>
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Legend (Click to toggle visibility)</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {Array.from(visibleCapacities).map(capacityKey => (
-                    <button
-                      key={capacityKey}
-                      onClick={() => toggleCapacityVisibility(capacityKey)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all ${
-                        visibleCapacities.has(capacityKey)
-                          ? 'bg-white border-gray-300 shadow-sm'
-                          : 'bg-gray-100 border-gray-200 opacity-50'
-                      }`}
-                    >
-                      <div
-                        className="w-4 h-4 rounded-full"
-                        style={{ backgroundColor: getCapacityColor(capacityKey) }}
-                      />
-                      <span className="text-xs font-medium text-gray-700 truncate">
-                        {capacityKey}
-                      </span>
-                    </button>
-                  ))}
+                  {allCapacityKeys.map((capacityKey, index) => {
+                    const isVisible = visibleCapacities.has(capacityKey);
+                    return (
+                      <button
+                        key={capacityKey}
+                        onClick={() => toggleCapacityVisibility(capacityKey)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all ${
+                          isVisible
+                            ? 'bg-white border-gray-300 shadow-sm'
+                            : 'bg-gray-100 border-gray-200 opacity-50'
+                        }`}
+                      >
+                        <div
+                          className={`w-4 h-4 rounded-full ${!isVisible ? 'opacity-40' : ''}`}
+                          style={{ backgroundColor: getCapacityColor(capacityKey, index) }}
+                        />
+                        <span className={`text-xs font-medium truncate ${isVisible ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
+                          {capacityKey}
+                        </span>
+                        {!isVisible && (
+                          <span className="text-[10px] text-gray-400 ml-auto">(hidden)</span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-                {visibleCapacities.size === 0 && (
+                {allCapacityKeys.length === 0 && (
                   <div className="text-center py-8 text-gray-500 text-sm">
                     No capacities to display. Select a location and sublocation with capacity configured.
                   </div>
                 )}
               </div>
             </div>
+
+            {/* Allocation Categories */}
+            {allocationData && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+                <h2 className="text-lg font-bold text-gray-900 mb-4">Allocation Categories</h2>
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                  {/* Transient */}
+                  <div className="bg-gradient-to-br from-teal-50 to-teal-100 rounded-lg p-4 border border-teal-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 rounded-full bg-teal-500" />
+                      <span className="text-sm font-semibold text-teal-700">Transient</span>
+                    </div>
+                    <div className="text-2xl font-bold text-teal-600">{allocationData.allocated.transient}</div>
+                    <div className="text-xs text-teal-600">{allocationData.percentages.transient}% of total</div>
+                    <div className="text-xs text-gray-500 mt-1">Walk-in capacity</div>
+                  </div>
+
+                  {/* Events */}
+                  <div className="bg-gradient-to-br from-pink-50 to-pink-100 rounded-lg p-4 border border-pink-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 rounded-full bg-pink-500" />
+                      <span className="text-sm font-semibold text-pink-700">Events</span>
+                    </div>
+                    <div className="text-2xl font-bold text-pink-600">{allocationData.allocated.events}</div>
+                    <div className="text-xs text-pink-600">{allocationData.percentages.events}% of total</div>
+                    <div className="text-xs text-gray-500 mt-1">Event bookings</div>
+                  </div>
+
+                  {/* Reserved */}
+                  <div className="bg-gradient-to-br from-violet-50 to-violet-100 rounded-lg p-4 border border-violet-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 rounded-full bg-violet-500" />
+                      <span className="text-sm font-semibold text-violet-700">Reserved</span>
+                    </div>
+                    <div className="text-2xl font-bold text-violet-600">{allocationData.allocated.reserved}</div>
+                    <div className="text-xs text-violet-600">{allocationData.percentages.reserved}% of total</div>
+                    <div className="text-xs text-gray-500 mt-1">Pre-reserved slots</div>
+                  </div>
+
+                  {/* Unavailable */}
+                  <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 rounded-full bg-gray-400" />
+                      <span className="text-sm font-semibold text-gray-700">Unavailable</span>
+                    </div>
+                    <div className="text-2xl font-bold text-gray-500">{allocationData.unallocated.unavailable}</div>
+                    <div className="text-xs text-gray-500">{allocationData.percentages.unavailable}% of total</div>
+                    <div className="text-xs text-gray-500 mt-1">Closed/Blackout</div>
+                  </div>
+
+                  {/* Ready To Use */}
+                  <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg p-4 border border-amber-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 rounded-full bg-amber-500" />
+                      <span className="text-sm font-semibold text-amber-700">Ready To Use</span>
+                    </div>
+                    <div className="text-2xl font-bold text-amber-600">{allocationData.unallocated.readyToUse}</div>
+                    <div className="text-xs text-amber-600">{allocationData.percentages.readyToUse}% of total</div>
+                    <div className="text-xs text-gray-500 mt-1">Available capacity</div>
+                  </div>
+                </div>
+
+                {/* Summary row */}
+                <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between items-center">
+                  <div className="flex gap-6">
+                    <div>
+                      <span className="text-sm text-gray-600">Total Allocated: </span>
+                      <span className="font-bold text-teal-600">{allocationData.allocated.total}</span>
+                    </div>
+                    <div>
+                      <span className="text-sm text-gray-600">Total Unallocated: </span>
+                      <span className="font-bold text-amber-600">{allocationData.unallocated.total}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm text-gray-600">Total Capacity: </span>
+                    <span className="font-bold text-gray-900">{allocationData.totalCapacity}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Capacity Details */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

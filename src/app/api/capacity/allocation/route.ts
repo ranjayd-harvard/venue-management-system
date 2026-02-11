@@ -1,5 +1,5 @@
-// src/app/api/capacity/calculate/route.ts
-// Capacity calculator using hourly evaluation
+// src/app/api/capacity/allocation/route.ts
+// Capacity allocation breakdown API
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
@@ -8,8 +8,9 @@ import { HourlyCapacityEngine, CapacityContext, HourlyCapacitySegment } from '@/
 import { TimezoneSettingsRepository } from '@/models/TimezoneSettings';
 import { resolveOperatingHoursFromEntities } from '@/lib/operating-hours';
 
-// Allocation breakdown interface
-interface AllocationBreakdown {
+export interface AllocationBreakdown {
+  subLocationId: string;
+  subLocationLabel: string;
   totalCapacity: number;
   allocated: {
     total: number;
@@ -29,12 +30,20 @@ interface AllocationBreakdown {
     unavailable: number;
     readyToUse: number;
   };
+  metadata: {
+    totalHours: number;
+    availableHours: number;
+    unavailableHours: number;
+    timezone: string;
+    startTime: string;
+    endTime: string;
+  };
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { subLocationId, eventId, startTime, endTime, timezone: requestTimezone } = body;
+    const { subLocationId, startTime, endTime, timezone: requestTimezone } = body;
 
     if (!subLocationId || !startTime || !endTime) {
       return NextResponse.json(
@@ -81,7 +90,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get timezone (hierarchy: Request → SubLocation → Location → Customer → System)
+    // Get timezone
     const timezone = requestTimezone || await TimezoneSettingsRepository.getTimezoneForEntity(
       'SUBLOCATION',
       subLocationId
@@ -109,20 +118,16 @@ export async function POST(request: NextRequest) {
       approvalStatus: 'APPROVED'
     }).toArray();
 
-    // Fetch EVENT capacity sheets for ALL active events that overlap with the booking period
-    // This ensures event-specific capacity is always applied when booking falls within an event
+    // Fetch EVENT capacity sheets for overlapping events
     const bookingStartDate = new Date(startTime);
     const bookingEndDate = new Date(endTime);
 
-    // Find all active events that overlap with the booking time
     const overlappingEvents = await db.collection('events').find({
       isActive: true,
-      // Event must not end before booking starts AND must not start after booking ends
       endDate: { $gte: bookingStartDate },
       startDate: { $lte: bookingEndDate }
     }).toArray();
 
-    // Fetch capacity sheets for all overlapping events
     const eventCapacitySheets = overlappingEvents.length > 0
       ? await db.collection('capacitysheets').find({
           'appliesTo.level': 'EVENT',
@@ -132,38 +137,12 @@ export async function POST(request: NextRequest) {
         }).toArray()
       : [];
 
-    // Get pricing config (for timezone settings)
-    let pricingConfig = await db.collection('pricing_configs').findOne({});
-
-    if (!pricingConfig) {
-      console.log('⚠️  Pricing config not found, creating default...');
-
-      // Create default config
-      const defaultConfig = {
-        customerPriorityRange: { min: 1000, max: 1999 },
-        locationPriorityRange: { min: 2000, max: 2999 },
-        sublocationPriorityRange: { min: 3000, max: 3999 },
-        defaultTimezone: 'America/Detroit',
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-
-      await db.collection('pricing_configs').insertOne(defaultConfig);
-      pricingConfig = defaultConfig;
-
-      console.log('✅ Created default pricing config');
-    }
-
     // Resolve operating hours from entity hierarchy
     const operatingHoursResolution = resolveOperatingHoursFromEntities([
       { name: customer.name, operatingHours: customer.operatingHours },
       { name: location.name, operatingHours: location.operatingHours },
       { name: sublocation.label, operatingHours: sublocation.operatingHours },
     ]);
-
-    // if (operatingHoursResolution.hasOperatingHours) {
-    //   console.log(`\n🕐 [CAPACITY API] Operating hours resolved from hierarchy`);
-    // }
 
     // Build capacity context
     const context: CapacityContext = {
@@ -174,7 +153,6 @@ export async function POST(request: NextRequest) {
       customerId: customer._id.toString(),
       locationId: location._id.toString(),
       subLocationId: sublocation._id.toString(),
-      eventId: eventId ? eventId : undefined,
 
       customerCapacitySheets: customerCapacitySheets as any[],
       locationCapacitySheets: locationCapacitySheets as any[],
@@ -200,12 +178,8 @@ export async function POST(request: NextRequest) {
         allocated: sublocation.allocatedCapacity || 0,
       },
 
-      // Include sublocation capacity config for hourly overrides
       sublocationCapacityConfig: sublocation.capacityConfig as any,
 
-      capacityConfig: pricingConfig as any,
-
-      // Operating hours (only if defined in hierarchy)
       operatingHours: operatingHoursResolution.hasOperatingHours ? {
         schedule: operatingHoursResolution.mergedSchedule,
         blackouts: operatingHoursResolution.mergedBlackouts,
@@ -216,70 +190,58 @@ export async function POST(request: NextRequest) {
     const engine = new HourlyCapacityEngine();
     const result = engine.calculateCapacity(context);
 
-    // Compute allocation breakdown
-    const allocationBreakdown = computeAllocationBreakdown(
+    // Compute allocation breakdown from segments
+    const breakdown = computeAllocationBreakdown(
       result.segments,
+      sublocation._id.toString(),
+      sublocation.label,
+      timezone,
+      startTime,
+      endTime,
       sublocation.capacityConfig?.defaultCapacities,
       sublocation.maxCapacity
     );
 
-    // Enhance segments with per-segment allocation breakdown
-    const enhancedSegments = result.segments.map(segment => {
-      const segmentBreakdown = computeSegmentBreakdown(
-        segment,
-        sublocation.capacityConfig?.defaultCapacities
-      );
-      return {
-        ...segment,
-        breakdown: segmentBreakdown,
-      };
-    });
-
-    // Return enhanced result
-    return NextResponse.json({
-      ...result,
-      segments: enhancedSegments,
-      allocationBreakdown,
-      metadata: {
-        customer: customer.name,
-        location: location.name,
-        sublocation: sublocation.label,
-        timezone: result.timezone,
-        overlappingEvents: overlappingEvents.map(e => ({
-          id: e._id.toString(),
-          name: e.name,
-          startDate: e.startDate,
-          endDate: e.endDate
-        })),
-        capacitySheetSummary: {
-          total: customerCapacitySheets.length + locationCapacitySheets.length + sublocationCapacitySheets.length + eventCapacitySheets.length,
-          customer: customerCapacitySheets.length,
-          location: locationCapacitySheets.length,
-          sublocation: sublocationCapacitySheets.length,
-          event: eventCapacitySheets.length
-        }
-      }
-    });
+    return NextResponse.json(breakdown);
 
   } catch (error: any) {
-    console.error('Capacity calculation error:', error);
+    console.error('Allocation calculation error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to calculate capacity' },
+      { error: error.message || 'Failed to calculate allocation' },
       { status: 500 }
     );
   }
 }
 
-// Compute allocation breakdown from segments or stored defaultCapacities
 function computeAllocationBreakdown(
   segments: HourlyCapacitySegment[],
+  subLocationId: string,
+  subLocationLabel: string,
+  timezone: string,
+  startTime: string,
+  endTime: string,
   defaultCapacities?: {
     allocated: { transient: number; events: number; reserved: number };
     unallocated: { unavailable: number; readyToUse: number };
   },
   sublocationMaxCapacity?: number
 ): AllocationBreakdown {
-  // Priority 1: Use stored defaultCapacities if available
+  // Calculate time-based metadata from segments
+  let availableHours = 0;
+  let unavailableHours = 0;
+
+  for (const segment of segments) {
+    const weight = segment.durationHours;
+    if (segment.source === 'OPERATING_HOURS' && segment.isAvailable === false) {
+      unavailableHours += weight;
+    } else {
+      availableHours += weight;
+    }
+  }
+
+  const totalHours = segments.reduce((sum, seg) => sum + seg.durationHours, 0);
+
+  // Priority 1: Use stored defaultCapacities if available (matches capacity-settings page)
   if (defaultCapacities && defaultCapacities.allocated && defaultCapacities.unallocated) {
     const { allocated, unallocated } = defaultCapacities;
     const totalCapacity = sublocationMaxCapacity ||
@@ -288,6 +250,7 @@ function computeAllocationBreakdown(
     const allocatedTotal = allocated.transient + allocated.events + allocated.reserved;
     const unallocatedTotal = unallocated.unavailable + unallocated.readyToUse;
 
+    // Calculate percentages
     const safeTotal = totalCapacity > 0 ? totalCapacity : 100;
     const percentages = {
       transient: Math.round((allocated.transient / safeTotal) * 100),
@@ -304,6 +267,8 @@ function computeAllocationBreakdown(
     }
 
     return {
+      subLocationId,
+      subLocationLabel,
       totalCapacity,
       allocated: {
         total: allocatedTotal,
@@ -317,11 +282,18 @@ function computeAllocationBreakdown(
         readyToUse: unallocated.readyToUse,
       },
       percentages,
+      metadata: {
+        totalHours,
+        availableHours,
+        unavailableHours,
+        timezone,
+        startTime,
+        endTime,
+      },
     };
   }
 
-  // Fallback: Compute from segments
-  const totalHours = segments.reduce((sum, seg) => sum + seg.durationHours, 0);
+  // Fallback: Compute from segments (for sublocations without stored defaultCapacities)
   let totalMaxCapacity = 0;
   let eventCapacity = 0;
   let transientCapacity = 0;
@@ -349,6 +321,7 @@ function computeAllocationBreakdown(
     readyToUseCapacity += (segment.maxCapacity - segment.allocatedCapacity) * weight;
   }
 
+  // Normalize to per-hour averages
   const avgTotalCapacity = totalHours > 0 ? Math.round(totalMaxCapacity / totalHours) : (sublocationMaxCapacity || 100);
   const avgEventCapacity = totalHours > 0 ? Math.round(eventCapacity / totalHours) : 0;
   const avgTransientCapacity = totalHours > 0 ? Math.round(transientCapacity / totalHours) : 0;
@@ -373,6 +346,8 @@ function computeAllocationBreakdown(
   }
 
   return {
+    subLocationId,
+    subLocationLabel,
     totalCapacity: avgTotalCapacity,
     allocated: {
       total: allocatedTotal,
@@ -386,74 +361,13 @@ function computeAllocationBreakdown(
       readyToUse: avgReadyToUseCapacity,
     },
     percentages,
-  };
-}
-
-// Per-segment allocation breakdown
-// -9 indicates unknown/not applicable for that hour
-interface SegmentBreakdown {
-  transient: number;
-  events: number;
-  reserved: number;
-  unavailable: number;
-  readyToUse: number;
-  isOverride: boolean; // true if this hour has specific override values
-}
-
-function computeSegmentBreakdown(
-  segment: HourlyCapacitySegment,
-  defaultCapacities?: {
-    allocated: { transient: number; events: number; reserved: number };
-    unallocated: { unavailable: number; readyToUse: number };
-  }
-): SegmentBreakdown {
-  const UNKNOWN = -9;
-
-  // If segment is unavailable (outside operating hours or blackout)
-  if (segment.source === 'OPERATING_HOURS' && segment.isAvailable === false) {
-    return {
-      transient: 0,
-      events: 0,
-      reserved: 0,
-      unavailable: segment.maxCapacity || 0,
-      readyToUse: 0,
-      isOverride: true,
-    };
-  }
-
-  // If segment has a capacity sheet override
-  if (segment.source === 'CAPACITYSHEET' && segment.capacitySheet) {
-    const isEventBased = segment.capacitySheet.level === 'EVENT';
-
-    return {
-      transient: isEventBased ? 0 : segment.allocatedCapacity,
-      events: isEventBased ? segment.allocatedCapacity : 0,
-      reserved: UNKNOWN, // Reserved not tracked per-hour
-      unavailable: 0,
-      readyToUse: segment.availableCapacity,
-      isOverride: true,
-    };
-  }
-
-  // Use default capacities if available
-  if (defaultCapacities && defaultCapacities.allocated && defaultCapacities.unallocated) {
-    return {
-      transient: defaultCapacities.allocated.transient,
-      events: defaultCapacities.allocated.events,
-      reserved: defaultCapacities.allocated.reserved,
-      unavailable: defaultCapacities.unallocated.unavailable,
-      readyToUse: defaultCapacities.unallocated.readyToUse,
-      isOverride: false,
-    };
-  }
-
-  // Fallback: derive from segment allocatedCapacity
-  return {
-    transient: segment.allocatedCapacity,
-    events: 0,
-    reserved: UNKNOWN,
-    unavailable: 0,
-    readyToUse: segment.availableCapacity,
-    isOverride: false,
+    metadata: {
+      totalHours,
+      availableHours,
+      unavailableHours,
+      timezone,
+      startTime,
+      endTime,
+    },
   };
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Calculator, Users, TrendingUp } from 'lucide-react';
+import { Calculator, Users, TrendingUp, PieChart } from 'lucide-react';
+import CapacityAllocationChart, { AllocationData } from '@/components/CapacityAllocationChart';
 
 interface SubLocation {
   _id: string;
@@ -17,6 +18,15 @@ interface Location {
   city: string;
 }
 
+interface SegmentBreakdown {
+  transient: number;
+  events: number;
+  reserved: number;
+  unavailable: number;
+  readyToUse: number;
+  isOverride: boolean;
+}
+
 interface CapacitySegment {
   startTime: string;
   endTime: string;
@@ -30,6 +40,41 @@ interface CapacitySegment {
   capacitySheet?: {
     id: string;
     name: string;
+    level?: string;
+  };
+  breakdown?: SegmentBreakdown;
+}
+
+// Helper to format value with -9 as unknown
+const formatValue = (value: number | undefined): string => {
+  if (value === undefined || value === -9) return '-';
+  return String(value);
+};
+
+// Check if value is unknown (-9)
+const isUnknown = (value: number | undefined): boolean => {
+  return value === undefined || value === -9;
+};
+
+interface AllocationBreakdown {
+  totalCapacity: number;
+  allocated: {
+    total: number;
+    transient: number;
+    events: number;
+    reserved: number;
+  };
+  unallocated: {
+    total: number;
+    unavailable: number;
+    readyToUse: number;
+  };
+  percentages: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
   };
 }
 
@@ -43,6 +88,7 @@ interface CapacityResult {
     avgAllocatedCapacity: number;
     avgAvailableCapacity: number;
   };
+  allocationBreakdown?: AllocationBreakdown;
   metadata?: any;
 }
 
@@ -156,203 +202,322 @@ export default function CapacityCalculatorPage() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Input Panel */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-lg p-6 sticky top-8">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Booking Details</h2>
+      <div className="max-w-full mx-auto px-8 py-6">
+        {/* Input Panel - Horizontal Layout */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex-1 min-w-[180px]">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Location *
+              </label>
+              <select
+                value={selectedLocation}
+                onChange={(e) => setSelectedLocation(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-gray-700"
+              >
+                <option value="">Select Location...</option>
+                {locations.map((loc) => (
+                  <option key={loc._id} value={loc._id}>
+                    {loc.name} - {loc.city}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-              <div className="space-y-4 text-gray-700">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Location *
-                  </label>
-                  <select
-                    value={selectedLocation}
-                    onChange={(e) => setSelectedLocation(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                  >
-                    <option value="">Select Location...</option>
-                    {locations.map((loc) => (
-                      <option key={loc._id} value={loc._id}>
-                        {loc.name} - {loc.city}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Sub-Location *
+              </label>
+              <select
+                value={subLocationId}
+                onChange={(e) => setSubLocationId(e.target.value)}
+                disabled={!selectedLocation}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent disabled:bg-gray-100 text-gray-700"
+              >
+                <option value="">Select Sub-Location...</option>
+                {sublocations.map((sub) => (
+                  <option key={sub._id} value={sub._id}>
+                    {sub.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Sub-Location *
-                  </label>
-                  <select
-                    value={subLocationId}
-                    onChange={(e) => setSubLocationId(e.target.value)}
-                    disabled={!selectedLocation}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent disabled:bg-gray-100"
-                  >
-                    <option value="">Select Sub-Location...</option>
-                    {sublocations.map((sub) => (
-                      <option key={sub._id} value={sub._id}>
-                        {sub.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Start Date & Time *
+              </label>
+              <input
+                type="datetime-local"
+                value={startDateTime}
+                onChange={(e) => setStartDateTime(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-gray-700"
+              />
+            </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Start Date & Time *
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={startDateTime}
-                    onChange={(e) => setStartDateTime(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                  />
-                </div>
+            <div className="flex-1 min-w-[180px]">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                End Date & Time *
+              </label>
+              <input
+                type="datetime-local"
+                value={endDateTime}
+                onChange={(e) => setEndDateTime(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-gray-700"
+              />
+            </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    End Date & Time *
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={endDateTime}
-                    onChange={(e) => setEndDateTime(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                  />
-                </div>
-
-                <button
-                  onClick={calculateCapacity}
-                  disabled={loading || !subLocationId}
-                  className="w-full bg-gradient-to-r from-teal-600 to-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-teal-700 hover:to-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      Calculating...
-                    </>
-                  ) : (
-                    <>
-                      <Calculator size={20} />
-                      Calculate Capacity
-                    </>
-                  )}
-                </button>
-
-                {error && (
-                  <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
-                    {error}
-                  </div>
+            <div className="flex-shrink-0">
+              <button
+                onClick={calculateCapacity}
+                disabled={loading || !subLocationId}
+                className="bg-gradient-to-r from-teal-600 to-green-600 text-white px-6 py-2 rounded-lg font-semibold hover:from-teal-700 hover:to-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 h-[42px]"
+              >
+                {loading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    Calculating...
+                  </>
+                ) : (
+                  <>
+                    <Calculator size={20} />
+                    Calculate
+                  </>
                 )}
-              </div>
+              </button>
             </div>
           </div>
 
-          {/* Results Panel */}
-          <div className="lg:col-span-2">
-            {result ? (
-              <div className="space-y-6">
-                {/* Summary Cards */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-teal-500">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-600">Avg Max</span>
-                      <Users className="text-teal-600" size={20} />
-                    </div>
-                    <p className="text-3xl font-bold text-teal-900">{result.summary.avgMaxCapacity}</p>
-                  </div>
+          {error && (
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
+              {error}
+            </div>
+          )}
+        </div>
 
-                  <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-600">Avg Available</span>
-                      <TrendingUp className="text-green-600" size={20} />
-                    </div>
-                    <p className="text-3xl font-bold text-green-900">{result.summary.avgAvailableCapacity}</p>
+        {/* Results Panel - Full Width */}
+        <div>
+          {result ? (
+            <div className="space-y-6">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-teal-500">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-600">Avg Max</span>
+                    <Users className="text-teal-600" size={18} />
                   </div>
-
-                  <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-600">Total Hours</span>
-                      <Calculator className="text-blue-600" size={20} />
-                    </div>
-                    <p className="text-3xl font-bold text-blue-900">{result.summary.totalHours}h</p>
-                  </div>
+                  <p className="text-2xl font-bold text-teal-900">{result.summary.avgMaxCapacity}</p>
                 </div>
 
-                {/* Hourly Breakdown */}
+                <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-green-500">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-600">Avg Available</span>
+                    <TrendingUp className="text-green-600" size={18} />
+                  </div>
+                  <p className="text-2xl font-bold text-green-900">{result.summary.avgAvailableCapacity}</p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-blue-500">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-600">Total Hours</span>
+                    <Calculator className="text-blue-600" size={18} />
+                  </div>
+                  <p className="text-2xl font-bold text-blue-900">{result.summary.totalHours}h</p>
+                </div>
+
+                {result.allocationBreakdown && (
+                  <>
+                    <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-gray-400">
+                      <div className="text-sm font-medium text-gray-600 mb-2">Total Capacity</div>
+                      <p className="text-2xl font-bold text-gray-900">{result.allocationBreakdown.totalCapacity}</p>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-teal-400">
+                      <div className="text-sm font-medium text-teal-600 mb-2">Allocated</div>
+                      <p className="text-2xl font-bold text-teal-700">{result.allocationBreakdown.allocated.total}</p>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-amber-400">
+                      <div className="text-sm font-medium text-amber-600 mb-2">Unallocated</div>
+                      <p className="text-2xl font-bold text-amber-700">{result.allocationBreakdown.unallocated.total}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Capacity Allocation Breakdown */}
+              {result.allocationBreakdown && (
                 <div className="bg-white rounded-xl shadow-lg overflow-hidden">
                   <div className="bg-gradient-to-r from-teal-600 to-green-600 text-white px-6 py-4">
-                    <h3 className="text-xl font-bold">Hourly Capacity Breakdown</h3>
+                    <div className="flex items-center gap-3">
+                      <PieChart className="w-6 h-6" />
+                      <h3 className="text-xl font-bold">Capacity Allocation Breakdown</h3>
+                    </div>
+                    <p className="text-teal-100 text-sm mt-1">
+                      Distribution of capacity across allocation categories
+                    </p>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
-                          <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Min</th>
-                          <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Max</th>
-                          <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Default</th>
-                          <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Allocated</th>
-                          <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Available</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {result.segments.map((segment, index) => (
-                          <tr key={index} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                  <div className="p-6">
+                    {/* Allocation Chart - Full Width */}
+                    <CapacityAllocationChart
+                      data={{
+                        transient: result.allocationBreakdown.allocated.transient,
+                        events: result.allocationBreakdown.allocated.events,
+                        reserved: result.allocationBreakdown.allocated.reserved,
+                        unavailable: result.allocationBreakdown.unallocated.unavailable,
+                        readyToUse: result.allocationBreakdown.unallocated.readyToUse,
+                      }}
+                      totalCapacity={result.allocationBreakdown.totalCapacity}
+                      showTreemap={true}
+                      showStackedBar={true}
+                      height={320}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Hourly Breakdown */}
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-teal-600 to-green-600 text-white px-6 py-4">
+                  <h3 className="text-xl font-bold">Hourly Capacity Breakdown</h3>
+                  <p className="text-teal-100 text-sm mt-1">
+                    Per-hour allocation across all 5 categories. &quot;-&quot; indicates unknown values.
+                  </p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
+                        <th className="px-3 py-3 text-right text-xs font-medium text-teal-600 uppercase">
+                          <div className="flex items-center justify-end gap-1">
+                            <div className="w-2 h-2 rounded-full bg-teal-500" />
+                            Transient
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 text-right text-xs font-medium text-pink-600 uppercase">
+                          <div className="flex items-center justify-end gap-1">
+                            <div className="w-2 h-2 rounded-full bg-pink-500" />
+                            Events
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 text-right text-xs font-medium text-violet-600 uppercase">
+                          <div className="flex items-center justify-end gap-1">
+                            <div className="w-2 h-2 rounded-full bg-violet-500" />
+                            Reserved
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                          <div className="flex items-center justify-end gap-1">
+                            <div className="w-2 h-2 rounded-full bg-gray-400" />
+                            Unavailable
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 text-right text-xs font-medium text-amber-600 uppercase">
+                          <div className="flex items-center justify-end gap-1">
+                            <div className="w-2 h-2 rounded-full bg-amber-500" />
+                            Ready To Use
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {result.segments.map((segment, index) => {
+                        const breakdown = segment.breakdown;
+                        const isOverride = breakdown?.isOverride ?? false;
+
+                        return (
+                          <tr key={index} className={`hover:bg-gray-50 ${isOverride ? 'bg-blue-50/30' : ''}`}>
+                            <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">
                               {new Date(segment.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -
                               {new Date(segment.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </td>
-                            <td className="px-6 py-4 text-sm text-right text-gray-900">{segment.minCapacity}</td>
-                            <td className="px-6 py-4 text-sm text-right font-semibold text-teal-900">{segment.maxCapacity}</td>
-                            <td className="px-6 py-4 text-sm text-right text-gray-900">{segment.defaultCapacity}</td>
-                            <td className="px-6 py-4 text-sm text-right text-gray-600">{segment.allocatedCapacity}</td>
-                            <td className="px-6 py-4 text-sm text-right font-bold text-green-700">{segment.availableCapacity}</td>
-                            <td className="px-6 py-4 text-sm">
+                            <td className={`px-3 py-3 text-sm text-right ${isUnknown(breakdown?.transient) ? 'text-gray-400' : 'font-semibold text-teal-700'}`}>
+                              {formatValue(breakdown?.transient)}
+                            </td>
+                            <td className={`px-3 py-3 text-sm text-right ${isUnknown(breakdown?.events) ? 'text-gray-400' : 'font-semibold text-pink-700'}`}>
+                              {formatValue(breakdown?.events)}
+                            </td>
+                            <td className={`px-3 py-3 text-sm text-right ${isUnknown(breakdown?.reserved) ? 'text-gray-400' : 'font-semibold text-violet-700'}`}>
+                              {formatValue(breakdown?.reserved)}
+                            </td>
+                            <td className={`px-3 py-3 text-sm text-right ${isUnknown(breakdown?.unavailable) ? 'text-gray-400' : 'font-semibold text-gray-600'}`}>
+                              {formatValue(breakdown?.unavailable)}
+                            </td>
+                            <td className={`px-3 py-3 text-sm text-right ${isUnknown(breakdown?.readyToUse) ? 'text-gray-400' : 'font-bold text-amber-600'}`}>
+                              {formatValue(breakdown?.readyToUse)}
+                            </td>
+                            <td className="px-3 py-3 text-sm">
                               {segment.source === 'CAPACITYSHEET' ? (
                                 <span className="px-2 py-1 bg-teal-100 text-teal-800 rounded-full text-xs font-medium">
                                   {segment.capacitySheet?.name || 'Sheet'}
                                 </span>
+                              ) : segment.source === 'OPERATING_HOURS' ? (
+                                <span className="px-2 py-1 bg-gray-200 text-gray-700 rounded-full text-xs font-medium">
+                                  Closed
+                                </span>
                               ) : (
-                                <span className="px-2 py-1 bg-gray-100 text-gray-800 rounded-full text-xs font-medium">
+                                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">
                                   Default
+                                </span>
+                              )}
+                              {isOverride && (
+                                <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                                  Override
                                 </span>
                               )}
                             </td>
                           </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-gray-50">
-                        <tr>
-                          <td className="px-6 py-4 text-sm font-bold text-gray-900">TOTAL / AVERAGE</td>
-                          <td className="px-6 py-4 text-sm text-right font-bold text-gray-900">{result.summary.avgMinCapacity}</td>
-                          <td className="px-6 py-4 text-sm text-right font-bold text-teal-900">{result.summary.avgMaxCapacity}</td>
-                          <td className="px-6 py-4 text-sm text-right font-bold text-gray-900">{result.summary.avgDefaultCapacity}</td>
-                          <td className="px-6 py-4 text-sm text-right font-bold text-gray-600">{result.summary.avgAllocatedCapacity}</td>
-                          <td className="px-6 py-4 text-sm text-right font-bold text-green-700">{result.summary.avgAvailableCapacity}</td>
-                          <td className="px-6 py-4"></td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot className="bg-gray-100">
+                      <tr>
+                        <td className="px-4 py-3 text-sm font-bold text-gray-900">DEFAULTS</td>
+                        <td className="px-3 py-3 text-sm text-right font-bold text-teal-700">
+                          {result.allocationBreakdown?.allocated.transient ?? '-'}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-right font-bold text-pink-700">
+                          {result.allocationBreakdown?.allocated.events ?? '-'}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-right font-bold text-violet-700">
+                          {result.allocationBreakdown?.allocated.reserved ?? '-'}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-right font-bold text-gray-600">
+                          {result.allocationBreakdown?.unallocated.unavailable ?? '-'}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-right font-bold text-amber-600">
+                          {result.allocationBreakdown?.unallocated.readyToUse ?? '-'}
+                        </td>
+                        <td className="px-3 py-3 text-sm text-gray-500">
+                          Base allocation
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                {/* Legend */}
+                <div className="px-6 py-3 bg-gray-50 border-t text-xs text-gray-600">
+                  <span className="font-medium">Legend:</span>
+                  <span className="ml-3 px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">Override</span> = Hour has specific capacity settings
+                  <span className="ml-3">|</span>
+                  <span className="ml-3 text-gray-400">-</span> = Unknown/not tracked for this hour
                 </div>
               </div>
-            ) : (
-              <div className="bg-white rounded-xl shadow-lg p-12 text-center">
-                <div className="text-6xl mb-4">📊</div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">No Results Yet</h3>
-                <p className="text-gray-600">
-                  Select a location, sublocation, and booking period to calculate capacity
-                </p>
-              </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl shadow-lg p-12 text-center">
+              <div className="text-6xl mb-4">📊</div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">No Results Yet</h3>
+              <p className="text-gray-600">
+                Select a location, sublocation, and booking period to calculate capacity
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

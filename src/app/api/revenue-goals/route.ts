@@ -110,6 +110,7 @@ export async function POST(request: NextRequest) {
       endDate,
       dailyGoal,
       revenueGoalType,
+      customCategoryGoals,
     } = body;
 
     if (!entityType || !entityId || !startDate || !endDate) {
@@ -160,7 +161,8 @@ export async function POST(request: NextRequest) {
           dailyGoal,
           undefined,
           undefined,
-          revenueGoalType
+          revenueGoalType,
+          customCategoryGoals
         );
         break;
       case 'event':

@@ -70,6 +70,12 @@ interface PricingResult {
   totalHours: number;
   averageRate?: number;
   hourlyBreakdown?: any[];
+  segments?: Array<{
+    isAvailable?: boolean;
+    unavailableReason?: 'CLOSED' | 'BLACKOUT';
+    pricePerHour?: number;
+    [key: string]: any;
+  }>;
 }
 
 interface RateCard {
@@ -116,7 +122,7 @@ export default function DigitalRatecardPage() {
 
   // Hourly breakdown for selected duration
   const [selectedDuration, setSelectedDuration] = useState<number>(24);
-  const [hourlyBreakdown, setHourlyBreakdown] = useState<Array<{ hour: Date; hourEnd: Date; rate: number; isPartial: boolean }>>([]);
+  const [hourlyBreakdown, setHourlyBreakdown] = useState<Array<{ hour: Date; hourEnd: Date; rate: number; isPartial: boolean; isAvailable?: boolean; unavailableReason?: 'CLOSED' | 'BLACKOUT' }>>([]);
 
   // View mode toggle (grid/list)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -179,7 +185,15 @@ export default function DigitalRatecardPage() {
   };
 
   // Hourly tiles for 24 hours
-  const [hourlyTiles, setHourlyTiles] = useState<Array<{ hour: Date; hourEnd: Date; price: number | null; loading: boolean; isPartial: boolean }>>([]);
+  const [hourlyTiles, setHourlyTiles] = useState<Array<{
+    hour: Date;
+    hourEnd: Date;
+    price: number | null;
+    loading: boolean;
+    isPartial: boolean;
+    isAvailable?: boolean;
+    unavailableReason?: 'CLOSED' | 'BLACKOUT';
+  }>>([]);
 
   // Daily tiles for 7 days
   const [dailyTiles, setDailyTiles] = useState<Array<{ day: Date; dayEnd: Date; price: number | null; loading: boolean }>>([]);
@@ -240,7 +254,7 @@ export default function DigitalRatecardPage() {
     } else if (filterMode === 'venue' && currentVenue) {
       fetchActiveEvents();
     }
-  }, [currentSubLocation, currentLocation, currentCustomer, currentVenue, filterMode]);
+  }, [currentSubLocation, currentLocation, currentCustomer, currentVenue, filterMode, bookingStartTime]);
 
   useEffect(() => {
     if (currentSubLocation) {
@@ -310,8 +324,10 @@ export default function DigitalRatecardPage() {
 
   const fetchActiveEvents = async () => {
     try {
-      const now = new Date();
-      const futureDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // Next 7 days
+      // Use bookingStartTime as the base (not "now") so events are detected
+      // for the time range the tiles actually display
+      const now = new Date(bookingStartTime);
+      const futureDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days from booking start
 
       const response = await fetch('/api/events');
       const allEvents = await response.json();
@@ -462,7 +478,7 @@ export default function DigitalRatecardPage() {
     // Calculate tiles - if first hour is partial, we need 25 tiles to cover 24 full hours
     const tileCount = isFirstHourPartial ? 25 : 24;
 
-    const breakdown: Array<{ hour: Date; hourEnd: Date; rate: number; isPartial: boolean }> = [];
+    const breakdown: Array<{ hour: Date; hourEnd: Date; rate: number; isPartial: boolean; isAvailable?: boolean; unavailableReason?: 'CLOSED' | 'BLACKOUT' }> = [];
 
     for (let i = 0; i < tileCount; i++) {
       let hourStart: Date;
@@ -507,7 +523,11 @@ export default function DigitalRatecardPage() {
 
         if (response.ok) {
           const result: PricingResult = await response.json();
-          breakdown.push({ hour: hourStart, hourEnd, rate: result.totalPrice, isPartial });
+          // Extract availability from the first segment (single hour query returns one segment)
+          const segment = result.segments?.[0];
+          const isAvailable = segment?.isAvailable ?? true;
+          const unavailableReason = segment?.unavailableReason;
+          breakdown.push({ hour: hourStart, hourEnd, rate: result.totalPrice, isPartial, isAvailable, unavailableReason });
         }
       } catch (error) {
         console.error(`Failed to calculate hourly rate for hour ${i}:`, error);
@@ -629,12 +649,16 @@ export default function DigitalRatecardPage() {
 
           if (response.ok) {
             const result: PricingResult = await response.json();
+            // Extract operating hours status from segment (single hour = single segment)
+            const segment = result.segments?.[0];
             return {
               hour: tile.hour,
               hourEnd: tile.hourEnd,
               price: result.totalPrice,
               loading: false,
-              isPartial: tile.isPartial
+              isPartial: tile.isPartial,
+              isAvailable: segment?.isAvailable,
+              unavailableReason: segment?.unavailableReason,
             };
           }
         } catch (error) {
@@ -646,7 +670,9 @@ export default function DigitalRatecardPage() {
           hourEnd: tile.hourEnd,
           price: null,
           loading: false,
-          isPartial: tile.isPartial
+          isPartial: tile.isPartial,
+          isAvailable: undefined,
+          unavailableReason: undefined,
         };
       })
     );
@@ -1168,6 +1194,11 @@ export default function DigitalRatecardPage() {
                         <stop offset="50%" stopColor="#8b5cf6" />
                         <stop offset="100%" stopColor="#ec4899" />
                       </linearGradient>
+                      {/* Gray gradient for closed hours */}
+                      <linearGradient id="closedGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#9ca3af" />
+                        <stop offset="100%" stopColor="#6b7280" />
+                      </linearGradient>
                     </defs>
 
                     {/* Subtle grid lines - only horizontal */}
@@ -1253,6 +1284,10 @@ export default function DigitalRatecardPage() {
                             if (isNearEnd) tooltipX = Math.min(x, 920);
                             if (isNearTop) tooltipY = y + 60;
 
+                            // Determine if this hour is closed/unavailable
+                            const isClosed = h.isAvailable === false;
+                            const pointGradient = isClosed ? 'url(#closedGradient)' : 'url(#lineGradient)';
+
                             return (
                               <g key={i}>
                                 {/* Glow effect on hover */}
@@ -1260,7 +1295,7 @@ export default function DigitalRatecardPage() {
                                   cx={x}
                                   cy={y}
                                   r="12"
-                                  fill="url(#lineGradient)"
+                                  fill={pointGradient}
                                   opacity="0"
                                   className="transition-opacity duration-200"
                                   id={`glow-${i}`}
@@ -1271,8 +1306,8 @@ export default function DigitalRatecardPage() {
                                   cx={x}
                                   cy={y}
                                   r="5"
-                                  fill="#ffffff"
-                                  stroke="url(#lineGradient)"
+                                  fill={isClosed ? '#f3f4f6' : '#ffffff'}
+                                  stroke={pointGradient}
                                   strokeWidth="3"
                                   className="cursor-pointer transition-all duration-200"
                                   onMouseEnter={(e) => {
@@ -1314,16 +1349,16 @@ export default function DigitalRatecardPage() {
                                     stroke="rgba(255, 255, 255, 0.1)"
                                     strokeWidth="1"
                                   />
-                                  {/* Price */}
+                                  {/* Price or Closed Status */}
                                   <text
                                     x={tooltipX}
                                     y={tooltipY + 18}
                                     textAnchor="middle"
-                                    fill="white"
+                                    fill={isClosed ? '#9ca3af' : 'white'}
                                     fontSize="14"
                                     fontWeight="bold"
                                   >
-                                    ${h.rate.toFixed(2)}/hr
+                                    {isClosed ? (h.unavailableReason === 'BLACKOUT' ? 'Blackout' : 'Closed') : `$${h.rate.toFixed(2)}/hr`}
                                   </text>
                                   {/* Time */}
                                   <text
@@ -1545,14 +1580,37 @@ export default function DigitalRatecardPage() {
                         return eventEnd >= tile.hour && eventStart <= tile.hourEnd;
                       });
 
-                      const isGracePeriod = tile.price === 0;
+                      // Check for closed/blackout hours vs grace period
+                      const isClosed = tile.isAvailable === false && tile.unavailableReason === 'CLOSED';
+                      const isBlackout = tile.isAvailable === false && tile.unavailableReason === 'BLACKOUT';
+                      const isUnavailable = isClosed || isBlackout;
+                      // Grace period: $0 price but still available (not closed/blackout)
+                      const isGracePeriod = tile.price === 0 && !isUnavailable;
 
                       return (
                         <div
                           key={index}
                           className="relative group transition-all duration-300 hover:shadow-lg"
                         >
-                          {/* Grace period badge (highest priority) */}
+                          {/* Closed badge (outside operating hours) */}
+                          {isClosed && !tile.loading && (
+                            <div className="absolute -top-2 -right-2 z-10">
+                              <div className="bg-gradient-to-r from-gray-500 to-gray-600 text-white p-1 rounded-full shadow-lg">
+                                <Clock className="w-3 h-3" />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Blackout badge (holiday/closure) */}
+                          {isBlackout && !tile.loading && (
+                            <div className="absolute -top-2 -right-2 z-10">
+                              <div className="bg-gradient-to-r from-red-500 to-red-600 text-white p-1 rounded-full shadow-lg">
+                                <AlertCircle className="w-3 h-3" />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Grace period badge */}
                           {isGracePeriod && !tile.loading && (
                             <div className="absolute -top-2 -right-2 z-10">
                               <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-1 rounded-full shadow-lg">
@@ -1562,7 +1620,7 @@ export default function DigitalRatecardPage() {
                           )}
 
                           {/* Event badge */}
-                          {!isGracePeriod && overlappingEvent && (
+                          {!isUnavailable && !isGracePeriod && overlappingEvent && (
                             <div className="absolute -top-2 -right-2 z-10">
                               <div className="bg-gradient-to-r from-pink-500 to-purple-600 text-white p-1 rounded-full shadow-lg">
                                 <Calendar className="w-3 h-3" />
@@ -1571,7 +1629,7 @@ export default function DigitalRatecardPage() {
                           )}
 
                           {/* Surge indicator */}
-                          {!isGracePeriod && !overlappingEvent && isSurge && tile.price && tile.price > 0 && (
+                          {!isUnavailable && !isGracePeriod && !overlappingEvent && isSurge && tile.price && tile.price > 0 && (
                             <div className="absolute -top-2 -right-2 z-10">
                               <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-1 rounded-full shadow-lg animate-pulse">
                                 <TrendingUp className="w-3 h-3" />
@@ -1588,26 +1646,36 @@ export default function DigitalRatecardPage() {
                             </div>
                           )}
 
-                          <div className="relative overflow-hidden rounded-xl p-3 h-full bg-gradient-to-br from-slate-50 to-blue-50 border-2 border-slate-200 hover:border-blue-300 transition-colors">
+                          <div className={`relative overflow-hidden rounded-xl p-3 h-full border-2 transition-colors ${
+                            isClosed
+                              ? 'bg-gradient-to-br from-gray-100 to-gray-200 border-gray-300 hover:border-gray-400'
+                              : isBlackout
+                              ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-300 hover:border-red-400'
+                              : 'bg-gradient-to-br from-slate-50 to-blue-50 border-slate-200 hover:border-blue-300'
+                          }`}>
                             {/* Hour range label */}
                             <div className="flex items-center gap-1 mb-2">
-                              <Clock className="w-3 h-3 text-slate-400" />
-                              <div className="text-xs font-bold text-slate-700">
+                              <Clock className={`w-3 h-3 ${isClosed ? 'text-gray-500' : isBlackout ? 'text-red-400' : 'text-slate-400'}`} />
+                              <div className={`text-xs font-bold ${isClosed ? 'text-gray-600' : isBlackout ? 'text-red-700' : 'text-slate-700'}`}>
                                 {formatTime(tile.hour)} → {formatTime(tile.hourEnd)}
                               </div>
                             </div>
 
                             {/* Date - ALWAYS show */}
-                            <div className="text-xs text-slate-500 mb-2">
+                            <div className={`text-xs mb-2 ${isClosed ? 'text-gray-500' : isBlackout ? 'text-red-400' : 'text-slate-500'}`}>
                               {tile.hour.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                             </div>
 
-                            {/* Price */}
+                            {/* Price / Status */}
                             <div className="mb-2">
                               {tile.loading ? (
                                 <div className="flex items-center justify-center">
                                   <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-blue-500"></div>
                                 </div>
+                              ) : isClosed ? (
+                                <div className="text-lg font-bold text-gray-500">CLOSED</div>
+                              ) : isBlackout ? (
+                                <div className="text-lg font-bold text-red-600">BLACKOUT</div>
                               ) : tile.price !== null ? (
                                 <div className={`text-xl font-bold ${
                                   isGracePeriod ? 'text-green-600' : isSurge ? 'text-orange-600' : overlappingEvent ? 'text-purple-600' : 'text-slate-900'
@@ -1619,21 +1687,27 @@ export default function DigitalRatecardPage() {
                               )}
                             </div>
 
-                            {/* Rate this Hr indicator */}
-                            {tile.price !== null && !tile.loading && (
+                            {/* Status indicator */}
+                            {!tile.loading && (
                               <div className="text-[10px] text-slate-400 font-normal">
-                                {isGracePeriod ? 'Grace Period' : 'Rate this Hr'}
+                                {isClosed ? 'Outside Hours' : isBlackout ? 'Holiday/Closure' : isGracePeriod ? 'Grace Period' : 'Rate this Hr'}
                               </div>
                             )}
 
                             {/* Visual indicators */}
+                            {isClosed && (
+                              <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-gray-500 to-gray-600 rounded-b-xl"></div>
+                            )}
+                            {isBlackout && (
+                              <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 to-red-600 rounded-b-xl"></div>
+                            )}
                             {isGracePeriod && (
                               <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-green-500 to-emerald-600 rounded-b-xl"></div>
                             )}
-                            {!isGracePeriod && isSurge && !overlappingEvent && (
+                            {!isUnavailable && !isGracePeriod && isSurge && !overlappingEvent && (
                               <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-orange-500 to-red-600 rounded-b-xl"></div>
                             )}
-                            {!isGracePeriod && overlappingEvent && (
+                            {!isUnavailable && !isGracePeriod && overlappingEvent && (
                               <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-pink-500 to-purple-600 rounded-b-xl"></div>
                             )}
                           </div>
@@ -1761,13 +1835,17 @@ export default function DigitalRatecardPage() {
                             return eventEnd >= tile.hour && eventStart <= tile.hourEnd;
                           });
 
-                          const isGracePeriod = tile.price === 0;
+                          // Determine availability status
+                          const isClosed = tile.isAvailable === false && tile.unavailableReason === 'CLOSED';
+                          const isBlackout = tile.isAvailable === false && tile.unavailableReason === 'BLACKOUT';
+                          const isUnavailable = isClosed || isBlackout;
+                          const isGracePeriod = tile.price === 0 && !isUnavailable;
 
                           return (
                             <tr
                               key={index}
                               className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
-                                isGracePeriod ? 'bg-green-50/50' : overlappingEvent ? 'bg-purple-50/50' : isSurge ? 'bg-orange-50/50' : ''
+                                isClosed ? 'bg-gray-100/70' : isBlackout ? 'bg-red-50/50' : isGracePeriod ? 'bg-green-50/50' : overlappingEvent ? 'bg-purple-50/50' : isSurge ? 'bg-orange-50/50' : ''
                               }`}
                             >
                               <td className="py-3 px-4">
@@ -1796,6 +1874,15 @@ export default function DigitalRatecardPage() {
                                     <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-blue-500"></div>
                                     <span className="text-xs text-slate-500">Loading...</span>
                                   </div>
+                                ) : isUnavailable ? (
+                                  <div>
+                                    <div className={`text-lg font-bold ${isClosed ? 'text-gray-500' : 'text-red-600'}`}>
+                                      —
+                                    </div>
+                                    <div className="text-xs text-slate-400">
+                                      {isClosed ? 'Closed' : 'Blackout'}
+                                    </div>
+                                  </div>
                                 ) : tile.price !== null ? (
                                   <div>
                                     <div className={`text-lg font-bold ${
@@ -1812,7 +1899,17 @@ export default function DigitalRatecardPage() {
                                 )}
                               </td>
                               <td className="py-3 px-4 text-center">
-                                {isGracePeriod ? (
+                                {isClosed ? (
+                                  <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-gray-400 to-gray-500 text-white text-xs font-bold rounded-full">
+                                    <Clock className="w-3 h-3" />
+                                    Closed
+                                  </span>
+                                ) : isBlackout ? (
+                                  <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-red-500 to-red-600 text-white text-xs font-bold rounded-full">
+                                    <Calendar className="w-3 h-3" />
+                                    Blackout
+                                  </span>
+                                ) : isGracePeriod ? (
                                   <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-green-500 to-emerald-600 text-white text-xs font-bold rounded-full">
                                     <Gift className="w-3 h-3" />
                                     Grace

@@ -30,6 +30,7 @@ export async function GET(request: Request) {
       maxCapacity: sl.maxCapacity,
       defaultCapacity: sl.defaultCapacity,
       allocatedCapacity: sl.allocatedCapacity,
+      capacityConfig: sl.capacityConfig,
       attributes: sl.attributes,
       pricingEnabled: sl.pricingEnabled ?? false,
       isActive: sl.isActive ?? true,

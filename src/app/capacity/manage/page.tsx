@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { getMonthlyGoalTotal, getMonthlyOccupancyPercentage, getCurrentWeekProgress, getPlanningCoverage } from '@/lib/capacity-utils';
 import HourlyBreakdownTable from '@/components/HourlyBreakdownTable';
+import DayCapacityMiniBar from '@/components/DayCapacityMiniBar';
 
 interface Customer {
   _id: string;
@@ -68,6 +69,13 @@ interface RevenueGoal {
   weeklyGoal?: number;
   monthlyGoal?: number;
   revenueGoalType?: 'max' | 'allocated' | 'custom';
+  customCategoryGoals?: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+  };
 }
 
 interface HourlySegment {
@@ -80,6 +88,25 @@ interface HourlySegment {
   allocatedCapacity: number;
   source: string;
   capacitySheetName?: string;
+  capacitySheetLevel?: string;
+  isAvailable?: boolean;
+  // Per-hour allocation breakdown
+  breakdown?: {
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+    isOverride?: boolean;
+  };
+}
+
+interface CapacityBreakdown {
+  transient: number;
+  events: number;
+  reserved: number;
+  unavailable: number;
+  readyToUse: number;
 }
 
 interface DayCell {
@@ -91,6 +118,7 @@ interface DayCell {
   calculatedCapacity?: number;
   calculatedGoal?: number;
   hourlyBreakdown?: HourlySegment[];
+  capacityBreakdown?: CapacityBreakdown;
 }
 
 export default function CapacityManagementPage() {
@@ -125,6 +153,14 @@ export default function CapacityManagementPage() {
   const [maxCapacity, setMaxCapacity] = useState<number>(100);
   const [dailyGoal, setDailyGoal] = useState<number | undefined>();
   const [revenueGoalType, setRevenueGoalType] = useState<'max' | 'allocated' | 'custom'>('max');
+  // Custom category goals (for custom revenue goal type)
+  const [customCategoryGoals, setCustomCategoryGoals] = useState<{
+    transient: number;
+    events: number;
+    reserved: number;
+    unavailable: number;
+    readyToUse: number;
+  }>({ transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 });
 
   // Aggregation View
   const [showAggregation, setShowAggregation] = useState(false);
@@ -395,6 +431,7 @@ export default function CapacityManagementPage() {
       let calculatedCapacity: number | undefined;
       let calculatedGoal: number | undefined;
       let hourlyBreakdown: HourlySegment[] | undefined;
+      let capacityBreakdown: CapacityBreakdown | undefined;
 
       if (entityType === 'sublocation' && currentEntity?._id) {
         try {
@@ -417,7 +454,7 @@ export default function CapacityManagementPage() {
             const result = await response.json();
             // Calculate sum of all hourly max capacities
             if (result.segments && result.segments.length > 0) {
-              // Build hourly breakdown first
+              // Build hourly breakdown first (include per-hour allocation breakdown from API)
               const breakdown = result.segments.map((seg: any) => ({
                 hour: new Date(seg.startTime).getHours(),
                 startTime: new Date(seg.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
@@ -428,6 +465,17 @@ export default function CapacityManagementPage() {
                 allocatedCapacity: seg.allocatedCapacity,
                 source: seg.source,
                 capacitySheetName: seg.capacitySheet?.name,
+                capacitySheetLevel: seg.capacitySheet?.level,
+                isAvailable: seg.isAvailable,
+                // Per-hour allocation breakdown (from capacity calculate API)
+                breakdown: seg.breakdown ? {
+                  transient: seg.breakdown.transient,
+                  events: seg.breakdown.events,
+                  reserved: seg.breakdown.reserved,
+                  unavailable: seg.breakdown.unavailable,
+                  readyToUse: seg.breakdown.readyToUse,
+                  isOverride: seg.breakdown.isOverride,
+                } : undefined,
               }));
 
               hourlyBreakdown = breakdown;
@@ -439,6 +487,53 @@ export default function CapacityManagementPage() {
               // Revenue = hourlyRate * SUM(hourly capacities)
               if (currentEntity.defaultHourlyRate && calculatedCapacity) {
                 calculatedGoal = Math.round(currentEntity.defaultHourlyRate * calculatedCapacity);
+              }
+
+              // Use API's allocationBreakdown if available (includes stored defaultCapacities)
+              // This ensures consistency with other capacity pages
+              if (result.allocationBreakdown) {
+                capacityBreakdown = {
+                  transient: result.allocationBreakdown.allocated.transient,
+                  events: result.allocationBreakdown.allocated.events,
+                  reserved: result.allocationBreakdown.allocated.reserved,
+                  unavailable: result.allocationBreakdown.unallocated.unavailable,
+                  readyToUse: result.allocationBreakdown.unallocated.readyToUse,
+                };
+              } else {
+                // Fallback: Calculate capacity breakdown from segments
+                // - Transient: allocated capacity from non-EVENT sources
+                // - Events: allocated capacity from EVENT sources
+                // - Reserved: pre-reserved capacity (not dynamically calculated here)
+                // - Unavailable: hours where source is OPERATING_HOURS and isAvailable is false
+                // - ReadyToUse: buffer capacity available for future allocation (max - allocated)
+                let transientCapacity = 0;
+                let eventsCapacity = 0;
+                let unavailableCapacity = 0;
+                let readyToUseCapacity = 0;
+
+                for (const seg of result.segments) {
+                  // Check if this hour is unavailable (closed/blackout)
+                  if (seg.source === 'OPERATING_HOURS' && seg.isAvailable === false) {
+                    unavailableCapacity += seg.maxCapacity || 0;
+                  } else {
+                    // Categorize allocated capacity
+                    if (seg.capacitySheet?.level === 'EVENT') {
+                      eventsCapacity += seg.allocatedCapacity || 0;
+                    } else {
+                      transientCapacity += seg.allocatedCapacity || 0;
+                    }
+                    // ReadyToUse = buffer capacity available for future allocation
+                    readyToUseCapacity += Math.max(0, (seg.maxCapacity || 0) - (seg.allocatedCapacity || 0));
+                  }
+                }
+
+                capacityBreakdown = {
+                  transient: transientCapacity,
+                  events: eventsCapacity,
+                  reserved: 0, // Reserved is set explicitly, not computed from segments
+                  unavailable: unavailableCapacity,
+                  readyToUse: readyToUseCapacity,
+                };
               }
             }
           }
@@ -456,6 +551,7 @@ export default function CapacityManagementPage() {
         calculatedCapacity,
         calculatedGoal,
         hourlyBreakdown,
+        capacityBreakdown,
       });
     }
 
@@ -519,9 +615,11 @@ export default function CapacityManagementPage() {
           // Calculate from allocated capacity
           const totalAllocated = selectedCell.hourlyBreakdown.reduce((sum, seg) => sum + seg.allocatedCapacity, 0);
           goalToSave = Math.round(currentEntity.defaultHourlyRate * totalAllocated);
-        } else if (revenueGoalType === 'custom' && dailyGoal) {
-          // Use custom value
-          goalToSave = dailyGoal;
+        } else if (revenueGoalType === 'custom') {
+          // Calculate from custom category goals (sum of all categories × hourly rate)
+          const customTotal = customCategoryGoals.transient + customCategoryGoals.events +
+            customCategoryGoals.reserved + customCategoryGoals.unavailable + customCategoryGoals.readyToUse;
+          goalToSave = Math.round(currentEntity.defaultHourlyRate * customTotal);
         }
       }
 
@@ -535,7 +633,9 @@ export default function CapacityManagementPage() {
             startDate: selectedDate,
             endDate: selectedDate,
             dailyGoal: goalToSave,
-            revenueGoalType: revenueGoalType, // Store the type with the goal
+            revenueGoalType: revenueGoalType,
+            // Include custom category goals when type is 'custom'
+            ...(revenueGoalType === 'custom' && { customCategoryGoals }),
           }),
         });
 
@@ -878,6 +978,96 @@ export default function CapacityManagementPage() {
             </div>
           </div>
 
+          {/* Default Capacity Allocation Breakdown - Only for sublocations with defaultCapacities */}
+          {entityType === 'sublocation' && currentEntity.capacityConfig?.defaultCapacities && (
+            <div className="mb-6 p-4 bg-gradient-to-r from-teal-50 to-green-50 rounded-lg border border-teal-200">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Users className="w-4 h-4 text-teal-600" />
+                Default Capacity Allocation
+              </h3>
+              <div className="grid grid-cols-5 gap-3">
+                {/* Transient */}
+                <div className="bg-white rounded-lg p-3 border border-teal-200 text-center">
+                  <div className="flex items-center justify-center gap-1 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-teal-500" />
+                    <span className="text-xs font-medium text-gray-600">Transient</span>
+                  </div>
+                  <div className="text-lg font-bold text-teal-600">
+                    {currentEntity.capacityConfig.defaultCapacities.allocated.transient}
+                  </div>
+                </div>
+                {/* Events */}
+                <div className="bg-white rounded-lg p-3 border border-pink-200 text-center">
+                  <div className="flex items-center justify-center gap-1 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-pink-500" />
+                    <span className="text-xs font-medium text-gray-600">Events</span>
+                  </div>
+                  <div className="text-lg font-bold text-pink-600">
+                    {currentEntity.capacityConfig.defaultCapacities.allocated.events}
+                  </div>
+                </div>
+                {/* Reserved */}
+                <div className="bg-white rounded-lg p-3 border border-violet-200 text-center">
+                  <div className="flex items-center justify-center gap-1 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-violet-500" />
+                    <span className="text-xs font-medium text-gray-600">Reserved</span>
+                  </div>
+                  <div className="text-lg font-bold text-violet-600">
+                    {currentEntity.capacityConfig.defaultCapacities.allocated.reserved}
+                  </div>
+                </div>
+                {/* Unavailable */}
+                <div className="bg-white rounded-lg p-3 border border-gray-200 text-center">
+                  <div className="flex items-center justify-center gap-1 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-gray-400" />
+                    <span className="text-xs font-medium text-gray-600">Unavailable</span>
+                  </div>
+                  <div className="text-lg font-bold text-gray-500">
+                    {currentEntity.capacityConfig.defaultCapacities.unallocated.unavailable}
+                  </div>
+                </div>
+                {/* Ready To Use */}
+                <div className="bg-white rounded-lg p-3 border border-amber-200 text-center">
+                  <div className="flex items-center justify-center gap-1 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span className="text-xs font-medium text-gray-600">Ready To Use</span>
+                  </div>
+                  <div className="text-lg font-bold text-amber-600">
+                    {currentEntity.capacityConfig.defaultCapacities.unallocated.readyToUse}
+                  </div>
+                </div>
+              </div>
+              {/* Stacked bar visualization */}
+              <div className="mt-3">
+                {(() => {
+                  const dc = currentEntity.capacityConfig.defaultCapacities;
+                  const total = dc.allocated.transient + dc.allocated.events + dc.allocated.reserved + dc.unallocated.unavailable + dc.unallocated.readyToUse;
+                  if (total === 0) return null;
+                  const pct = (val: number) => Math.round((val / total) * 100);
+                  return (
+                    <div className="h-4 rounded-full overflow-hidden bg-gray-200 flex">
+                      {pct(dc.allocated.transient) > 0 && (
+                        <div className="h-full" style={{ width: `${pct(dc.allocated.transient)}%`, backgroundColor: '#14B8A6' }} title={`Transient: ${pct(dc.allocated.transient)}%`} />
+                      )}
+                      {pct(dc.allocated.events) > 0 && (
+                        <div className="h-full" style={{ width: `${pct(dc.allocated.events)}%`, backgroundColor: '#EC4899' }} title={`Events: ${pct(dc.allocated.events)}%`} />
+                      )}
+                      {pct(dc.allocated.reserved) > 0 && (
+                        <div className="h-full" style={{ width: `${pct(dc.allocated.reserved)}%`, backgroundColor: '#8B5CF6' }} title={`Reserved: ${pct(dc.allocated.reserved)}%`} />
+                      )}
+                      {pct(dc.unallocated.unavailable) > 0 && (
+                        <div className="h-full" style={{ width: `${pct(dc.unallocated.unavailable)}%`, backgroundColor: '#9CA3AF' }} title={`Unavailable: ${pct(dc.unallocated.unavailable)}%`} />
+                      )}
+                      {pct(dc.unallocated.readyToUse) > 0 && (
+                        <div className="h-full" style={{ width: `${pct(dc.unallocated.readyToUse)}%`, backgroundColor: '#F59E0B' }} title={`Ready To Use: ${pct(dc.unallocated.readyToUse)}%`} />
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
           {/* Calendar View */}
           <div className="mb-4">
             <div className="flex justify-between items-center mb-4">
@@ -945,6 +1135,27 @@ export default function CapacityManagementPage() {
                       setDailyGoal(cell.revenueGoal?.dailyGoal);
                       // Initialize from revenue goal's type, default to 'max' if not set
                       setRevenueGoalType(cell.revenueGoal?.revenueGoalType || 'max');
+                      // Initialize customCategoryGoals: prioritize saved values, fallback to hourly breakdown totals
+                      if (cell.revenueGoal?.customCategoryGoals) {
+                        // Restore saved custom category goals
+                        setCustomCategoryGoals(cell.revenueGoal.customCategoryGoals);
+                      } else if (cell.hourlyBreakdown) {
+                        // Fallback: calculate from hourly breakdown totals
+                        const sanitize = (val: number | undefined) => (val !== undefined && val >= 0) ? val : 0;
+                        const totals = cell.hourlyBreakdown.reduce((acc, seg) => {
+                          const b = seg.breakdown || { transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 };
+                          return {
+                            transient: acc.transient + sanitize(b.transient),
+                            events: acc.events + sanitize(b.events),
+                            reserved: acc.reserved + sanitize(b.reserved),
+                            unavailable: acc.unavailable + sanitize(b.unavailable),
+                            readyToUse: acc.readyToUse + sanitize(b.readyToUse),
+                          };
+                        }, { transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 });
+                        setCustomCategoryGoals(totals);
+                      } else {
+                        setCustomCategoryGoals({ transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 });
+                      }
                       setShowCapacityModal(true);
                     }}
                   >
@@ -996,6 +1207,17 @@ export default function CapacityManagementPage() {
                           : 'bg-blue-100 text-blue-700'
                       }`}>
                         {cell.revenueGoal.revenueGoalType === 'max' ? 'MAX' : cell.revenueGoal.revenueGoalType === 'allocated' ? 'ALLOC' : 'CUSTOM'}
+                      </div>
+                    )}
+
+                    {/* Capacity Breakdown Mini Bar */}
+                    {cell.capacityBreakdown && (
+                      <div className="mt-2">
+                        <DayCapacityMiniBar
+                          breakdown={cell.capacityBreakdown}
+                          totalCapacity={cell.calculatedCapacity || 100}
+                          compact={true}
+                        />
                       </div>
                     )}
                   </div>
@@ -1260,137 +1482,378 @@ export default function CapacityManagementPage() {
                 </p>
 
                 {/* Revenue Goal Calculation Table */}
-                {selectedCell?.hourlyBreakdown && selectedCell.hourlyBreakdown.length > 0 && currentEntity.defaultHourlyRate && (
-                  <div className="mb-4 overflow-hidden border border-gray-200 rounded-lg">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="px-4 py-2 text-center text-xs font-semibold text-gray-700 border-b w-16">Active</th>
-                          <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 border-b">Calculation Method</th>
-                          <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 border-b">Total Capacity</th>
-                          <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 border-b">Revenue Goal</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-100">
-                        {/* Max Capacity Calculation */}
-                        <tr className={`hover:bg-gray-50 ${revenueGoalType === 'max' ? 'bg-green-50' : ''}`}>
-                          <td className="px-4 py-3 text-center">
-                            <input
-                              type="radio"
-                              name="revenueGoalType"
-                              value="max"
-                              checked={revenueGoalType === 'max'}
-                              onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
-                              className="w-4 h-4 text-green-600 focus:ring-2 focus:ring-green-500 cursor-pointer"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                              <span className="font-medium text-gray-900">Max Capacity</span>
-                            </div>
-                            <div className="text-xs text-gray-500 ml-4 mt-0.5">
-                              Sum of all hourly max capacities
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-semibold text-green-600">
-                              {selectedCell.hourlyBreakdown.reduce((sum, seg) => sum + seg.maxCapacity, 0)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-bold text-green-700">
-                              ${(() => {
-                                const totalMax = selectedCell.hourlyBreakdown.reduce((sum, seg) => sum + seg.maxCapacity, 0);
-                                return Math.round(currentEntity.defaultHourlyRate * totalMax).toLocaleString();
-                              })()}
-                            </span>
-                          </td>
-                        </tr>
+                {selectedCell?.hourlyBreakdown && selectedCell.hourlyBreakdown.length > 0 && currentEntity.defaultHourlyRate && (() => {
+                  // Helper to sanitize breakdown values (-9 = UNKNOWN becomes 0)
+                  // This matches HourlyBreakdownTable's getBreakdown() logic
+                  const sanitizeValue = (val: number | undefined) => (val !== undefined && val >= 0) ? val : 0;
 
-                        {/* Allocated Capacity Calculation */}
-                        <tr className={`hover:bg-gray-50 ${revenueGoalType === 'allocated' ? 'bg-purple-50' : ''}`}>
-                          <td className="px-4 py-3 text-center">
-                            <input
-                              type="radio"
-                              name="revenueGoalType"
-                              value="allocated"
-                              checked={revenueGoalType === 'allocated'}
-                              onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
-                              className="w-4 h-4 text-purple-600 focus:ring-2 focus:ring-purple-500 cursor-pointer"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                              <span className="font-medium text-gray-900">Allocated Capacity</span>
-                            </div>
-                            <div className="text-xs text-gray-500 ml-4 mt-0.5">
-                              Sum of all hourly allocated capacities
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-semibold text-purple-600">
-                              {selectedCell.hourlyBreakdown.reduce((sum, seg) => sum + seg.allocatedCapacity, 0)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-bold text-purple-700">
-                              ${(() => {
-                                const totalAllocated = selectedCell.hourlyBreakdown.reduce((sum, seg) => sum + seg.allocatedCapacity, 0);
-                                return Math.round(currentEntity.defaultHourlyRate * totalAllocated).toLocaleString();
-                              })()}
-                            </span>
-                          </td>
-                        </tr>
+                  // Calculate totals for all allocation categories from hourly breakdown
+                  const totals = selectedCell.hourlyBreakdown.reduce((acc, seg) => {
+                    const breakdown = seg.breakdown || { transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 };
+                    return {
+                      maxCapacity: acc.maxCapacity + seg.maxCapacity,
+                      allocatedCapacity: acc.allocatedCapacity + seg.allocatedCapacity,
+                      transient: acc.transient + sanitizeValue(breakdown.transient),
+                      events: acc.events + sanitizeValue(breakdown.events),
+                      reserved: acc.reserved + sanitizeValue(breakdown.reserved),
+                      unavailable: acc.unavailable + sanitizeValue(breakdown.unavailable),
+                      readyToUse: acc.readyToUse + sanitizeValue(breakdown.readyToUse),
+                    };
+                  }, { maxCapacity: 0, allocatedCapacity: 0, transient: 0, events: 0, reserved: 0, unavailable: 0, readyToUse: 0 });
 
-                        {/* Custom Override */}
-                        <tr className={`hover:bg-blue-100 ${revenueGoalType === 'custom' ? 'bg-blue-100' : 'bg-blue-50'}`}>
-                          <td className="px-4 py-3 text-center">
-                            <input
-                              type="radio"
-                              name="revenueGoalType"
-                              value="custom"
-                              checked={revenueGoalType === 'custom'}
-                              onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
-                              className="w-4 h-4 text-blue-600 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  // Allocation category colors
+                  const categoryColors = {
+                    transient: '#14B8A6',
+                    events: '#EC4899',
+                    reserved: '#8B5CF6',
+                    unavailable: '#9CA3AF',
+                    readyToUse: '#F59E0B',
+                  };
+
+                  // Hourly rate for revenue calculations
+                  const hourlyRate = currentEntity.defaultHourlyRate;
+
+                  // Mini bar component for allocation breakdown with revenue
+                  // -9 indicates unknown/not tracked value
+                  const UNKNOWN_VALUE = -9;
+                  const isUnknownOrZero = (val: number) => val <= 0 || val === UNKNOWN_VALUE;
+                  const displayValue = (val: number) => val === UNKNOWN_VALUE || val < 0 ? '—' : val.toString();
+                  const displayRevenue = (val: number) => val === UNKNOWN_VALUE || val < 0 ? '—' : `$${Math.round(hourlyRate * val).toLocaleString()}`;
+
+                  const AllocationMiniBar = ({ categories, total, showAllCategories = false }: { categories: { name: string; value: number; color: string }[]; total: number; showAllCategories?: boolean }) => (
+                    <div className="space-y-1.5">
+                      <div className="flex h-3 rounded-full overflow-hidden bg-gray-200">
+                        {categories.map((cat, idx) => {
+                          const effectiveValue = cat.value > 0 ? cat.value : 0;
+                          const width = total > 0 ? (effectiveValue / total) * 100 : 0;
+                          return width > 0 ? (
+                            <div
+                              key={idx}
+                              style={{ width: `${width}%`, backgroundColor: cat.color }}
+                              title={`${cat.name}: ${displayValue(cat.value)} (${displayRevenue(cat.value)})`}
                             />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                              <span className="font-medium text-gray-900">Custom Override</span>
-                            </div>
-                            <div className="text-xs text-gray-500 ml-4 mt-0.5">
-                              Manual target value
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">
-                            N/A
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end">
-                              <span className="font-bold text-gray-900 mr-1">$</span>
+                          ) : null;
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
+                        {categories.filter(c => showAllCategories || c.value > 0).map((cat, idx) => (
+                          <span key={idx} className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
+                            <span className="text-gray-600">{cat.name}:</span>
+                            <span className={`font-medium ${isUnknownOrZero(cat.value) ? 'text-gray-400' : 'text-gray-900'}`}>
+                              {displayValue(cat.value)}
+                            </span>
+                            <span className="text-gray-400">•</span>
+                            <span className={`font-semibold ${isUnknownOrZero(cat.value) ? 'text-gray-400' : 'text-green-700'}`}>
+                              {displayRevenue(cat.value)}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+
+                  return (
+                    <div className="mb-4 overflow-hidden border border-gray-200 rounded-lg">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-b w-12">Active</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 border-b w-36">Calculation Method</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 border-b">Allocation Breakdown</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 border-b w-20">Total</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 border-b w-24">Revenue Goal</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                          {/* Max Capacity Calculation */}
+                          <tr className={`hover:bg-gray-50 ${revenueGoalType === 'max' ? 'bg-green-50' : ''}`}>
+                            <td className="px-3 py-3 text-center">
                               <input
-                                type="number"
-                                value={dailyGoal || ''}
-                                onChange={(e) => {
-                                  setDailyGoal(e.target.value ? Number(e.target.value) : undefined);
-                                  if (e.target.value) {
-                                    setRevenueGoalType('custom');
-                                  }
-                                }}
-                                className="w-32 px-2 py-1 border border-blue-300 rounded text-right text-gray-900 focus:ring-2 focus:ring-blue-500 font-semibold"
-                                placeholder="Enter amount"
-                                min={0}
+                                type="radio"
+                                name="revenueGoalType"
+                                value="max"
+                                checked={revenueGoalType === 'max'}
+                                onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
+                                className="w-4 h-4 text-green-600 focus:ring-2 focus:ring-green-500 cursor-pointer"
                               />
-                            </div>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                            </td>
+                            <td className="px-3 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                <span className="font-medium text-gray-900">Max Capacity</span>
+                              </div>
+                              <div className="text-[10px] text-gray-500 ml-4 mt-0.5">
+                                All categories included
+                              </div>
+                            </td>
+                            <td className="px-3 py-3">
+                              <AllocationMiniBar
+                                categories={[
+                                  { name: 'Transient', value: totals.transient, color: categoryColors.transient },
+                                  { name: 'Events', value: totals.events, color: categoryColors.events },
+                                  { name: 'Reserved', value: totals.reserved, color: categoryColors.reserved },
+                                  { name: 'Unavailable', value: totals.unavailable, color: categoryColors.unavailable },
+                                  { name: 'Ready to Use', value: totals.readyToUse, color: categoryColors.readyToUse },
+                                ]}
+                                total={totals.maxCapacity}
+                                showAllCategories={true}
+                              />
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <span className="font-semibold text-green-600">
+                                {totals.maxCapacity}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <span className="font-bold text-green-700">
+                                ${Math.round(currentEntity.defaultHourlyRate * totals.maxCapacity).toLocaleString()}
+                              </span>
+                            </td>
+                          </tr>
+
+                          {/* Allocated Capacity Calculation */}
+                          <tr className={`hover:bg-gray-50 ${revenueGoalType === 'allocated' ? 'bg-purple-50' : ''}`}>
+                            <td className="px-3 py-3 text-center">
+                              <input
+                                type="radio"
+                                name="revenueGoalType"
+                                value="allocated"
+                                checked={revenueGoalType === 'allocated'}
+                                onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
+                                className="w-4 h-4 text-purple-600 focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                <span className="font-medium text-gray-900">Allocated</span>
+                              </div>
+                              <div className="text-[10px] text-gray-500 ml-4 mt-0.5">
+                                Transient + Events + Reserved
+                              </div>
+                            </td>
+                            <td className="px-3 py-3">
+                              <AllocationMiniBar
+                                categories={[
+                                  { name: 'Transient', value: totals.transient, color: categoryColors.transient },
+                                  { name: 'Events', value: totals.events, color: categoryColors.events },
+                                  { name: 'Reserved', value: totals.reserved, color: categoryColors.reserved },
+                                ]}
+                                total={totals.allocatedCapacity}
+                                showAllCategories={true}
+                              />
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <span className="font-semibold text-purple-600">
+                                {totals.allocatedCapacity}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <span className="font-bold text-purple-700">
+                                ${Math.round(currentEntity.defaultHourlyRate * totals.allocatedCapacity).toLocaleString()}
+                              </span>
+                            </td>
+                          </tr>
+
+                          {/* Custom Override */}
+                          <tr className={`hover:bg-blue-100 ${revenueGoalType === 'custom' ? 'bg-blue-100' : 'bg-blue-50'}`}>
+                            <td className="px-3 py-3 text-center align-top pt-4">
+                              <input
+                                type="radio"
+                                name="revenueGoalType"
+                                value="custom"
+                                checked={revenueGoalType === 'custom'}
+                                onChange={(e) => setRevenueGoalType(e.target.value as 'max' | 'allocated' | 'custom')}
+                                className="w-4 h-4 text-blue-600 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                <span className="font-medium text-gray-900">Custom</span>
+                              </div>
+                              <div className="text-[10px] text-gray-500 ml-4 mt-0.5">
+                                Define per category
+                              </div>
+                            </td>
+                            <td className="px-3 py-3" colSpan={3}>
+                              {/* Custom category inputs */}
+                              <div className="space-y-2">
+                                {/* Mini bar visualization */}
+                                {(() => {
+                                  const customTotal = customCategoryGoals.transient + customCategoryGoals.events + customCategoryGoals.reserved + customCategoryGoals.unavailable + customCategoryGoals.readyToUse;
+                                  return customTotal > 0 ? (
+                                    <div className="flex h-2 rounded-full overflow-hidden bg-gray-200 mb-2">
+                                      {customCategoryGoals.transient > 0 && (
+                                        <div style={{ width: `${(customCategoryGoals.transient / customTotal) * 100}%`, backgroundColor: categoryColors.transient }} />
+                                      )}
+                                      {customCategoryGoals.events > 0 && (
+                                        <div style={{ width: `${(customCategoryGoals.events / customTotal) * 100}%`, backgroundColor: categoryColors.events }} />
+                                      )}
+                                      {customCategoryGoals.reserved > 0 && (
+                                        <div style={{ width: `${(customCategoryGoals.reserved / customTotal) * 100}%`, backgroundColor: categoryColors.reserved }} />
+                                      )}
+                                      {customCategoryGoals.unavailable > 0 && (
+                                        <div style={{ width: `${(customCategoryGoals.unavailable / customTotal) * 100}%`, backgroundColor: categoryColors.unavailable }} />
+                                      )}
+                                      {customCategoryGoals.readyToUse > 0 && (
+                                        <div style={{ width: `${(customCategoryGoals.readyToUse / customTotal) * 100}%`, backgroundColor: categoryColors.readyToUse }} />
+                                      )}
+                                    </div>
+                                  ) : null;
+                                })()}
+
+                                {/* Category input grid */}
+                                {(() => {
+                                  const maxCapacity = totals.maxCapacity;
+                                  const customTotal = customCategoryGoals.transient + customCategoryGoals.events + customCategoryGoals.reserved + customCategoryGoals.unavailable + customCategoryGoals.readyToUse;
+                                  const isOverMax = customTotal > maxCapacity;
+
+                                  // Validation helper for category updates
+                                  const handleCategoryChange = (category: keyof typeof customCategoryGoals, newValue: number) => {
+                                    const otherCategoriesTotal = customTotal - customCategoryGoals[category];
+                                    const newTotal = otherCategoriesTotal + newValue;
+
+                                    if (newValue < 0) {
+                                      alert('Category values cannot be negative.');
+                                      return;
+                                    }
+
+                                    if (newTotal > maxCapacity) {
+                                      alert(`Total capacity (${newTotal}) would exceed maximum capacity (${maxCapacity}).\n\nYou can redistribute capacity between categories, but the total cannot exceed ${maxCapacity}.`);
+                                      return;
+                                    }
+
+                                    setCustomCategoryGoals(prev => ({ ...prev, [category]: newValue }));
+                                    setRevenueGoalType('custom');
+                                  };
+
+                                  return (
+                                    <>
+                                      <div className="grid grid-cols-5 gap-2">
+                                        {/* Transient */}
+                                        <div className="flex flex-col">
+                                          <label className="text-[9px] font-medium text-gray-500 mb-0.5 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryColors.transient }} />
+                                            Transient
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={customCategoryGoals.transient || ''}
+                                            onChange={(e) => handleCategoryChange('transient', e.target.value ? Number(e.target.value) : 0)}
+                                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs text-gray-900 focus:ring-1 focus:ring-blue-500 text-right"
+                                            placeholder="0"
+                                            min={0}
+                                          />
+                                          <span className="text-[9px] text-green-600 mt-0.5 text-right">
+                                            ${Math.round(hourlyRate * customCategoryGoals.transient).toLocaleString()}
+                                          </span>
+                                        </div>
+                                        {/* Events */}
+                                        <div className="flex flex-col">
+                                          <label className="text-[9px] font-medium text-gray-500 mb-0.5 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryColors.events }} />
+                                            Events
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={customCategoryGoals.events || ''}
+                                            onChange={(e) => handleCategoryChange('events', e.target.value ? Number(e.target.value) : 0)}
+                                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs text-gray-900 focus:ring-1 focus:ring-blue-500 text-right"
+                                            placeholder="0"
+                                            min={0}
+                                          />
+                                          <span className="text-[9px] text-green-600 mt-0.5 text-right">
+                                            ${Math.round(hourlyRate * customCategoryGoals.events).toLocaleString()}
+                                          </span>
+                                        </div>
+                                        {/* Reserved */}
+                                        <div className="flex flex-col">
+                                          <label className="text-[9px] font-medium text-gray-500 mb-0.5 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryColors.reserved }} />
+                                            Reserved
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={customCategoryGoals.reserved || ''}
+                                            onChange={(e) => handleCategoryChange('reserved', e.target.value ? Number(e.target.value) : 0)}
+                                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs text-gray-900 focus:ring-1 focus:ring-blue-500 text-right"
+                                            placeholder="0"
+                                            min={0}
+                                          />
+                                          <span className="text-[9px] text-green-600 mt-0.5 text-right">
+                                            ${Math.round(hourlyRate * customCategoryGoals.reserved).toLocaleString()}
+                                          </span>
+                                        </div>
+                                        {/* Unavailable */}
+                                        <div className="flex flex-col">
+                                          <label className="text-[9px] font-medium text-gray-500 mb-0.5 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryColors.unavailable }} />
+                                            Unavail.
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={customCategoryGoals.unavailable || ''}
+                                            onChange={(e) => handleCategoryChange('unavailable', e.target.value ? Number(e.target.value) : 0)}
+                                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs text-gray-900 focus:ring-1 focus:ring-blue-500 text-right"
+                                            placeholder="0"
+                                            min={0}
+                                          />
+                                          <span className="text-[9px] text-green-600 mt-0.5 text-right">
+                                            ${Math.round(hourlyRate * customCategoryGoals.unavailable).toLocaleString()}
+                                          </span>
+                                        </div>
+                                        {/* Ready To Use */}
+                                        <div className="flex flex-col">
+                                          <label className="text-[9px] font-medium text-gray-500 mb-0.5 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryColors.readyToUse }} />
+                                            Ready
+                                          </label>
+                                          <input
+                                            type="number"
+                                            value={customCategoryGoals.readyToUse || ''}
+                                            onChange={(e) => handleCategoryChange('readyToUse', e.target.value ? Number(e.target.value) : 0)}
+                                            className="w-full px-1.5 py-1 border border-gray-300 rounded text-xs text-gray-900 focus:ring-1 focus:ring-blue-500 text-right"
+                                            placeholder="0"
+                                            min={0}
+                                          />
+                                          <span className="text-[9px] text-green-600 mt-0.5 text-right">
+                                            ${Math.round(hourlyRate * customCategoryGoals.readyToUse).toLocaleString()}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Total row with max capacity indicator */}
+                                      <div className={`flex justify-between items-center pt-2 border-t mt-2 ${isOverMax ? 'border-red-300 bg-red-50 -mx-2 px-2 rounded' : 'border-blue-200'}`}>
+                                        <span className="text-xs font-medium text-gray-700">Total Capacity:</span>
+                                        <span className={`font-bold ${isOverMax ? 'text-red-600' : 'text-blue-700'}`}>
+                                          {customTotal} / {maxCapacity}
+                                          {isOverMax && <span className="ml-1 text-red-500">⚠️</span>}
+                                        </span>
+                                        <span className="text-xs font-medium text-gray-700">Revenue Goal:</span>
+                                        <span className={`font-bold ${isOverMax ? 'text-red-600' : 'text-blue-700'}`}>
+                                          ${Math.round(hourlyRate * customTotal).toLocaleString()}
+                                        </span>
+                                      </div>
+
+                                      {/* Warning message when over max */}
+                                      {isOverMax && (
+                                        <div className="mt-2 p-2 bg-red-100 border border-red-300 rounded text-xs text-red-700">
+                                          <strong>⚠️ Exceeds Maximum:</strong> Total ({customTotal}) is greater than max capacity ({maxCapacity}). Please reduce category values.
+                                        </div>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
 
                 <div className="text-xs text-gray-600 bg-white p-3 rounded border border-gray-200">
                   <div className="flex items-start gap-2">
@@ -1440,7 +1903,7 @@ export default function CapacityManagementPage() {
                         if (response.ok) {
                           const result = await response.json();
 
-                          // Build fresh hourly breakdown
+                          // Build fresh hourly breakdown (include per-hour allocation breakdown)
                           if (result.segments && result.segments.length > 0) {
                             const freshBreakdown = result.segments.map((seg: any) => ({
                               hour: new Date(seg.startTime).getHours(),
@@ -1452,6 +1915,17 @@ export default function CapacityManagementPage() {
                               allocatedCapacity: seg.allocatedCapacity,
                               source: seg.source,
                               capacitySheetName: seg.capacitySheet?.name,
+                              capacitySheetLevel: seg.capacitySheet?.level,
+                              isAvailable: seg.isAvailable,
+                              // Per-hour allocation breakdown
+                              breakdown: seg.breakdown ? {
+                                transient: seg.breakdown.transient,
+                                events: seg.breakdown.events,
+                                reserved: seg.breakdown.reserved,
+                                unavailable: seg.breakdown.unavailable,
+                                readyToUse: seg.breakdown.readyToUse,
+                                isOverride: seg.breakdown.isOverride,
+                              } : undefined,
                             }));
 
                             // Calculate fresh capacity values
@@ -1460,12 +1934,25 @@ export default function CapacityManagementPage() {
                               ? Math.round(currentEntity.defaultHourlyRate * calculatedCapacity)
                               : undefined;
 
+                            // Build fresh capacity breakdown from API response
+                            let freshCapacityBreakdown: CapacityBreakdown | undefined;
+                            if (result.allocationBreakdown) {
+                              freshCapacityBreakdown = {
+                                transient: result.allocationBreakdown.allocated.transient,
+                                events: result.allocationBreakdown.allocated.events,
+                                reserved: result.allocationBreakdown.allocated.reserved,
+                                unavailable: result.allocationBreakdown.unallocated.unavailable,
+                                readyToUse: result.allocationBreakdown.unallocated.readyToUse,
+                              };
+                            }
+
                             // Update selected cell with fresh data
                             setSelectedCell({
                               ...selectedCell,
                               calculatedCapacity,
                               calculatedGoal,
                               hourlyBreakdown: freshBreakdown,
+                              capacityBreakdown: freshCapacityBreakdown,
                             });
                           }
                         }

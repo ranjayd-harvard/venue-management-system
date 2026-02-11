@@ -1,8 +1,9 @@
 // src/lib/pricing-engine-hourly.ts
 // Enhanced pricing engine that evaluates each hour individually
 
-import { RateSheet, PricingConfig } from '@/models/types';
+import { RateSheet, PricingConfig, WeeklySchedule, Blackout } from '@/models/types';
 import { getTimeInTimezone, timeToMinutes, isDateInRange } from './timezone-utils';
+import { isWithinOperatingHours, isBlackoutTime } from './operating-hours';
 
 export interface HourlySegment {
   startTime: Date;
@@ -17,11 +18,14 @@ export interface HourlySegment {
     priority: number;
     level: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT' | 'SURGE';
   };
-  source: 'RATESHEET' | 'DEFAULT_RATE';
+  source: 'RATESHEET' | 'DEFAULT_RATE' | 'OPERATING_HOURS';
   timeWindow?: {
     start: string;
     end: string;
   };
+  // Operating hours availability
+  isAvailable?: boolean;
+  unavailableReason?: 'CLOSED' | 'BLACKOUT';
 }
 
 export interface HourlyPricingResult {
@@ -73,6 +77,12 @@ export interface PricingContext {
 
   // Pricing config
   pricingConfig: PricingConfig;
+
+  // Operating hours (resolved from entity hierarchy)
+  operatingHours?: {
+    schedule: WeeklySchedule;
+    blackouts: Blackout[];
+  };
 }
 
 export class HourlyPricingEngine {
@@ -170,6 +180,40 @@ export class HourlyPricingEngine {
     slot: { start: Date; end: Date; durationHours: number },
     context: PricingContext
   ): HourlySegment {
+    // Step 0: Check operating hours (if defined)
+    if (context.operatingHours) {
+      const { schedule, blackouts } = context.operatingHours;
+
+      // Check if in blackout period first (takes precedence)
+      const blackoutCheck = isBlackoutTime(slot.start, blackouts);
+      if (blackoutCheck.isBlackout) {
+        return {
+          startTime: slot.start,
+          endTime: slot.end,
+          durationHours: slot.durationHours,
+          pricePerHour: 0,
+          totalPrice: 0,
+          source: 'OPERATING_HOURS',
+          isAvailable: false,
+          unavailableReason: 'BLACKOUT',
+        };
+      }
+
+      // Check if within operating hours
+      if (!isWithinOperatingHours(slot.start, schedule)) {
+        return {
+          startTime: slot.start,
+          endTime: slot.end,
+          durationHours: slot.durationHours,
+          pricePerHour: 0,
+          totalPrice: 0,
+          source: 'OPERATING_HOURS',
+          isAvailable: false,
+          unavailableReason: 'CLOSED',
+        };
+      }
+    }
+
     // Step 1: Find all applicable ratesheets for this hour
     const applicableRatesheets = this.findApplicableRatesheetsForHour(
       slot.start,

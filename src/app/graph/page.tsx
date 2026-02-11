@@ -24,6 +24,56 @@ export default function GraphPage() {
           <GraphVisualization />
         </div>
 
+        {/* Capacity Allocation Categories Legend */}
+        <div className="mt-6 bg-gradient-to-r from-teal-50 to-amber-50 border border-teal-200 rounded-lg p-6">
+          <h3 className="text-lg font-semibold text-teal-900 mb-4">Capacity Allocation Categories</h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {/* Transient */}
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#14B8A6' }}></div>
+              <div>
+                <div className="text-sm font-medium text-gray-900">Transient</div>
+                <div className="text-xs text-gray-600">Walk-ins</div>
+              </div>
+            </div>
+            {/* Events */}
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#EC4899' }}></div>
+              <div>
+                <div className="text-sm font-medium text-gray-900">Events</div>
+                <div className="text-xs text-gray-600">Booked events</div>
+              </div>
+            </div>
+            {/* Reserved */}
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#8B5CF6' }}></div>
+              <div>
+                <div className="text-sm font-medium text-gray-900">Reserved</div>
+                <div className="text-xs text-gray-600">Pre-set</div>
+              </div>
+            </div>
+            {/* Unavailable */}
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#9CA3AF' }}></div>
+              <div>
+                <div className="text-sm font-medium text-gray-900">Unavailable</div>
+                <div className="text-xs text-gray-600">Closed/Blackout</div>
+              </div>
+            </div>
+            {/* Ready To Use */}
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#F59E0B' }}></div>
+              <div>
+                <div className="text-sm font-medium text-gray-900">Ready To Use</div>
+                <div className="text-xs text-gray-600">Available</div>
+              </div>
+            </div>
+          </div>
+          <p className="mt-4 text-sm text-teal-700 italic">
+            Each node shows an allocation bar when capacity categories are configured for that entity.
+          </p>
+        </div>
+
         <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-blue-900 mb-2">About the Graph</h3>
           <div className="text-blue-800 space-y-2">
@@ -41,6 +91,7 @@ export default function GraphPage() {
               <li><strong>Max:</strong> Maximum capacity limit</li>
               <li><strong>Default:</strong> Default operating capacity</li>
               <li><strong>Allocated:</strong> Currently allocated capacity (not shown for events)</li>
+              <li><strong>Allocation Bar:</strong> Visual breakdown by category (T=Transient, E=Events, R=Reserved)</li>
             </ul>
             <p className="mt-3">
               <strong>Blue nodes:</strong> Customers (aggregated from all child locations)

@@ -1,5 +1,106 @@
 import React from 'react';
-import { CapacityMetrics } from './graphTypes';
+import { CapacityMetrics, AllocationBreakdown } from './graphTypes';
+
+// Allocation category colors matching CapacityAllocationChart
+const ALLOCATION_COLORS = {
+  transient: '#14B8A6',    // teal-500
+  events: '#EC4899',       // pink-500
+  reserved: '#8B5CF6',     // violet-500
+  unavailable: '#9CA3AF',  // gray-400
+  readyToUse: '#F59E0B',   // amber-500
+};
+
+/**
+ * Allocation breakdown table for node labels - shows all categories with counts
+ */
+function AllocationMiniBar({ allocation, isHighlighted }: { allocation: AllocationBreakdown; isHighlighted: boolean }) {
+  const total = allocation.transient + allocation.events + allocation.reserved + allocation.unavailable + allocation.readyToUse;
+  if (total === 0) return null;
+
+  const percentages = {
+    transient: Math.round((allocation.transient / total) * 100),
+    events: Math.round((allocation.events / total) * 100),
+    reserved: Math.round((allocation.reserved / total) * 100),
+    unavailable: Math.round((allocation.unavailable / total) * 100),
+    readyToUse: Math.round((allocation.readyToUse / total) * 100),
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-current/20">
+      {/* Visual bar */}
+      <div className="h-2 rounded-full overflow-hidden flex bg-gray-200/50 mb-2">
+        {percentages.transient > 0 && (
+          <div
+            style={{ width: `${percentages.transient}%`, backgroundColor: ALLOCATION_COLORS.transient }}
+            title={`Transient: ${allocation.transient}`}
+          />
+        )}
+        {percentages.events > 0 && (
+          <div
+            style={{ width: `${percentages.events}%`, backgroundColor: ALLOCATION_COLORS.events }}
+            title={`Events: ${allocation.events}`}
+          />
+        )}
+        {percentages.reserved > 0 && (
+          <div
+            style={{ width: `${percentages.reserved}%`, backgroundColor: ALLOCATION_COLORS.reserved }}
+            title={`Reserved: ${allocation.reserved}`}
+          />
+        )}
+        {percentages.unavailable > 0 && (
+          <div
+            style={{ width: `${percentages.unavailable}%`, backgroundColor: ALLOCATION_COLORS.unavailable }}
+            title={`Unavailable: ${allocation.unavailable}`}
+          />
+        )}
+        {percentages.readyToUse > 0 && (
+          <div
+            style={{ width: `${percentages.readyToUse}%`, backgroundColor: ALLOCATION_COLORS.readyToUse }}
+            title={`Ready: ${allocation.readyToUse}`}
+          />
+        )}
+      </div>
+      {/* Category table */}
+      <div className="space-y-0.5">
+        <div className="flex justify-between items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS.transient }}></span>
+            <span className={`text-[10px] ${isHighlighted ? 'text-white/80' : 'text-gray-600'}`}>Transient:</span>
+          </span>
+          <span className={`text-[10px] font-semibold ${isHighlighted ? 'text-white' : 'text-gray-800'}`}>{allocation.transient}</span>
+        </div>
+        <div className="flex justify-between items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS.events }}></span>
+            <span className={`text-[10px] ${isHighlighted ? 'text-white/80' : 'text-gray-600'}`}>Events:</span>
+          </span>
+          <span className={`text-[10px] font-semibold ${isHighlighted ? 'text-white' : 'text-gray-800'}`}>{allocation.events}</span>
+        </div>
+        <div className="flex justify-between items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS.reserved }}></span>
+            <span className={`text-[10px] ${isHighlighted ? 'text-white/80' : 'text-gray-600'}`}>Reserved:</span>
+          </span>
+          <span className={`text-[10px] font-semibold ${isHighlighted ? 'text-white' : 'text-gray-800'}`}>{allocation.reserved}</span>
+        </div>
+        <div className="flex justify-between items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS.unavailable }}></span>
+            <span className={`text-[10px] ${isHighlighted ? 'text-white/80' : 'text-gray-600'}`}>Unavailable:</span>
+          </span>
+          <span className={`text-[10px] font-semibold ${isHighlighted ? 'text-white' : 'text-gray-800'}`}>{allocation.unavailable}</span>
+        </div>
+        <div className="flex justify-between items-center gap-2">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: ALLOCATION_COLORS.readyToUse }}></span>
+            <span className={`text-[10px] ${isHighlighted ? 'text-white/80' : 'text-gray-600'}`}>Ready:</span>
+          </span>
+          <span className={`text-[10px] font-semibold ${isHighlighted ? 'text-white' : 'text-gray-800'}`}>{allocation.readyToUse}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Node label rendering functions for the graph visualization
@@ -39,6 +140,9 @@ export function CustomerNodeLabel({ customer, isHighlighted, metrics }: Customer
             <span className="text-left">Allocated:</span>
             <span className="font-semibold">{metrics.allocatedCapacity}</span>
           </div>
+          {metrics.allocation && (
+            <AllocationMiniBar allocation={metrics.allocation} isHighlighted={isHighlighted} />
+          )}
         </div>
       )}
       {customer.attributes && customer.attributes.length > 0 && (
@@ -95,6 +199,9 @@ export function LocationNodeLabel({
             <span>Allocated:</span>
             <span className="font-semibold">{metrics.allocatedCapacity}</span>
           </div>
+          {metrics.allocation && (
+            <AllocationMiniBar allocation={metrics.allocation} isHighlighted={isHighlighted} />
+          )}
         </div>
       )}
       {!metrics && location.totalCapacity && (
@@ -161,6 +268,9 @@ export function SubLocationNodeLabel({
             <span>Allocated:</span>
             <span className="font-semibold">{metrics.allocatedCapacity}</span>
           </div>
+          {metrics.allocation && (
+            <AllocationMiniBar allocation={metrics.allocation} isHighlighted={isHighlighted} />
+          )}
         </div>
       )}
       {!metrics && (

@@ -21,11 +21,20 @@ export interface AllData {
   events: any[];
 }
 
+export interface AllocationBreakdown {
+  transient: number;
+  events: number;
+  reserved: number;
+  unavailable: number;
+  readyToUse: number;
+}
+
 export interface CapacityMetrics {
   minCapacity: number;
   maxCapacity: number;
   defaultCapacity: number;
   allocatedCapacity: number;
+  allocation?: AllocationBreakdown;
 }
 
 export interface GraphCapacityMetrics {

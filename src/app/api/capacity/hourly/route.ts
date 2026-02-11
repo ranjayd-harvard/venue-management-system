@@ -12,7 +12,21 @@ import { SubLocationRepository } from '@/models/SubLocation';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { subLocationId, date, hour, minCapacity, maxCapacity, defaultCapacity, allocatedCapacity } = body;
+    const {
+      subLocationId,
+      date,
+      hour,
+      minCapacity,
+      maxCapacity,
+      defaultCapacity,
+      allocatedCapacity,
+      // Allocation breakdown categories
+      transient,
+      events,
+      reserved,
+      unavailable,
+      readyToUse
+    } = body;
 
     // Validate required fields
     if (!subLocationId || !date || hour === undefined) {
@@ -58,6 +72,13 @@ export async function POST(request: NextRequest) {
       maxCapacity?: number;
       defaultCapacity?: number;
       allocatedCapacity?: number;
+      allocationBreakdown?: {
+        transient?: number;
+        events?: number;
+        reserved?: number;
+        unavailable?: number;
+        readyToUse?: number;
+      };
     } = {};
 
     if (minCapacity !== undefined) {
@@ -89,10 +110,74 @@ export async function POST(request: NextRequest) {
     if (defaultCapacity !== undefined) override.defaultCapacity = defaultCapacity;
     if (allocatedCapacity !== undefined) override.allocatedCapacity = allocatedCapacity;
 
-    // Ensure at least one capacity field is provided
+    // Build allocation breakdown if any category is provided
+    const allocationBreakdown: {
+      transient?: number;
+      events?: number;
+      reserved?: number;
+      unavailable?: number;
+      readyToUse?: number;
+    } = {};
+
+    if (transient !== undefined) {
+      if (transient < 0) {
+        return NextResponse.json(
+          { error: 'transient cannot be negative' },
+          { status: 400 }
+        );
+      }
+      allocationBreakdown.transient = transient;
+    }
+
+    if (events !== undefined) {
+      if (events < 0) {
+        return NextResponse.json(
+          { error: 'events cannot be negative' },
+          { status: 400 }
+        );
+      }
+      allocationBreakdown.events = events;
+    }
+
+    if (reserved !== undefined) {
+      if (reserved < 0) {
+        return NextResponse.json(
+          { error: 'reserved cannot be negative' },
+          { status: 400 }
+        );
+      }
+      allocationBreakdown.reserved = reserved;
+    }
+
+    if (unavailable !== undefined) {
+      if (unavailable < 0) {
+        return NextResponse.json(
+          { error: 'unavailable cannot be negative' },
+          { status: 400 }
+        );
+      }
+      allocationBreakdown.unavailable = unavailable;
+    }
+
+    if (readyToUse !== undefined) {
+      if (readyToUse < 0) {
+        return NextResponse.json(
+          { error: 'readyToUse cannot be negative' },
+          { status: 400 }
+        );
+      }
+      allocationBreakdown.readyToUse = readyToUse;
+    }
+
+    // Add allocation breakdown to override if any category was provided
+    if (Object.keys(allocationBreakdown).length > 0) {
+      override.allocationBreakdown = allocationBreakdown;
+    }
+
+    // Ensure at least one capacity field or allocation category is provided
     if (Object.keys(override).length === 0) {
       return NextResponse.json(
-        { error: 'At least one capacity field (minCapacity, maxCapacity, defaultCapacity, allocatedCapacity) must be provided' },
+        { error: 'At least one capacity field (minCapacity, maxCapacity, defaultCapacity, allocatedCapacity) or allocation category (transient, events, reserved, unavailable, readyToUse) must be provided' },
         { status: 400 }
       );
     }

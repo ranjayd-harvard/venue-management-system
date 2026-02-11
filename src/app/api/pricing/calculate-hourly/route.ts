@@ -6,6 +6,7 @@ import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 import { HourlyPricingEngine, PricingContext } from '@/lib/price-engine-hourly';
 import { TimezoneSettingsRepository } from '@/models/TimezoneSettings';
+import { resolveOperatingHoursFromEntities } from '@/lib/operating-hours';
 
 export async function POST(request: NextRequest) {
   try {
@@ -345,6 +346,19 @@ export async function POST(request: NextRequest) {
       console.log(`[API] ⚠️ No sublocation ratesheets found!`);
     }
 
+    // Resolve operating hours from entity hierarchy
+    const operatingHoursResolution = resolveOperatingHoursFromEntities([
+      { name: customer.name, operatingHours: customer.operatingHours },
+      { name: location.name, operatingHours: location.operatingHours },
+      { name: sublocation.label, operatingHours: sublocation.operatingHours },
+    ]);
+
+    if (operatingHoursResolution.hasOperatingHours) {
+      console.log(`\n🕐 [API] Operating hours resolved from hierarchy`);
+      console.log(`   Schedule days defined: ${Object.keys(operatingHoursResolution.mergedSchedule).length}`);
+      console.log(`   Blackouts: ${operatingHoursResolution.mergedBlackouts.length}`);
+    }
+
     // Build pricing context
     const context: PricingContext = {
       bookingStart: new Date(startTime),
@@ -370,7 +384,13 @@ export async function POST(request: NextRequest) {
       locationDefaultRate: location.defaultHourlyRate,
       sublocationDefaultRate: sublocation.defaultHourlyRate,
 
-      pricingConfig: pricingConfig as any
+      pricingConfig: pricingConfig as any,
+
+      // Operating hours (only if defined in hierarchy)
+      operatingHours: operatingHoursResolution.hasOperatingHours ? {
+        schedule: operatingHoursResolution.mergedSchedule,
+        blackouts: operatingHoursResolution.mergedBlackouts,
+      } : undefined,
     };
     
     // Calculate pricing using hourly engine

@@ -25,7 +25,8 @@ import {
   SatelliteIcon,
   Shield,
   FileText,
-  ViewIcon
+  ViewIcon,
+  PieChart
 } from 'lucide-react';
 
 export default function NavigationLayout({ children }: { children: React.ReactNode }) {
@@ -149,6 +150,12 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       icon: BarChart3,
       label: 'Capacity Analytics',
       description: 'Insights and statistics'
+    },
+    {
+      href: '/capacity/allocation',
+      icon: PieChart,
+      label: 'Allocation Breakdown',
+      description: 'Visualize capacity distribution'
     },
     {
       href: '/admin/capacity-sheets',
