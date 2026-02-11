@@ -24,6 +24,9 @@ Welcome to the Venue Management System documentation! This index will help you f
 |----------|---------|--------------|
 | **[SCHEMA.md](SCHEMA.md)** | Database schema details | Understanding data model |
 | **[FILE_STRUCTURE.md](FILE_STRUCTURE.md)** | Complete file listing | Finding specific files |
+| **[TIMELINE_SIMULATOR.md](TIMELINE_SIMULATOR.md)** | Timeline simulator & pricing visualization | Using the pricing simulator |
+| **[PRICING_TIMELINE_FIXES.md](PRICING_TIMELINE_FIXES.md)** | Critical timeline chart rendering fixes | Debugging chart issues |
+| **[SURGE_PRICING.md](SURGE_PRICING.md)** | Surge pricing system architecture | Implementing dynamic pricing |
 
 ### Guides
 | Document | Purpose | When to Read |
@@ -151,8 +154,103 @@ Welcome to the Venue Management System documentation! This index will help you f
 - TypeScript issues
 - Common pitfalls
 
-**Read time**: As needed  
+**Read time**: As needed
 **Level**: All
+
+### TIMELINE_SIMULATOR.md
+**Interactive pricing simulator documentation** including:
+- Real-time pricing visualization
+- Surge pricing integration
+- Simulation mode & layer toggles
+- Scenario planning & management
+- Price display logic
+- API integration details
+
+**Read time**: 20 minutes
+**Level**: Intermediate
+
+### SURGE_PRICING.md
+**Dynamic surge pricing system** covering:
+- Architecture & design philosophy
+- Mathematical surge calculation formula
+- Database schema (surge_configs)
+- API integration
+- Time window logic
+- Admin interface
+- Testing & monitoring
+
+**Read time**: 25 minutes
+**Level**: Intermediate to Advanced
+
+### SURGE_TESTING_GUIDE.md
+**Complete surge pricing testing workflow** including:
+- Phase-by-phase testing instructions
+- Virtual vs materialized surge configs
+- Live Mode vs Simulation Mode testing
+- Approval workflow validation
+- Visual verification checklist
+- Common issues & solutions
+- Test results template
+
+**Read time**: 30 minutes
+**Level**: Intermediate
+
+### SURGE_FINAL_FIX.md
+**Materialized surge ratesheets implementation** covering:
+- Root cause analysis of display issues
+- Backend API loading logic
+- SURGE_MULTIPLIER type usage
+- Pricing engine integration
+- Complete code changes reference
+
+**Read time**: 20 minutes
+**Level**: Advanced
+
+### SURGE_LIVE_MODE_FIX.md
+**Live Mode display fixes** including:
+- Layer type assignment logic
+- Mode-based display behavior
+- RATESHEET vs SURGE type usage
+- Timeline simulator integration
+
+**Read time**: 15 minutes
+**Level**: Intermediate
+
+### SURGE_VIRTUAL_LABEL.md
+**Visual labeling system** covering:
+- "(Virtual)" label feature
+- Virtual vs materialized distinction
+- Mode switching clarity
+- Testing checklist
+
+**Read time**: 10 minutes
+**Level**: Beginner to Intermediate
+
+### SURGE_SYSTEM_STATUS.md
+**Current system status & quick reference** including:
+- Completed features checklist
+- Database state and cleanup info
+- Key technical decisions
+- Console log reference
+- Success metrics
+- API endpoints & database queries
+- Quick reference tables
+
+**Read time**: 15 minutes
+**Level**: All
+
+### PRICING_TIMELINE_FIXES.md
+**Critical chart rendering fixes** covering:
+- Timeline positioning bug resolution
+- Flat price line visibility fixes
+- SVG gradient coordinate system issues
+- Three-layer rendering with fallback
+- Y-axis calculation edge cases
+- Testing checklist and debugging tips
+- Code patterns to avoid
+
+**Read time**: 20 minutes
+**Level**: Intermediate to Advanced
 
 ## 🔍 Quick Reference
 
@@ -168,6 +266,13 @@ Welcome to the Venue Management System documentation! This index will help you f
 | Find a specific file | [FILE_STRUCTURE.md](FILE_STRUCTURE.md) |
 | Learn about features | [README.md](README.md) |
 | Get project overview | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) |
+| Use pricing simulator | [TIMELINE_SIMULATOR.md](TIMELINE_SIMULATOR.md) |
+| Fix timeline chart issues | [PRICING_TIMELINE_FIXES.md](PRICING_TIMELINE_FIXES.md) |
+| Implement surge pricing | [SURGE_PRICING.md](SURGE_PRICING.md) |
+| Test surge pricing | [SURGE_TESTING_GUIDE.md](SURGE_TESTING_GUIDE.md) |
+| Fix surge display issues | [SURGE_FINAL_FIX.md](SURGE_FINAL_FIX.md) |
+| Understand surge labels | [SURGE_VIRTUAL_LABEL.md](SURGE_VIRTUAL_LABEL.md) |
+| Check surge system status | [SURGE_SYSTEM_STATUS.md](SURGE_SYSTEM_STATUS.md) |
 
 ### Key Sections
 

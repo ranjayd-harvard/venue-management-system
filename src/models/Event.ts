@@ -1,6 +1,14 @@
 import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { Event } from './types';
+import {
+  setCapacityForDate,
+  setCapacityForDateRange,
+  setRevenueGoal,
+  removeCapacityForDate,
+  removeRevenueGoal
+} from '@/lib/capacity-utils';
+import { emitBookingEvent } from '@/lib/kafka-producer';
 
 export class EventRepository {
   private static COLLECTION = 'events';
@@ -9,8 +17,23 @@ export class EventRepository {
     const db = await getDb();
     const now = new Date();
 
+    // Auto-determine eventAssociatedTo if not provided
+    let eventAssociatedTo = event.eventAssociatedTo;
+    if (!eventAssociatedTo) {
+      if (event.venueId) {
+        eventAssociatedTo = 'VENUE';
+      } else if (event.subLocationId) {
+        eventAssociatedTo = 'SUBLOCATION';
+      } else if (event.locationId) {
+        eventAssociatedTo = 'LOCATION';
+      } else {
+        eventAssociatedTo = 'CUSTOMER';
+      }
+    }
+
     const newEvent: Omit<Event, '_id'> = {
       ...event,
+      eventAssociatedTo,
       startDate: new Date(event.startDate),
       endDate: new Date(event.endDate),
       createdAt: now,
@@ -18,7 +41,15 @@ export class EventRepository {
     };
 
     const result = await db.collection<Event>(this.COLLECTION).insertOne(newEvent as Event);
-    return { ...newEvent, _id: result.insertedId };
+    const createdEvent = { ...newEvent, _id: result.insertedId };
+
+    // KAFKA: Emit CREATED event
+    await emitBookingEvent({
+      action: 'CREATED',
+      event: createdEvent
+    });
+
+    return createdEvent;
   }
 
   static async findById(id: string | ObjectId): Promise<Event | null> {
@@ -30,6 +61,75 @@ export class EventRepository {
   static async findAll(): Promise<Event[]> {
     const db = await getDb();
     return db.collection<Event>(this.COLLECTION).find({}).sort({ startDate: -1 }).toArray();
+  }
+
+  static async findAllWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: -1 }
+      }
+    ]).toArray();
   }
 
   static async findByCustomer(customerId: string | ObjectId): Promise<Event[]> {
@@ -59,6 +159,15 @@ export class EventRepository {
       .toArray();
   }
 
+  static async findByVenue(venueId: string | ObjectId): Promise<Event[]> {
+    const db = await getDb();
+    const objectId = typeof venueId === 'string' ? new ObjectId(venueId) : venueId;
+    return db.collection<Event>(this.COLLECTION)
+      .find({ venueId: objectId })
+      .sort({ startDate: -1 })
+      .toArray();
+  }
+
   static async findActiveEvents(): Promise<Event[]> {
     const db = await getDb();
     const now = new Date();
@@ -70,6 +179,83 @@ export class EventRepository {
       })
       .sort({ startDate: -1 })
       .toArray();
+  }
+
+  static async findActiveEventsWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    const now = new Date();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $match: {
+          isActive: true,
+          startDate: { $lte: now },
+          endDate: { $gte: now }
+        }
+      },
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: -1 }
+      }
+    ]).toArray();
   }
 
   static async findUpcomingEvents(): Promise<Event[]> {
@@ -84,9 +270,88 @@ export class EventRepository {
       .toArray();
   }
 
+  static async findUpcomingEventsWithDetails(): Promise<any[]> {
+    const db = await getDb();
+    const now = new Date();
+    return db.collection<Event>(this.COLLECTION).aggregate([
+      {
+        $match: {
+          isActive: true,
+          startDate: { $gt: now }
+        }
+      },
+      {
+        $addFields: {
+          customerIdObj: { $toObjectId: { $ifNull: ['$customerId', null] } },
+          locationIdObj: { $toObjectId: { $ifNull: ['$locationId', null] } },
+          subLocationIdObj: { $toObjectId: { $ifNull: ['$subLocationId', null] } },
+          venueIdObj: { $toObjectId: { $ifNull: ['$venueId', null] } }
+        }
+      },
+      {
+        $lookup: {
+          from: 'customers',
+          localField: 'customerIdObj',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $lookup: {
+          from: 'locations',
+          localField: 'locationIdObj',
+          foreignField: '_id',
+          as: 'location'
+        }
+      },
+      {
+        $lookup: {
+          from: 'sublocations',
+          localField: 'subLocationIdObj',
+          foreignField: '_id',
+          as: 'sublocation'
+        }
+      },
+      {
+        $lookup: {
+          from: 'venues',
+          localField: 'venueIdObj',
+          foreignField: '_id',
+          as: 'venue'
+        }
+      },
+      {
+        $unwind: { path: '$customer', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$location', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$sublocation', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: '$venue', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $project: {
+          customerIdObj: 0,
+          locationIdObj: 0,
+          subLocationIdObj: 0,
+          venueIdObj: 0
+        }
+      },
+      {
+        $sort: { startDate: 1 }
+      }
+    ]).toArray();
+  }
+
   static async update(id: string | ObjectId, updates: Partial<Event>): Promise<Event | null> {
     const db = await getDb();
     const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+
+    // Fetch previous state for Kafka delta calculation
+    const previousEvent = await this.findById(objectId);
 
     // Convert date strings to Date objects if present
     const processedUpdates = { ...updates };
@@ -108,13 +373,167 @@ export class EventRepository {
       { returnDocument: 'after' }
     );
 
+    // KAFKA: Emit UPDATED event
+    if (result && previousEvent) {
+      await emitBookingEvent({
+        action: 'UPDATED',
+        event: result,
+        previousEvent
+      });
+    }
+
     return result;
   }
 
   static async delete(id: string | ObjectId): Promise<boolean> {
     const db = await getDb();
     const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+
+    // Fetch event before deletion for Kafka
+    const event = await this.findById(objectId);
+
     const result = await db.collection<Event>(this.COLLECTION).deleteOne({ _id: objectId });
+
+    // KAFKA: Emit DELETED event
+    if (result.deletedCount > 0 && event) {
+      await emitBookingEvent({
+        action: 'DELETED',
+        event
+      });
+    }
+
     return result.deletedCount > 0;
+  }
+
+  // ===== CAPACITY & REVENUE GOAL METHODS =====
+
+  /**
+   * Updates capacity configuration bounds
+   */
+  static async updateCapacityBounds(
+    id: string | ObjectId,
+    minCapacity: number,
+    maxCapacity: number
+  ): Promise<Event | null> {
+    const db = await getDb();
+    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+
+    const result = await db.collection<Event>(this.COLLECTION).findOneAndUpdate(
+      { _id: objectId },
+      {
+        $set: {
+          'capacityConfig.minCapacity': minCapacity,
+          'capacityConfig.maxCapacity': maxCapacity,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after' }
+    );
+
+    return result;
+  }
+
+  /**
+   * Sets capacity for a specific date
+   */
+  static async setDailyCapacity(
+    id: string | ObjectId,
+    date: string,
+    capacity: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setCapacityForDate(config, date, capacity);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Sets capacity for a date range
+   */
+  static async setCapacityRange(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string,
+    capacity: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setCapacityForDateRange(config, startDate, endDate, capacity);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Removes capacity override for a specific date
+   */
+  static async removeDailyCapacity(
+    id: string | ObjectId,
+    date: string
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event || !event.capacityConfig) return event;
+
+    const config = event.capacityConfig;
+    removeCapacityForDate(config, date);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Sets revenue goal for a date range
+   */
+  static async setRevenueGoal(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string,
+    dailyGoal: number
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event) return null;
+
+    const config = event.capacityConfig || {
+      minCapacity: 0,
+      maxCapacity: 100,
+      dailyCapacities: [],
+      revenueGoals: [],
+    };
+
+    setRevenueGoal(config, startDate, endDate, dailyGoal);
+
+    return this.update(id, { capacityConfig: config });
+  }
+
+  /**
+   * Removes revenue goal for a specific date range
+   */
+  static async removeRevenueGoal(
+    id: string | ObjectId,
+    startDate: string,
+    endDate: string
+  ): Promise<Event | null> {
+    const event = await this.findById(id);
+    if (!event || !event.capacityConfig) return event;
+
+    const config = event.capacityConfig;
+    removeRevenueGoal(config, startDate, endDate);
+
+    return this.update(id, { capacityConfig: config });
   }
 }

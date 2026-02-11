@@ -146,7 +146,17 @@ export function minutesToTime(minutes: number): string {
  * Get booking time in specified timezone as HH:MM
  */
 export function getTimeInTimezone(date: Date, timezone: string): string {
-  const hour = date.toLocaleString('en-US', { timeZone: timezone, hour: '2-digit', hour12: false });
-  const minute = date.toLocaleString('en-US', { timeZone: timezone, minute: '2-digit' });
+  // Use Intl.DateTimeFormat for reliable formatting with guaranteed leading zeros
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(date);
+  const hour = parts.find(p => p.type === 'hour')?.value || '00';
+  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+
   return `${hour}:${minute}`;
 }

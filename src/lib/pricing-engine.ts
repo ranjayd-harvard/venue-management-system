@@ -23,7 +23,7 @@ interface Ratesheet {
   eventId?: ObjectId | string;
   name: string;
   description?: string;
-  type: 'TIMING_BASED' | 'DURATION_BASED';
+  type: 'TIMING_BASED' | 'DURATION_BASED' | 'SURGE_MULTIPLIER';
   priority: number;
   conflictResolution: 'PRIORITY' | 'HIGHEST_PRICE' | 'LOWEST_PRICE';
   isActive: boolean;
@@ -31,6 +31,7 @@ interface Ratesheet {
   effectiveTo?: Date | string;
   timeWindows?: TimeWindow[];
   durationRules?: DurationRule[];
+  surgeMultiplierSnapshot?: number;
 }
 
 interface DefaultRate {
@@ -417,39 +418,98 @@ export class PricingEngine {
 
   /**
    * Select best ratesheet for a specific time segment
+   * Handles SURGE_MULTIPLIER by applying multiplier to base price
    */
   private selectRatesheetForTimeSegment(
     sortedRatesheets: Ratesheet[],
     startTime: Date,
     endTime: Date
   ): { ratesheet: Ratesheet; price: number } {
-    for (const rs of sortedRatesheets) {
-      if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
-        const timeStr = startTime.toTimeString().substring(0, 5); // HH:mm
+    const timeStr = startTime.toTimeString().substring(0, 5); // HH:mm
+    let surgeMultiplier: number | null = null;
+    let surgeRatesheet: Ratesheet | null = null;
 
+    // First pass: Check for SURGE_MULTIPLIER
+    for (const rs of sortedRatesheets) {
+      if (rs.type === 'SURGE_MULTIPLIER' && rs.timeWindows) {
         for (const tw of rs.timeWindows) {
           if (timeStr >= tw.startTime && timeStr < tw.endTime) {
+            surgeMultiplier = tw.pricePerHour; // This is actually the multiplier
+            surgeRatesheet = rs;
+            this.log('SURGE_FOUND', 'Found applicable surge multiplier', {
+              ratesheet: rs.name,
+              timeWindow: `${tw.startTime}-${tw.endTime}`,
+              multiplier: surgeMultiplier,
+            });
+            break;
+          }
+        }
+        if (surgeMultiplier) break;
+      }
+    }
+
+    // Second pass: Find base price (skip surge ratesheets)
+    for (const rs of sortedRatesheets) {
+      if (rs.type === 'SURGE_MULTIPLIER') continue; // Skip surge, already processed
+
+      if (rs.type === 'TIMING_BASED' && rs.timeWindows) {
+        for (const tw of rs.timeWindows) {
+          if (timeStr >= tw.startTime && timeStr < tw.endTime) {
+            const basePrice = tw.pricePerHour;
+            const finalPrice = surgeMultiplier ? basePrice * surgeMultiplier : basePrice;
+
             this.log('TIME_MATCH', 'Found matching time window', {
               ratesheet: rs.name,
               timeWindow: `${tw.startTime}-${tw.endTime}`,
-              price: tw.pricePerHour,
+              basePrice,
+              surgeMultiplier: surgeMultiplier || 1.0,
+              finalPrice,
             });
 
-            return { ratesheet: rs, price: tw.pricePerHour };
+            // Return surge ratesheet if surge is active, otherwise base ratesheet
+            return {
+              ratesheet: surgeRatesheet || rs,
+              price: finalPrice
+            };
           }
         }
       }
     }
 
-    // Fallback to first ratesheet (shouldn't happen if data is correct)
-    const fallback = sortedRatesheets[0];
-    const fallbackPrice = fallback.timeWindows?.[0]?.pricePerHour || 0;
+    // Fallback: No matching time window found
+    // Try to find ANY time window from non-surge ratesheets as base price
+    let fallbackPrice = 0;
+    let fallbackRatesheet: Ratesheet | null = null;
 
-    this.log('FALLBACK', 'No matching time window, using fallback', {
-      ratesheet: fallback.name,
-      price: fallbackPrice,
+    for (const rs of sortedRatesheets) {
+      if (rs.type !== 'SURGE_MULTIPLIER' && rs.timeWindows && rs.timeWindows.length > 0) {
+        // Use first available time window from this ratesheet as base
+        fallbackPrice = rs.timeWindows[0].pricePerHour;
+        fallbackRatesheet = rs;
+        break;
+      }
+    }
+
+    // If still no price found, use a default base rate
+    if (fallbackPrice === 0) {
+      fallbackPrice = 10; // $10/hr as absolute fallback
+      this.log('FALLBACK', 'No ratesheet price found, using default base rate', {
+        defaultBaseRate: fallbackPrice,
+      });
+    }
+
+    const finalPrice = surgeMultiplier ? fallbackPrice * surgeMultiplier : fallbackPrice;
+
+    this.log('FALLBACK', 'No matching time window, using fallback price', {
+      ratesheet: fallbackRatesheet?.name || 'default',
+      basePrice: fallbackPrice,
+      surgeMultiplier: surgeMultiplier || 1.0,
+      finalPrice,
     });
 
-    return { ratesheet: fallback, price: fallbackPrice };
+    return {
+      ratesheet: surgeRatesheet || fallbackRatesheet || sortedRatesheets[0],
+      price: finalPrice
+    };
   }
 }

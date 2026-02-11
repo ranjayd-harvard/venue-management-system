@@ -7,8 +7,18 @@ export type RecurrencePattern = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARL
 export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY' | 'SUNDAY';
 
 export interface TimeWindow {
-  startTime: string; // HH:mm format (24-hour)
-  endTime: string;   // HH:mm format (24-hour)
+  // Window type: ABSOLUTE_TIME uses clock time, DURATION_BASED uses minutes from booking start
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED'; // Defaults to ABSOLUTE_TIME for backward compatibility
+
+  // Absolute time mode (HH:mm format, 24-hour)
+  startTime?: string;
+  endTime?: string;
+
+  // Duration-based mode (minutes from booking start)
+  startMinute?: number;  // e.g., 0 = booking start, 120 = 2 hours from start
+  endMinute?: number;    // e.g., 240 = 4 hours from start
+
+  // Common fields
   pricePerHour: number;
 }
 
@@ -35,10 +45,10 @@ export interface Ratesheet {
   // Type and Scope
   type: RatesheetType;
   
-  // Hierarchy application (can be Location or SubLocation level)
+  // Hierarchy application (can be Location, SubLocation, or Event level)
   appliesTo: {
-    level: 'LOCATION' | 'SUBLOCATION';
-    entityId: ObjectId; // Location._id or SubLocation._id
+    level: 'LOCATION' | 'SUBLOCATION' | 'EVENT';
+    entityId: ObjectId; // Location._id or SubLocation._id or Event._id
   };
   
   // Priority and Conflicts
@@ -67,6 +77,16 @@ export interface Ratesheet {
   approvedBy?: string;
   approvedAt?: Date;
   rejectionReason?: string;
+
+  // Surge Metadata (optional, only for surge ratesheets)
+  surgeConfigId?: ObjectId; // Back-reference to source surge config
+  surgeMultiplierSnapshot?: number; // Calculated multiplier at materialization time
+  demandSupplySnapshot?: {
+    demand: number;
+    supply: number;
+    pressure: number;
+    timestamp: Date;
+  };
 }
 
 export interface PricingQuery {
@@ -131,7 +151,7 @@ export class RatesheetRepository {
       $and: [
         // Must be active and approved
         { isActive: true },
-        { approvalStatus: 'APPROVED' },
+        { approvalStatus: 'APPROVED' as const },
         
         // Must apply to this SubLocation or its parent Location
         // Support both old and new data structures
@@ -170,8 +190,8 @@ export class RatesheetRepository {
     };
     
     console.log('[findApplicableRatesheets] Query:', JSON.stringify(query, null, 2));
-    
-    const results = await collection.find(query).sort({ priority: -1 }).toArray();
+
+    const results = await collection.find(query as any).sort({ priority: -1 }).toArray();
     
     console.log(`[findApplicableRatesheets] Found ${results.length} ratesheets`);
     results.forEach(rs => {

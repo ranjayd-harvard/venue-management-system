@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Building2, MapPin, Layers, Network, BarChart3, Users } from 'lucide-react';
+import { Home, Building2, MapPin, Layers, Network, BarChart3, Users, TrendingUp } from 'lucide-react';
 
 export default function NavigationHeader() {
   const pathname = usePathname();
@@ -18,6 +18,7 @@ export default function NavigationHeader() {
     { href: '/locations', icon: MapPin, label: 'Locations', color: 'green' },
     { href: '/venues', icon: Users, label: 'Venues', color: 'purple' },
     { href: '/relationships', icon: Layers, label: 'Assignments', color: 'pink' },
+    { href: '/capacity/manage', icon: TrendingUp, label: 'Capacity', color: 'orange' },
     { href: '/graph', icon: BarChart3, label: 'Graph', color: 'cyan' },
   ];
 

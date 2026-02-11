@@ -13,11 +13,17 @@ import {
   ChevronUp
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
+import PricingFilters from '@/components/PricingFilters';
+import { getTimeInTimezone } from '@/lib/timezone-utils';
 
 interface TimeWindow {
-  startTime: string;
-  endTime: string;
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
+  startTime?: string;
+  endTime?: string;
+  startMinute?: number;
+  endMinute?: number;
   pricePerHour: number;
+  daysOfWeek?: number[]; // 0=Sunday, 6=Saturday
 }
 
 interface Ratesheet {
@@ -76,6 +82,7 @@ interface PricingConfig {
   locationPriorityRange: { min: number; max: number };
   sublocationPriorityRange: { min: number; max: number };
   eventPriorityRange?: { min: number; max: number };
+  defaultTimezone?: string;
 }
 
 interface PricingLayer {
@@ -104,11 +111,8 @@ interface TimeSlot {
 }
 
 export default function TimelineTilesPage() {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
-  const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [ratesheets, setRatesheets] = useState<Ratesheet[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,6 +121,7 @@ export default function TimelineTilesPage() {
   const [currentCustomer, setCurrentCustomer] = useState<Customer | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [currentSubLocation, setCurrentSubLocation] = useState<SubLocation | null>(null);
+  const [entityTimezone, setEntityTimezone] = useState<string>('America/New_York'); // Timezone for calculations
 
   // Initialize all dates from the same timestamp
   // Range covers 60 days in past to 60 days in future
@@ -143,48 +148,61 @@ export default function TimelineTilesPage() {
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
 
+  // Booking start time for duration-based window calculations (optional)
+  const [useDurationContext, setUseDurationContext] = useState<boolean>(false);
+  const [bookingStartTime, setBookingStartTime] = useState<Date>(viewStart);
+
   // Selected slot for showing decision panel (persistent)
   const [selectedSlot, setSelectedSlot] = useState<{ slotIdx: number; layerId: string } | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{ slotIdx: number; layerId: string } | null>(null);
   const [decisionPanelData, setDecisionPanelData] = useState<any>(null);
   const [showWaterfall, setShowWaterfall] = useState(false);
 
+  // Event booking toggle
+  const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
+
+  // Hydration fix: only render dynamic timestamps after mount
+  const [mounted, setMounted] = useState(false);
+
   useEffect(() => {
-    fetchLocations();
+    setMounted(true);
     fetchPricingConfig();
   }, []);
 
   useEffect(() => {
     if (selectedLocation) {
-      fetchSubLocations(selectedLocation);
       fetchLocationDetails(selectedLocation);
     } else {
-      setSublocations([]);
       setSelectedSubLocation('');
       setCurrentLocation(null);
       setCurrentCustomer(null);
     }
   }, [selectedLocation]);
 
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
+
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      fetch('/api/events')
-        .then(res => res.json())
-        .then(data => {
-          const activeEvents = data.filter((e: Event) => e.isActive);
-          setEvents(activeEvents);
-        })
-        .catch(err => {
-          console.error('Failed to load events:', err);
-          setEvents([]);
-        });
       fetchRatesheets(selectedSubLocation);
+      fetchEntityTimezone(selectedSubLocation); // Fetch timezone for accurate time window matching
     } else {
       setRatesheets([]);
       setCurrentSubLocation(null);
-      setEvents([]);
       setSelectedEventId('');
+      setEntityTimezone('America/New_York'); // Reset to default
     }
   }, [selectedSubLocation]); // Only refetch when sublocation changes, not when range changes
 
@@ -194,11 +212,19 @@ export default function TimelineTilesPage() {
     }
   }, [selectedEventId]);
 
+  // Sync view window with booking start time when duration context is enabled
+  useEffect(() => {
+    if (useDurationContext) {
+      setViewStart(new Date(bookingStartTime));
+      setViewEnd(new Date(bookingStartTime.getTime() + selectedDuration * 60 * 60 * 1000));
+    }
+  }, [useDurationContext, bookingStartTime]);
+
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking, entityTimezone]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -207,26 +233,6 @@ export default function TimelineTilesPage() {
       setPricingConfig(data.pricingConfig);
     } catch (error) {
       console.error('Failed to fetch pricing config:', error);
-    }
-  };
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      const data = await response.json();
-      setLocations(data);
-    } catch (error) {
-      console.error('Failed to fetch locations:', error);
-    }
-  };
-
-  const fetchSubLocations = async (locationId: string) => {
-    try {
-      const response = await fetch(`/api/sublocations?locationId=${locationId}`);
-      const data = await response.json();
-      setSublocations(data);
-    } catch (error) {
-      console.error('Failed to fetch sublocations:', error);
     }
   };
 
@@ -253,6 +259,19 @@ export default function TimelineTilesPage() {
       setCurrentSubLocation(subloc);
     } catch (error) {
       console.error('Failed to fetch sublocation details:', error);
+    }
+  };
+
+  const fetchEntityTimezone = async (subLocationId: string) => {
+    try {
+      const response = await fetch(`/api/timezone?entityType=SUBLOCATION&entityId=${subLocationId}`);
+      const data = await response.json();
+      if (data.timezone) {
+        setEntityTimezone(data.timezone);
+        console.log(`[Timeline] Using timezone for sublocation: ${data.timezone}`);
+      }
+    } catch (error) {
+      console.error('Failed to fetch entity timezone:', error);
     }
   };
 
@@ -414,11 +433,16 @@ export default function TimelineTilesPage() {
     const currentTime = new Date(viewStart);
     const endTime = new Date(viewEnd);
     const allLayers = getPricingLayers();
+    // Use entity timezone (fetched from TimezoneSettingsRepository, same as pricing API)
+    const timezone = entityTimezone;
+
+    console.log(`[calculateTimeSlots] Using timezone: ${timezone}`);
+    console.log(`[calculateTimeSlots] Layers (sorted by priority):`, allLayers.map(l => `${l.name} (${l.priority})`));
 
     while (currentTime < endTime) {
-      // Use UTC hours for consistent timezone handling
-      const hour = currentTime.getUTCHours();
-      const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+      // Use timezone-aware time to match ratesheet time windows
+      const timeStr = getTimeInTimezone(currentTime, timezone);
+      const hour = parseInt(timeStr.split(':')[0], 10);
 
       // For each layer, check if it applies at this hour
       const layerPrices = allLayers.map(layer => {
@@ -436,11 +460,125 @@ export default function TimelineTilesPage() {
             if (effectiveFrom <= currentTime && (!effectiveTo || effectiveTo >= currentTime)) {
               // Check time windows
               if (ratesheet.timeWindows && ratesheet.timeWindows.length > 0) {
-                const matchingWindow = ratesheet.timeWindows.find(tw =>
-                  timeInWindow(timeStr, tw.startTime, tw.endTime)
-                );
+                const matchingWindow = ratesheet.timeWindows.find(tw => {
+                  // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+                  // This allows event rates to apply but excludes free grace periods
+                  if (!isEventBooking && tw.pricePerHour === 0 && ratesheet.applyTo === 'EVENT') {
+                    return false; // Skip this $0/hr grace period time window
+                  }
+
+                  // Check daysOfWeek filter - skip this time window if day doesn't match
+                  // 0=Sunday, 1=Monday, ..., 6=Saturday
+                  if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+                    const dayOfWeek = currentTime.getDay();
+                    if (!tw.daysOfWeek.includes(dayOfWeek)) {
+                      return false; // Day of week doesn't match
+                    }
+                  }
+
+                  const windowType = tw.windowType || 'ABSOLUTE_TIME';
+
+                  if (windowType === 'DURATION_BASED') {
+                    // Duration-based windows: calculate minutes from ratesheet effectiveFrom
+                    // For EVENT ratesheets, effectiveFrom is the event start minus grace period
+                    const ratesheetStart = new Date(ratesheet.effectiveFrom);
+                    const minutesFromRatesheetStart = Math.floor((currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60));
+                    const startMinute = tw.startMinute ?? 0;
+                    const endMinute = tw.endMinute ?? 0;
+
+                    return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
+                  } else {
+                    // ABSOLUTE_TIME windows: match against hour time
+                    if (!tw.startTime || !tw.endTime) {
+                      return false; // Invalid window
+                    }
+                    return timeInWindow(timeStr, tw.startTime, tw.endTime);
+                  }
+                });
+
                 if (matchingWindow) {
-                  price = matchingWindow.pricePerHour;
+                  // Handle SURGE_MULTIPLIER type ratesheets specially
+                  if (ratesheet.type === 'SURGE_MULTIPLIER') {
+                    // For surge multipliers, pricePerHour contains the multiplier, not the absolute price
+                    // We need to find the base price and multiply it
+                    const surgeMultiplier = matchingWindow.pricePerHour;
+
+                    // Find the base price from non-surge layers
+                    // We need to look at all layers and find the highest priority non-surge active layer
+                    let basePrice = 0;
+
+                    // Check all ratesheets for the base price (exclude current surge ratesheet)
+                    for (const otherLayer of allLayers) {
+                      if (otherLayer.id === layer.id) continue; // Skip current surge layer
+
+                      let otherPrice: number | null = null;
+                      let otherIsActive = false;
+
+                      if (otherLayer.type === 'RATESHEET') {
+                        const otherRatesheet = ratesheets.find(rs => rs._id === otherLayer.id);
+                        if (otherRatesheet && otherRatesheet.type !== 'SURGE_MULTIPLIER') {
+                          // Check if this ratesheet applies to this hour
+                          const otherEffectiveFrom = new Date(otherRatesheet.effectiveFrom);
+                          const otherEffectiveTo = otherRatesheet.effectiveTo ? new Date(otherRatesheet.effectiveTo) : null;
+
+                          if (otherEffectiveFrom <= currentTime && (!otherEffectiveTo || otherEffectiveTo >= currentTime)) {
+                            if (otherRatesheet.timeWindows && otherRatesheet.timeWindows.length > 0) {
+                              const otherMatchingWindow = otherRatesheet.timeWindows.find(tw => {
+                                if (!isEventBooking && tw.pricePerHour === 0 && otherRatesheet.applyTo === 'EVENT') {
+                                  return false;
+                                }
+                                // Check daysOfWeek filter
+                                if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+                                  const dayOfWeek = currentTime.getDay();
+                                  if (!tw.daysOfWeek.includes(dayOfWeek)) {
+                                    return false;
+                                  }
+                                }
+                                const windowType = tw.windowType || 'ABSOLUTE_TIME';
+                                if (windowType === 'DURATION_BASED') {
+                                  const ratesheetStart = new Date(otherRatesheet.effectiveFrom);
+                                  const minutesFromRatesheetStart = Math.floor((currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60));
+                                  const startMinute = tw.startMinute ?? 0;
+                                  const endMinute = tw.endMinute ?? 0;
+                                  return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
+                                } else {
+                                  if (!tw.startTime || !tw.endTime) return false;
+                                  return timeInWindow(timeStr, tw.startTime, tw.endTime);
+                                }
+                              });
+
+                              if (otherMatchingWindow) {
+                                otherPrice = otherMatchingWindow.pricePerHour;
+                                otherIsActive = true;
+                              }
+                            }
+                          }
+                        }
+                      } else {
+                        // Default rate
+                        otherPrice = otherLayer.rate || null;
+                        otherIsActive = otherPrice !== null;
+                      }
+
+                      // If this layer is active and has higher priority, use it as base
+                      if (otherIsActive && otherPrice !== null) {
+                        basePrice = otherPrice;
+                        break; // Use the first (highest priority) active non-surge layer
+                      }
+                    }
+
+                    // Fallback to default rates if no base found
+                    if (basePrice === 0) {
+                      basePrice = currentSubLocation?.defaultHourlyRate
+                        || currentLocation?.defaultHourlyRate
+                        || currentCustomer?.defaultHourlyRate
+                        || 0;
+                    }
+
+                    price = Math.round(basePrice * surgeMultiplier * 100) / 100;
+                  } else {
+                    price = Math.round(matchingWindow.pricePerHour * 100) / 100;
+                  }
                   isActive = true;
                 }
               }
@@ -457,6 +595,12 @@ export default function TimelineTilesPage() {
 
       // Winner is the first active layer (highest priority)
       const winner = layerPrices.find(lp => lp.isActive);
+
+      // Debug: Log first few hours
+      if (slots.length < 5) {
+        console.log(`[Hour ${timeStr}] Active layers:`, layerPrices.filter(lp => lp.isActive).map(lp => `${lp.layer.name}: $${lp.price}`));
+        console.log(`[Hour ${timeStr}] Winner: ${winner?.layer.name} @ $${winner?.price}`);
+      }
 
       slots.push({
         hour,
@@ -496,9 +640,17 @@ export default function TimelineTilesPage() {
 
   const setQuickRange = (hours: number) => {
     setSelectedDuration(hours);
-    // Keep current start time, just update the end based on new duration
-    const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
-    setViewEnd(newViewEnd);
+    // If duration context is enabled, calculate from booking start time
+    if (useDurationContext) {
+      const newViewStart = new Date(bookingStartTime);
+      const newViewEnd = new Date(bookingStartTime.getTime() + hours * 60 * 60 * 1000);
+      setViewStart(newViewStart);
+      setViewEnd(newViewEnd);
+    } else {
+      // Keep current start time, just update the end based on new duration
+      const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
+      setViewEnd(newViewEnd);
+    }
   };
 
   const getViewWindowPosition = (): { left: number; width: number } => {
@@ -523,7 +675,8 @@ export default function TimelineTilesPage() {
   };
 
   const getTotalCost = (): number => {
-    return timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
+    const total = timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
+    return Math.round(total * 100) / 100;
   };
 
   const getTotalDuration = (): string => {
@@ -614,154 +767,56 @@ export default function TimelineTilesPage() {
                 Visual waterfall showing pricing hierarchy and winning rates for each hour
               </p>
             </div>
-            <div className="bg-gray-100 rounded-lg p-3 text-xs space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Local Time:</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toLocaleString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                  })}
-                </span>
+            {mounted && (
+              <div className="bg-gray-100 rounded-lg p-3 text-xs space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Local Time:</span>
+                  <span className="text-gray-900 font-mono">
+                    {new Date().toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                      hour12: true
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Server (UTC):</span>
+                  <span className="text-gray-900 font-mono">
+                    {new Date().toUTCString().slice(0, -4)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-gray-700">Timezone:</span>
+                  <span className="text-gray-900 font-mono">
+                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Server (UTC):</span>
-                <span className="text-gray-900 font-mono">
-                  {new Date().toUTCString().slice(0, -4)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-700">Timezone:</span>
-                <span className="text-gray-900 font-mono">
-                  {Intl.DateTimeFormat().resolvedOptions().timeZone}
-                </span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Location
-              </label>
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              >
-                <option value="">Select location...</option>
-                {locations.map((loc) => (
-                  <option key={loc._id} value={loc._id}>
-                    {loc.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sub-Location
-              </label>
-              <select
-                value={selectedSubLocation}
-                onChange={(e) => setSelectedSubLocation(e.target.value)}
-                disabled={!selectedLocation}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Select sub-location...</option>
-                {sublocations.map((subloc) => (
-                  <option key={subloc._id} value={subloc._id}>
-                    {subloc.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Event (Optional - Auto-detected)
-              </label>
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectedSubLocation || events.length === 0}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Auto-detect overlapping events</option>
-                {events.map((event) => (
-                  <option key={event._id} value={event._id}>
-                    {event.name}
-                    {event.description && ` - ${event.description}`}
-                  </option>
-                ))}
-              </select>
-              {selectedEventId ? (
-                <p className="text-xs text-pink-600 mt-1 font-medium">
-                  📅 Manual: Showing only this event
-                </p>
-              ) : counts.event > 0 ? (
-                <p className="text-xs text-green-600 mt-1 font-medium">
-                  ✨ Auto: Detected {counts.event} event ratesheet{counts.event > 1 ? 's' : ''}
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setQuickRange(7)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 7
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  7h
-                </button>
-                <button
-                  onClick={() => setQuickRange(12)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 12
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  12h
-                </button>
-                <button
-                  onClick={() => setQuickRange(24)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 24
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  24h
-                </button>
-                <button
-                  onClick={() => setQuickRange(48)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 48
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  48h
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PricingFilters
+          selectedLocation={selectedLocation}
+          selectedSubLocation={selectedSubLocation}
+          selectedEventId={selectedEventId}
+          onLocationChange={setSelectedLocation}
+          onSubLocationChange={setSelectedSubLocation}
+          onEventChange={setSelectedEventId}
+          selectedDuration={selectedDuration}
+          onDurationChange={setQuickRange}
+          useDurationContext={useDurationContext}
+          bookingStartTime={bookingStartTime}
+          onUseDurationContextChange={setUseDurationContext}
+          onBookingStartTimeChange={setBookingStartTime}
+          isEventBooking={isEventBooking}
+          onIsEventBookingChange={setIsEventBooking}
+          eventCount={counts.event}
+        />
 
         {loading && (
           <div className="flex items-center justify-center h-64">
@@ -889,7 +944,7 @@ export default function TimelineTilesPage() {
                   <div className="text-center">
                     <div className="text-xs font-medium text-white uppercase tracking-wide opacity-90">Total Cost</div>
                     <div className="text-3xl font-bold text-white">
-                      ${getTotalCost()}
+                      ${getTotalCost().toFixed(2)}
                     </div>
                     <div className="text-[10px] text-white mt-1 hidden">
                       {timeSlots.map(s => s.winningPrice ? `$${s.winningPrice}` : '$0').join(' + ')} = ${getTotalCost()}
@@ -934,7 +989,7 @@ export default function TimelineTilesPage() {
                         {/* Winning price - prominent */}
                         {slot.winningPrice ? (
                           <div className="text-xl font-extrabold text-gray-900 text-pink-500 mb-0">
-                            ${slot.winningPrice}
+                            ${slot.winningPrice.toFixed(2)}
                           </div>
                         ) : (
                           <div className="text-lg font-extrabold text-gray-400 mb-0">
@@ -987,7 +1042,19 @@ export default function TimelineTilesPage() {
                     </p>
                   </div>
                 )}
-                {allLayers.map((layer, layerIdx) => (
+                {allLayers.map((layer, layerIdx) => {
+                  // Check if this layer has any active tiles in the current time window
+                  const hasActiveTiles = timeSlots.some(slot => {
+                    const layerData = slot.layers.find(l => l.layer.id === layer.id);
+                    return layerData?.isActive;
+                  });
+
+                  // Skip rendering this layer if it has no active tiles
+                  if (!hasActiveTiles) {
+                    return null;
+                  }
+
+                  return (
                   <div key={layer.id}>
                     {/* Layer label */}
                     <div className="text-xs font-medium text-gray-700 mb-1" title={layer.name}>
@@ -1007,6 +1074,11 @@ export default function TimelineTilesPage() {
                         timeSlots.map((slot, slotIdx) => {
                           const layerData = slot.layers.find(l => l.layer.id === layer.id);
                           const isWinner = slot.winningLayer?.id === layer.id;
+
+                          // Debug: Check for mismatches
+                          if (slotIdx < 3 && layerData?.isActive && isWinner) {
+                            console.log(`[Render ${slot.label}] ${layer.name} isWinner=${isWinner}, winningPrice=$${slot.winningPrice}, layerPrice=$${layerData?.price}`);
+                          }
                           const isHovered = hoveredSlot?.slotIdx === slotIdx && hoveredSlot?.layerId === layer.id;
 
                           const isSelected = selectedSlot?.slotIdx === slotIdx && selectedSlot?.layerId === layer.id;
@@ -1049,7 +1121,8 @@ export default function TimelineTilesPage() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 </div>
               </div>
             )}

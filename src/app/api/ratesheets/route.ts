@@ -72,32 +72,50 @@ export async function GET(request: NextRequest) {
       };
 
       // Query ratesheets at ALL levels of the hierarchy (including EVENT if provided)
+      // Support both old schema and new appliesTo structure
       const orConditions: any[] = [
+        // Old schema
         { customerId: new ObjectId(location.customerId) },
         { locationId: new ObjectId(location._id) },
         { subLocationId: new ObjectId(subLocationId) },
+        // New schema
+        { 'appliesTo.level': 'CUSTOMER', 'appliesTo.entityId': new ObjectId(location.customerId) },
+        { 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': new ObjectId(location._id) },
+        { 'appliesTo.level': 'SUBLOCATION', 'appliesTo.entityId': new ObjectId(subLocationId) },
       ];
 
       // Add EVENT level if eventId is provided
       if (eventId) {
         orConditions.push({ eventId: new ObjectId(eventId) });
+        orConditions.push({ 'appliesTo.level': 'EVENT', 'appliesTo.entityId': new ObjectId(eventId) });
         hierarchyInfo.eventId = eventId;
       }
 
       query.$or = orConditions;
     } else {
       // Direct query mode - filter by specific entity only
+      // Support both old schema and new appliesTo structure
+      const orConditions: any[] = [];
+
       if (eventId) {
-        query.eventId = new ObjectId(eventId);
+        orConditions.push({ eventId: new ObjectId(eventId) });
+        orConditions.push({ 'appliesTo.level': 'EVENT', 'appliesTo.entityId': new ObjectId(eventId) });
       }
       if (subLocationId) {
-        query.subLocationId = new ObjectId(subLocationId);
+        orConditions.push({ subLocationId: new ObjectId(subLocationId) });
+        orConditions.push({ 'appliesTo.level': 'SUBLOCATION', 'appliesTo.entityId': new ObjectId(subLocationId) });
       }
       if (locationId) {
-        query.locationId = new ObjectId(locationId);
+        orConditions.push({ locationId: new ObjectId(locationId) });
+        orConditions.push({ 'appliesTo.level': 'LOCATION', 'appliesTo.entityId': new ObjectId(locationId) });
       }
       if (customerId) {
-        query.customerId = new ObjectId(customerId);
+        orConditions.push({ customerId: new ObjectId(customerId) });
+        orConditions.push({ 'appliesTo.level': 'CUSTOMER', 'appliesTo.entityId': new ObjectId(customerId) });
+      }
+
+      if (orConditions.length > 0) {
+        query.$or = orConditions;
       }
     }
 
@@ -158,14 +176,26 @@ export async function GET(request: NextRequest) {
       ratesheets.map(async (ratesheet) => {
         const enriched: any = { ...ratesheet };
 
-        // Determine the "applyTo" level based on which ID is set (check EVENT first as it has highest priority)
-        if (ratesheet.eventId) {
-          enriched.applyTo = 'EVENT';
-          enriched.ratesheetType = 'EVENT';
+        // Determine the "applyTo" level based on new appliesTo structure OR legacy ID fields
+        const level = ratesheet.appliesTo?.level ||
+                      (ratesheet.eventId ? 'EVENT' :
+                       ratesheet.subLocationId ? 'SUBLOCATION' :
+                       ratesheet.locationId ? 'LOCATION' : 'CUSTOMER');
 
+        const entityId = ratesheet.appliesTo?.entityId ||
+                        ratesheet.eventId ||
+                        ratesheet.subLocationId ||
+                        ratesheet.locationId ||
+                        ratesheet.customerId;
+
+        enriched.applyTo = level;
+        enriched.ratesheetType = level;
+
+        // Populate based on level
+        if (level === 'EVENT') {
           // Populate event
           const event = await eventsCollection.findOne({
-            _id: new ObjectId(ratesheet.eventId),
+            _id: new ObjectId(entityId),
           });
           if (event) {
             enriched.event = {
@@ -173,13 +203,10 @@ export async function GET(request: NextRequest) {
               name: event.name,
             };
           }
-        } else if (ratesheet.subLocationId) {
-          enriched.applyTo = 'SUBLOCATION';
-          enriched.ratesheetType = 'SUBLOCATION';
-
+        } else if (level === 'SUBLOCATION') {
           // Populate sublocation
           const sublocation = await sublocationsCollection.findOne({
-            _id: new ObjectId(ratesheet.subLocationId),
+            _id: new ObjectId(entityId),
           });
           if (sublocation) {
             enriched.sublocation = {
@@ -213,13 +240,10 @@ export async function GET(request: NextRequest) {
               }
             }
           }
-        } else if (ratesheet.locationId) {
-          enriched.applyTo = 'LOCATION';
-          enriched.ratesheetType = 'LOCATION';
-
+        } else if (level === 'LOCATION') {
           // Populate location
           const location = await locationsCollection.findOne({
-            _id: new ObjectId(ratesheet.locationId),
+            _id: new ObjectId(entityId),
           });
           if (location) {
             enriched.location = {
@@ -240,13 +264,10 @@ export async function GET(request: NextRequest) {
               }
             }
           }
-        } else if (ratesheet.customerId) {
-          enriched.applyTo = 'CUSTOMER';
-          enriched.ratesheetType = 'CUSTOMER';
-
+        } else if (level === 'CUSTOMER') {
           // Populate customer
           const customer = await customersCollection.findOne({
-            _id: new ObjectId(ratesheet.customerId),
+            _id: new ObjectId(entityId),
           });
           if (customer) {
             enriched.customer = {

@@ -58,7 +58,7 @@ async function reseedPriorityConfigs() {
         minPriority: 4000,
         maxPriority: 4999,
         color: '#EC4899', // Pink
-        description: 'Event-level ratesheets have highest priority and override all other rates for specific events',
+        description: 'Event-level ratesheets have highest priority and override all other rates for specific events (4900-4999: Auto-generated event ratesheets)',
         enabled: true,
         createdAt: new Date(),
         updatedAt: new Date()

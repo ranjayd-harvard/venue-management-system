@@ -89,6 +89,7 @@ export default function PricingViewPage() {
   const [selectedLocation, setSelectedLocation] = useState('');
   const [subLocationId, setSubLocationId] = useState('');
   const [selectedEventId, setSelectedEventId] = useState('');
+  const [isEventBooking, setIsEventBooking] = useState(false);
 
   // Initialize with default dates
   const defaultDates = getDefaultDates();
@@ -139,15 +140,55 @@ export default function PricingViewPage() {
     }
   }, [selectedLocation]);
 
-  // Fetch all active events (including upcoming) when sublocation is selected
+  // Fetch all active events that overlap with booking dates AND belong to selected sublocation
   useEffect(() => {
-    if (subLocationId) {
-      fetch('/api/events')
+    if (subLocationId && startDateTime && endDateTime) {
+      // First, get the sublocation details to know its location and customer
+      fetch(`/api/sublocations/${subLocationId}`)
         .then(res => res.json())
-        .then(data => {
-          // Filter to only show events with isActive=true
-          const activeEvents = data.filter((e: Event) => e.isActive);
-          setEvents(activeEvents);
+        .then(async (sublocation) => {
+          // Get location details
+          const locationRes = await fetch(`/api/locations/${sublocation.locationId}`);
+          const location = await locationRes.json();
+
+          // Fetch all events
+          const eventsRes = await fetch('/api/events');
+          const allEvents = await eventsRes.json();
+
+          // Filter to only show events that are active AND overlap with booking dates AND belong to this hierarchy
+          const bookingStart = new Date(startDateTime);
+          const bookingEnd = new Date(endDateTime);
+
+          const overlappingEvents = allEvents.filter((e: Event) => {
+            if (!e.isActive) return false;
+
+            const eventStart = new Date(e.startDate);
+            const eventEnd = new Date(e.endDate);
+
+            // Event must overlap with booking dates
+            const dateOverlap = eventEnd >= bookingStart && eventStart <= bookingEnd;
+            if (!dateOverlap) return false;
+
+            // Event must belong to this sublocation hierarchy
+            // Convert IDs to strings for comparison (in case they're ObjectIds)
+            const eventSubLocId = typeof e.subLocationId === 'object' ? (e.subLocationId as any)?.$oid || String(e.subLocationId) : e.subLocationId;
+            const eventLocId = typeof e.locationId === 'object' ? (e.locationId as any)?.$oid || String(e.locationId) : e.locationId;
+            const eventCustId = typeof e.customerId === 'object' ? (e.customerId as any)?.$oid || String(e.customerId) : e.customerId;
+
+            // Match if: event is for this sublocation, OR this location (and no sublocation), OR this customer (and no location/sublocation)
+            const matchesSubLocation = eventSubLocId === subLocationId;
+            const matchesLocation = eventLocId === location._id && !eventSubLocId;
+            const matchesCustomer = eventCustId === location.customerId && !eventLocId && !eventSubLocId;
+
+            return matchesSubLocation || matchesLocation || matchesCustomer;
+          });
+
+          setEvents(overlappingEvents);
+
+          // Clear selected event if it no longer matches
+          if (selectedEventId && !overlappingEvents.find((e: Event) => e._id === selectedEventId)) {
+            setSelectedEventId('');
+          }
         })
         .catch(err => {
           console.error('Failed to load events:', err);
@@ -157,7 +198,21 @@ export default function PricingViewPage() {
       setEvents([]);
       setSelectedEventId('');
     }
-  }, [subLocationId]);
+  }, [subLocationId, startDateTime, endDateTime]);
+
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
 
   const handleCalculate = async () => {
     if (!subLocationId || !startDateTime || !endDateTime) {
@@ -181,7 +236,8 @@ export default function PricingViewPage() {
           eventId: selectedEventId || undefined,
           startTime: new Date(startDateTime).toISOString(),
           endTime: new Date(endDateTime).toISOString(),
-          timezone: userTimezone
+          timezone: userTimezone,
+          isEventBooking: isEventBooking
         }),
       });
 
@@ -332,6 +388,38 @@ export default function PricingViewPage() {
                     📅 Event-specific pricing will be applied if available
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Event Booking Toggle */}
+            {subLocationId && (
+              <div className="bg-gradient-to-r from-pink-50 to-purple-50 border-2 border-pink-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <label htmlFor="isEventBooking" className="text-sm font-semibold text-gray-800 cursor-pointer">
+                      Is this an event booking?
+                    </label>
+                    <p className="text-xs text-gray-600 mt-1">
+                      {isEventBooking
+                        ? '✅ Event pricing with grace periods will apply (free grace periods)'
+                        : '❌ Regular walk-in pricing (no free grace periods)'}
+                    </p>
+                  </div>
+                  <button
+                    id="isEventBooking"
+                    type="button"
+                    onClick={() => setIsEventBooking(!isEventBooking)}
+                    className={`relative inline-flex h-8 w-14 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 ${
+                      isEventBooking ? 'bg-pink-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        isEventBooking ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             )}
 

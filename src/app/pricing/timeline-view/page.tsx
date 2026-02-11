@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { 
-  Calendar, 
-  Clock, 
-  DollarSign, 
-  TrendingUp, 
-  ChevronDown, 
+import {
+  Calendar,
+  Clock,
+  DollarSign,
+  TrendingUp,
+  ChevronDown,
   ChevronUp,
   Zap,
   Award,
@@ -15,10 +15,14 @@ import {
   MapPin,
   User
 } from 'lucide-react';
+import PricingFilters from '@/components/PricingFilters';
 
 interface TimeWindow {
-  startTime: string;
-  endTime: string;
+  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
+  startTime?: string;
+  endTime?: string;
+  startMinute?: number;
+  endMinute?: number;
   pricePerHour: number;
 }
 
@@ -112,13 +116,11 @@ interface TimeSlot {
 }
 
 export default function TimelineViewPage() {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [sublocations, setSublocations] = useState<SubLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [selectedSubLocation, setSelectedSubLocation] = useState<string>('');
-  const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const [ratesheets, setRatesheets] = useState<Ratesheet[]>([]);
+  const [events, setEvents] = useState<Event[]>([]); // Needed for getActiveRatesheetsForInterval filtering
   const [loading, setLoading] = useState(false);
 
   // Pricing config for priority ranges
@@ -151,10 +153,30 @@ export default function TimelineViewPage() {
 
   const [selectedDuration, setSelectedDuration] = useState<number>(12); // Duration in hours (default 12h)
 
+  // Booking start time for duration-based window calculations
+  const [useDurationContext, setUseDurationContext] = useState<boolean>(false);
+  const [bookingStartTime, setBookingStartTime] = useState<Date>(viewStart);
+
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
+
+  // Event booking toggle
+  const [isEventBooking, setIsEventBooking] = useState<boolean>(false);
+
+  // Save settings to localStorage whenever they change
+  useEffect(() => {
+    const settings = {
+      bookingStartTime: bookingStartTime.toISOString(),
+      useDurationContext,
+      isEventBooking,
+      selectedLocation,
+      selectedSubLocation,
+      selectedEventId,
+    };
+    localStorage.setItem('timelineViewSettings', JSON.stringify(settings));
+  }, [bookingStartTime, useDurationContext, isEventBooking, selectedLocation, selectedSubLocation, selectedEventId]);
 
   // Unique colors per ratesheet
   const ratesheetColors = useRef(new Map<string, string>()).current;
@@ -208,16 +230,13 @@ export default function TimelineViewPage() {
   };
 
   useEffect(() => {
-    fetchLocations();
     fetchPricingConfig();
   }, []);
 
   useEffect(() => {
     if (selectedLocation) {
-      fetchSubLocations(selectedLocation);
       fetchLocationDetails(selectedLocation);
     } else {
-      setSublocations([]);
       setSelectedSubLocation('');
       setCurrentLocation(null);
       setCurrentCustomer(null);
@@ -227,18 +246,54 @@ export default function TimelineViewPage() {
   useEffect(() => {
     if (selectedSubLocation) {
       fetchSubLocationDetails(selectedSubLocation);
-      // Load all active events (including upcoming ones)
-      fetch('/api/events')
+
+      // Load events that overlap with the date range AND belong to selected sublocation hierarchy
+      fetch(`/api/sublocations/${selectedSubLocation}`)
         .then(res => res.json())
-        .then(data => {
-          // Filter to only show events with isActive=true
-          const activeEvents = data.filter((e: Event) => e.isActive);
-          setEvents(activeEvents);
+        .then(async (sublocation) => {
+          // Get location details
+          const locationRes = await fetch(`/api/locations/${sublocation.locationId}`);
+          const location = await locationRes.json();
+
+          // Fetch all events
+          const eventsRes = await fetch('/api/events');
+          const allEvents = await eventsRes.json();
+
+          const overlappingEvents = allEvents.filter((e: Event) => {
+            if (!e.isActive) return false;
+
+            const eventStart = new Date(e.startDate);
+            const eventEnd = new Date(e.endDate);
+
+            // Event must overlap with the full date range (not just the narrow view window)
+            const dateOverlap = eventEnd >= rangeStart && eventStart <= rangeEnd;
+            if (!dateOverlap) return false;
+
+            // Event must belong to this sublocation hierarchy
+            // Convert IDs to strings for comparison (in case they're ObjectIds)
+            const eventSubLocId = typeof e.subLocationId === 'object' ? (e.subLocationId as any)?.$oid || String(e.subLocationId) : e.subLocationId;
+            const eventLocId = typeof e.locationId === 'object' ? (e.locationId as any)?.$oid || String(e.locationId) : e.locationId;
+            const eventCustId = typeof e.customerId === 'object' ? (e.customerId as any)?.$oid || String(e.customerId) : e.customerId;
+
+            const matchesSubLocation = eventSubLocId === selectedSubLocation;
+            const matchesLocation = eventLocId === location._id && !eventSubLocId;
+            const matchesCustomer = eventCustId === location.customerId && !eventLocId && !eventSubLocId;
+
+            return matchesSubLocation || matchesLocation || matchesCustomer;
+          });
+
+          setEvents(overlappingEvents);
+
+          // Clear selected event if it no longer matches
+          if (selectedEventId && !overlappingEvents.find((e: Event) => e._id === selectedEventId)) {
+            setSelectedEventId('');
+          }
         })
         .catch(err => {
           console.error('Failed to load events:', err);
           setEvents([]);
         });
+
       // Fetch ratesheets whenever sublocation, event, or date range changes
       fetchRatesheets(selectedSubLocation);
     } else {
@@ -256,11 +311,33 @@ export default function TimelineViewPage() {
     }
   }, [selectedEventId]);
 
+  // Auto-set isEventBooking=true when event is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      setIsEventBooking(true);
+    }
+  }, [selectedEventId]);
+
+  // Clear selectedEventId when isEventBooking is toggled OFF
+  useEffect(() => {
+    if (!isEventBooking && selectedEventId) {
+      setSelectedEventId('');
+    }
+  }, [isEventBooking]);
+
+  // Sync view window with booking start time when duration context is enabled
+  useEffect(() => {
+    if (useDurationContext) {
+      setViewStart(new Date(bookingStartTime));
+      setViewEnd(new Date(bookingStartTime.getTime() + selectedDuration * 60 * 60 * 1000));
+    }
+  }, [useDurationContext, bookingStartTime]);
+
   useEffect(() => {
     if (currentSubLocation || currentLocation || currentCustomer) {
       calculateTimeSlots();
     }
-  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer]);
+  }, [ratesheets, viewStart, viewEnd, currentSubLocation, currentLocation, currentCustomer, useDurationContext, bookingStartTime, isEventBooking]);
 
   const fetchPricingConfig = async () => {
     try {
@@ -269,26 +346,6 @@ export default function TimelineViewPage() {
       setPricingConfig(data.pricingConfig);
     } catch (error) {
       console.error('Failed to fetch pricing config:', error);
-    }
-  };
-
-  const fetchLocations = async () => {
-    try {
-      const response = await fetch('/api/locations');
-      const data = await response.json();
-      setLocations(data);
-    } catch (error) {
-      console.error('Failed to fetch locations:', error);
-    }
-  };
-
-  const fetchSubLocations = async (locationId: string) => {
-    try {
-      const response = await fetch(`/api/sublocations?locationId=${locationId}`);
-      const data = await response.json();
-      setSublocations(data);
-    } catch (error) {
-      console.error('Failed to fetch sublocations:', error);
     }
   };
 
@@ -338,11 +395,10 @@ export default function TimelineViewPage() {
       const allEvents = await eventsResponse.json();
       const activeEvents = allEvents.filter((e: Event) => e.isActive);
 
-      // Find events that overlap with timeline range
+      // Find events that overlap with the full timeline range (not just the narrow view window)
       const overlappingEvents = activeEvents.filter((event: Event) => {
         const eventStart = new Date(event.startDate);
         const eventEnd = new Date(event.endDate);
-        // Event overlaps if: event ends after range starts AND event starts before range ends
         return eventEnd >= rangeStart && eventStart <= rangeEnd;
       });
 
@@ -420,6 +476,14 @@ export default function TimelineViewPage() {
   };
 
   const calculateTimeSlots = () => {
+    console.log('\n🔵 [TIMELINE] calculateTimeSlots() called');
+    console.log('[TIMELINE] viewStart:', viewStart.toISOString());
+    console.log('[TIMELINE] viewEnd:', viewEnd.toISOString());
+    console.log('[TIMELINE] bookingStartTime:', bookingStartTime.toISOString());
+    console.log('[TIMELINE] useDurationContext:', useDurationContext);
+    console.log('[TIMELINE] isEventBooking:', isEventBooking);
+    console.log('[TIMELINE] Active ratesheets:', ratesheets.length);
+
     const slots: TimeSlot[] = [];
     const currentTime = new Date(viewStart);
     const endTime = new Date(viewEnd);
@@ -443,9 +507,35 @@ export default function TimelineViewPage() {
       const candidateRatesheets = activeRatesheets
         .map(rs => {
           if (rs.timeWindows && rs.timeWindows.length > 0) {
-            const matchingWindow = rs.timeWindows.find(tw => 
-              timeInWindow(timeStr, tw.startTime, tw.endTime)
-            );
+            const matchingWindow = rs.timeWindows.find(tw => {
+              // CRITICAL: For walk-ins (isEventBooking = false), skip grace periods ($0/hr time windows)
+              // This allows event rates to apply but excludes free grace periods
+              if (!isEventBooking && tw.pricePerHour === 0 && rs.applyTo === 'EVENT') {
+                return false; // Skip this $0/hr grace period time window
+              }
+
+              const windowType = tw.windowType || 'ABSOLUTE_TIME';
+
+              if (windowType === 'DURATION_BASED') {
+                // Duration-based windows: calculate minutes from ratesheet effectiveFrom
+                // For EVENT ratesheets, effectiveFrom is the event start minus grace period
+                const ratesheetStart = new Date(rs.effectiveFrom);
+                const minutesFromRatesheetStart = Math.floor(
+                  (currentTime.getTime() - ratesheetStart.getTime()) / (1000 * 60)
+                );
+                const startMinute = tw.startMinute ?? 0;
+                const endMinute = tw.endMinute ?? 0;
+
+                return minutesFromRatesheetStart >= startMinute && minutesFromRatesheetStart < endMinute;
+              } else {
+                // ABSOLUTE_TIME windows: match against hour time
+                if (!tw.startTime || !tw.endTime) {
+                  return false; // Invalid window
+                }
+                return timeInWindow(timeStr, tw.startTime, tw.endTime);
+              }
+            });
+
             if (matchingWindow) {
               return {
                 ratesheet: rs,
@@ -623,9 +713,17 @@ export default function TimelineViewPage() {
 
   const setQuickRange = (hours: number) => {
     setSelectedDuration(hours);
-    // Keep current start time, just update the end based on new duration
-    const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
-    setViewEnd(newViewEnd);
+    // If duration context is enabled, calculate from booking start time
+    if (useDurationContext) {
+      const newViewStart = new Date(bookingStartTime);
+      const newViewEnd = new Date(bookingStartTime.getTime() + hours * 60 * 60 * 1000);
+      setViewStart(newViewStart);
+      setViewEnd(newViewEnd);
+    } else {
+      // Keep current start time, just update the end based on new duration
+      const newViewEnd = new Date(viewStart.getTime() + hours * 60 * 60 * 1000);
+      setViewEnd(newViewEnd);
+    }
   };
 
   const getTotalHours = (): number => {
@@ -683,17 +781,15 @@ export default function TimelineViewPage() {
         if (event) {
           const eventStart = new Date(event.startDate);
           const eventEnd = new Date(event.endDate);
-          // Event overlaps if: event ends after viewStart AND event starts before viewEnd
           return eventEnd >= viewStart && eventStart <= viewEnd;
         }
-        return false;
+        // Event not found in local state — fall through to effectiveFrom/To check
       }
 
-      // For non-event ratesheets, check if the ratesheet's effective date range overlaps with selected interval
+      // Check if the ratesheet's effective date range overlaps with selected interval
       const rsStart = new Date(rs.effectiveFrom);
       const rsEnd = rs.effectiveTo ? new Date(rs.effectiveTo) : new Date('2099-12-31');
 
-      // Ratesheet overlaps if: rs ends after viewStart AND rs starts before viewEnd
       return rsEnd >= viewStart && rsStart <= viewEnd;
     });
   };
@@ -743,123 +839,66 @@ export default function TimelineViewPage() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Location
-              </label>
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              >
-                <option value="">Select location...</option>
-                {locations.map((loc) => (
-                  <option key={loc._id} value={loc._id}>
-                    {loc.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+        <PricingFilters
+          selectedLocation={selectedLocation}
+          selectedSubLocation={selectedSubLocation}
+          selectedEventId={selectedEventId}
+          onLocationChange={setSelectedLocation}
+          onSubLocationChange={setSelectedSubLocation}
+          onEventChange={setSelectedEventId}
+          selectedDuration={selectedDuration}
+          onDurationChange={setQuickRange}
+          useDurationContext={useDurationContext}
+          bookingStartTime={bookingStartTime}
+          onUseDurationContextChange={setUseDurationContext}
+          onBookingStartTimeChange={setBookingStartTime}
+          isEventBooking={isEventBooking}
+          onIsEventBookingChange={setIsEventBooking}
+          eventCount={counts.event}
+        />
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sub-Location
-              </label>
-              <select
-                value={selectedSubLocation}
-                onChange={(e) => setSelectedSubLocation(e.target.value)}
-                disabled={!selectedLocation}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Select sub-location...</option>
-                {sublocations.map((subloc) => (
-                  <option key={subloc._id} value={subloc._id}>
-                    {subloc.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Event (Optional - Auto-detected)
-              </label>
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectedSubLocation || events.length === 0}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 bg-white"
-              >
-                <option value="">Auto-detect overlapping events</option>
-                {events.map((event) => (
-                  <option key={event._id} value={event._id}>
-                    {event.name}
-                    {event.description && ` - ${event.description}`}
-                  </option>
-                ))}
-              </select>
-              {selectedEventId ? (
-                <p className="text-xs text-pink-600 mt-1 font-medium">
-                  📅 Manual: Showing only this event
-                </p>
-              ) : counts.event > 0 ? (
-                <p className="text-xs text-green-600 mt-1 font-medium">
-                  ✨ Auto: Detected {counts.event} event ratesheet{counts.event > 1 ? 's' : ''}
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setQuickRange(7)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 7
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  7h
-                </button>
-                <button
-                  onClick={() => setQuickRange(12)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 12
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  12h
-                </button>
-                <button
-                  onClick={() => setQuickRange(24)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 24
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  24h
-                </button>
-                <button
-                  onClick={() => setQuickRange(48)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-lg font-medium transition-colors ${
-                    selectedDuration === 48
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                  }`}
-                >
-                  48h
-                </button>
+        {/* Debug Panel */}
+        {false && selectedSubLocation && (
+          <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-4 mb-6">
+            <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center gap-2">
+              🔵 Timeline View - Debug Info
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div>
+                <div className="text-blue-600 font-medium">Booking Start Time:</div>
+                <div className="text-blue-900 font-mono">{bookingStartTime.toISOString()}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">View Start:</div>
+                <div className="text-blue-900 font-mono">{viewStart.toISOString()}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Duration Context:</div>
+                <div className="text-blue-900 font-mono">{useDurationContext ? '✅ ON' : '❌ OFF'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Event Booking:</div>
+                <div className="text-blue-900 font-mono">{isEventBooking ? '✅ YES' : '❌ NO'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Selected Event:</div>
+                <div className="text-blue-900 font-mono">{selectedEventId || 'Auto-detect'}</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Active Ratesheets:</div>
+                <div className="text-blue-900 font-mono">{ratesheets.length} total</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Event Ratesheets:</div>
+                <div className="text-blue-900 font-mono">{counts.event} detected</div>
+              </div>
+              <div>
+                <div className="text-blue-600 font-medium">Total Hours:</div>
+                <div className="text-blue-900 font-mono">{getTotalHours()}h</div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {loading && (
           <div className="flex items-center justify-center h-64">
@@ -980,14 +1019,23 @@ export default function TimelineViewPage() {
                           : 'bg-gray-100 border-gray-200'
                       }`}
                     >
-                      {slot.winningPrice && (
+                      {slot.winningPrice !== undefined && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                          <span className="text-xs font-bold">${slot.winningPrice}</span>
-                          <span className="text-[10px] opacity-90">/ hr</span>
-                          {slot.isDefaultRate && (
-                            <span className="text-[8px] opacity-75 mt-0.5">
-                              {slot.defaultType === 'SUBLOCATION' ? 'Sub' : slot.defaultType === 'LOCATION' ? 'Loc' : 'Cust'}
-                            </span>
+                          {slot.winningPrice === 0 ? (
+                            <>
+                              <span className="text-xs font-bold">Grace</span>
+                              <span className="text-[10px] opacity-90">$0/hr</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-xs font-bold">${slot.winningPrice}</span>
+                              <span className="text-[10px] opacity-90">/ hr</span>
+                              {slot.isDefaultRate && (
+                                <span className="text-[8px] opacity-75 mt-0.5">
+                                  {slot.defaultType === 'SUBLOCATION' ? 'Sub' : slot.defaultType === 'LOCATION' ? 'Loc' : 'Cust'}
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -1012,7 +1060,11 @@ export default function TimelineViewPage() {
                               <div className="font-semibold">{slot.winningRatesheet.name}</div>
                               <div className="text-gray-300">Level: {slot.winningRatesheet.applyTo}</div>
                               <div className="text-gray-300">Priority: {slot.winningRatesheet.priority}</div>
-                              <div className="text-green-400">${slot.winningPrice}/hr</div>
+                              {slot.winningPrice === 0 ? (
+                                <div className="text-blue-400">Grace Period ($0/hr)</div>
+                              ) : (
+                                <div className="text-green-400">${slot.winningPrice}/hr</div>
+                              )}
                             </>
                           ) : (
                             <>

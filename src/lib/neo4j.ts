@@ -42,6 +42,7 @@ export async function syncToNeo4j() {
     const { SubLocationRepository } = await import('@/models/SubLocation');
     const { VenueRepository } = await import('@/models/Venue');
     const { SubLocationVenueRepository } = await import('@/models/SubLocationVenue');
+    const { EventRepository } = await import('@/models/Event');
 
     // Create Customer nodes
     const customers = await CustomerRepository.findAll();
@@ -51,13 +52,15 @@ export async function syncToNeo4j() {
           id: $id,
           name: $name,
           email: $email,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: customer._id!.toString(),
           name: customer.name,
           email: customer.email,
           attributes: JSON.stringify(customer.attributes || []),
+          capacityConfig: JSON.stringify(customer.capacityConfig || null),
         }
       );
     }
@@ -71,7 +74,8 @@ export async function syncToNeo4j() {
           name: $name,
           city: $city,
           totalCapacity: $totalCapacity,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: location._id!.toString(),
@@ -79,19 +83,22 @@ export async function syncToNeo4j() {
           city: location.city,
           totalCapacity: location.totalCapacity || 0,
           attributes: JSON.stringify(location.attributes || []),
+          capacityConfig: JSON.stringify(location.capacityConfig || null),
         }
       );
 
       // Create relationship to customer
-      await session.run(
-        `MATCH (c:Customer {id: $customerId})
-         MATCH (l:Location {id: $locationId})
-         CREATE (c)-[:HAS_LOCATION]->(l)`,
-        {
-          customerId: location.customerId.toString(),
-          locationId: location._id!.toString(),
-        }
-      );
+      if (location.customerId) {
+        await session.run(
+          `MATCH (c:Customer {id: $customerId})
+           MATCH (l:Location {id: $locationId})
+           CREATE (c)-[:HAS_LOCATION]->(l)`,
+          {
+            customerId: location.customerId.toString(),
+            locationId: location._id!.toString(),
+          }
+        );
+      }
     }
 
     // Create SubLocation nodes and relationships
@@ -102,26 +109,30 @@ export async function syncToNeo4j() {
           id: $id,
           label: $label,
           allocatedCapacity: $allocatedCapacity,
-          attributes: $attributes
+          attributes: $attributes,
+          capacityConfig: $capacityConfig
         })`,
         {
           id: sublocation._id!.toString(),
           label: sublocation.label,
           allocatedCapacity: sublocation.allocatedCapacity || 0,
           attributes: JSON.stringify(sublocation.attributes || []),
+          capacityConfig: JSON.stringify(sublocation.capacityConfig || null),
         }
       );
 
       // Create relationship to location
-      await session.run(
-        `MATCH (l:Location {id: $locationId})
-         MATCH (sl:SubLocation {id: $subLocationId})
-         CREATE (l)-[:HAS_SUBLOCATION]->(sl)`,
-        {
-          locationId: sublocation.locationId.toString(),
-          subLocationId: sublocation._id!.toString(),
-        }
-      );
+      if (sublocation.locationId) {
+        await session.run(
+          `MATCH (l:Location {id: $locationId})
+           MATCH (sl:SubLocation {id: $subLocationId})
+           CREATE (l)-[:HAS_SUBLOCATION]->(sl)`,
+          {
+            locationId: sublocation.locationId.toString(),
+            subLocationId: sublocation._id!.toString(),
+          }
+        );
+      }
     }
 
     // Create Venue nodes
@@ -147,16 +158,91 @@ export async function syncToNeo4j() {
 
     // Create SubLocation-Venue relationships
     const slVenues = await SubLocationVenueRepository.findAll();
+    console.log(`Creating ${slVenues.length} SubLocation-Venue relationships...`);
     for (const slv of slVenues) {
+      if (slv.subLocationId && slv.venueId) {
+        console.log(`Creating relationship: SubLocation ${slv.subLocationId} -> Venue ${slv.venueId}`);
+        await session.run(
+          `MATCH (sl:SubLocation {id: $subLocationId})
+           MATCH (v:Venue {id: $venueId})
+           CREATE (sl)-[:HAS_VENUE]->(v)`,
+          {
+            subLocationId: slv.subLocationId.toString(),
+            venueId: slv.venueId.toString(),
+          }
+        );
+      } else {
+        console.log(`Skipping relationship due to missing IDs:`, { subLocationId: slv.subLocationId, venueId: slv.venueId });
+      }
+    }
+
+    // Create Event nodes and relationships
+    const events = await EventRepository.findAll();
+    for (const event of events) {
       await session.run(
-        `MATCH (sl:SubLocation {id: $subLocationId})
-         MATCH (v:Venue {id: $venueId})
-         CREATE (sl)-[:HAS_VENUE]->(v)`,
+        `CREATE (e:Event {
+          id: $id,
+          name: $name,
+          description: $description,
+          startDate: $startDate,
+          endDate: $endDate,
+          isActive: $isActive,
+          capacityConfig: $capacityConfig
+        })`,
         {
-          subLocationId: slv.subLocationId.toString(),
-          venueId: slv.venueId.toString(),
+          id: event._id!.toString(),
+          name: event.name,
+          description: event.description || '',
+          startDate: event.startDate.toISOString(),
+          endDate: event.endDate.toISOString(),
+          isActive: event.isActive,
+          capacityConfig: JSON.stringify(event.capacityConfig || null),
         }
       );
+
+      // Create relationships based on event association
+      // Priority: venue > sublocation > location > customer
+      if (event.venueId) {
+        await session.run(
+          `MATCH (v:Venue {id: $venueId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (v)-[:HAS_EVENT]->(e)`,
+          {
+            venueId: event.venueId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.subLocationId) {
+        await session.run(
+          `MATCH (sl:SubLocation {id: $subLocationId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (sl)-[:HAS_EVENT]->(e)`,
+          {
+            subLocationId: event.subLocationId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.locationId) {
+        await session.run(
+          `MATCH (l:Location {id: $locationId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (l)-[:HAS_EVENT]->(e)`,
+          {
+            locationId: event.locationId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      } else if (event.customerId) {
+        await session.run(
+          `MATCH (c:Customer {id: $customerId})
+           MATCH (e:Event {id: $eventId})
+           CREATE (c)-[:HAS_EVENT]->(e)`,
+          {
+            customerId: event.customerId.toString(),
+            eventId: event._id!.toString(),
+          }
+        );
+      }
     }
 
     console.log('✓ Successfully synced data to Neo4j');

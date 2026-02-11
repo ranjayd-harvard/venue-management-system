@@ -32,10 +32,15 @@ Any changes require explicit human approval and thorough testing.
 - `src/models/Customer.ts` – CustomerRepository pattern
 - `src/models/Location.ts` – LocationRepository pattern
 - `src/models/Ratesheet.ts` – Complex ratesheet queries with approval workflow
+- `src/models/CapacitySheet.ts` – Capacity sheet model with approval workflow (mirrors Ratesheet)
 
 ### Pricing Engine
 - `src/lib/pricing-engine.ts` – Critical pricing calculation logic (contains documented bug fixes)
 - `src/lib/price-engine-hourly.ts` – Hourly rate calculations
+
+### Capacity Engine
+- `src/lib/capacity-engine-hourly.ts` – Hourly capacity calculations (mirrors price-engine-hourly.ts)
+- `src/lib/capacity-utils.ts` – Capacity helper functions and daily capacity management
 
 ### Configuration Files
 - `package.json` – Dependencies
@@ -71,6 +76,23 @@ All repositories follow a static class pattern:
 - `src/app/api/graph/sync/route.ts` – Neo4j sync (destructive)
 - `src/app/api/admin/seed/route.ts` – Database seeding
 
+### Capacity API Routes (Week 2)
+- `src/app/api/capacitysheets/route.ts` – List/Create capacity sheets
+- `src/app/api/capacitysheets/[id]/route.ts` – CRUD operations for individual sheets
+- `src/app/api/capacitysheets/approval/route.ts` – Approval workflow (submit/approve/reject)
+- `src/app/api/capacity/calculate/route.ts` – Capacity calculation using hourly engine
+
+### Capacity UI Pages (Week 3 & 4)
+- `src/app/admin/capacity-sheets/page.tsx` – Admin management page (Week 3)
+- `src/app/capacity/calculator/page.tsx` – Capacity calculator (Week 3)
+- `src/app/capacity/timeline-view/page.tsx` – Timeline visualization (Week 4)
+- `src/app/capacity/analytics/page.tsx` – Analytics dashboard (Week 4)
+
+### Capacity UI Components (Week 3 & 4)
+- `src/components/CreateCapacitySheetModal.tsx` – Create sheet modal (Week 3)
+- `src/components/EditCapacitySheetModal.tsx` – Edit sheet modal (Week 3)
+- `src/components/CapacityConflictDetector.tsx` – Conflict detection (Week 4)
+
 ---
 
 ## ✅ SAFE ZONES (Lower Risk)
@@ -80,6 +102,17 @@ These areas are suitable for incremental changes when following established patt
 ### New Pages
 - New pages in `src/app/`
 - New API routes in `src/app/api/` using `NextResponse`
+
+### Capacity API Endpoints (Safe to Extend)
+- Capacity sheets CRUD following same patterns as ratesheets
+- Capacity calculation endpoint following pricing calculation pattern
+- All endpoints use CapacitySheetRepository and HourlyCapacityEngine
+
+### Capacity UI Components (Safe to Extend)
+- Follow modal patterns from pricing system
+- Reuse form validation patterns
+- Consistent color scheme (teal/green gradient)
+- Timeline and analytics views for data visualization
 
 ### Simple Form Components
 - `src/components/CustomerForm.tsx`
@@ -94,6 +127,30 @@ These areas are suitable for incremental changes when following established patt
 
 ### Documentation
 - All `*.md` files in the root directory
+
+---
+
+## System Architecture Overview
+
+### Pricing System
+The pricing system uses a hierarchical, priority-based approach:
+- **PriorityConfig** - Global configuration for pricing hierarchy
+- **Ratesheets** - Dynamic pricing rules at Customer/Location/SubLocation/Event levels
+- **Pricing Engine** - Hourly evaluation engine that selects applicable ratesheets
+- **Approval Workflow** - Draft → Pending → Approved/Rejected lifecycle
+- **Admin UI** - `/admin/pricing` for managing ratesheets
+
+### Capacity System (Parallel Architecture)
+The capacity system mirrors the pricing system:
+- **PriorityConfig** - Reuses same priority configuration as pricing
+- **CapacitySheets** - Dynamic capacity rules at Customer/Location/SubLocation/Event levels
+- **Capacity Engine** - Hourly evaluation engine that selects applicable capacity sheets
+- **Approval Workflow** - Same Draft → Pending → Approved/Rejected lifecycle
+- **Admin UI** - `/admin/capacity-sheets` for managing capacity sheets
+
+**Key Principle**: Both systems share the same hierarchical priority model (Event > SubLocation > Location > Customer), ensuring consistent behavior across pricing and capacity management.
+
+**See**: `CAPACITY_SYSTEM_DESIGN.md` for detailed capacity system architecture and implementation plan.
 
 ---
 

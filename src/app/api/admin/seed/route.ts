@@ -120,11 +120,20 @@ export async function POST(request: NextRequest) {
     for (const location of locations) {
       for (let i = 1; i <= config.subLocationsPerLocation; i++) {
         const allocatedCapacity = Math.floor((location.totalCapacity || 1000) / config.subLocationsPerLocation);
+        const maxCapacity = allocatedCapacity + 50; // Max is slightly higher than allocated
+        const minCapacity = Math.floor(allocatedCapacity * 0.5); // Min is 50% of allocated
+        const defaultCapacity = allocatedCapacity; // Default equals allocated
+
         const subLocation = await SubLocationRepository.create({
           locationId: location._id!,
           label: `${config.subLocationPrefix}-${subLocationIndex}`,
           description: `Sub-location ${i} of ${location.name}`,
+          minCapacity,
+          maxCapacity,
+          defaultCapacity,
           allocatedCapacity,
+          isActive: true,
+          pricingEnabled: true,
           attributes: [
             { key: 'sublocation_id', value: `${subLocationIndex}` },
             { key: 'floor', value: `${i}` },
@@ -132,7 +141,7 @@ export async function POST(request: NextRequest) {
           ],
         });
         subLocations.push(subLocation);
-        log.push(`  ✓ Created: ${subLocation.label} in ${location.name}`);
+        log.push(`  ✓ Created: ${subLocation.label} in ${location.name} (capacity: ${minCapacity}-${maxCapacity}, default: ${defaultCapacity}, allocated: ${allocatedCapacity})`);
         subLocationIndex++;
       }
     }
