@@ -1140,11 +1140,13 @@ export default function TimelineSimulatorPage() {
       // They DON'T get "(Virtual)" label since they're real, approved ratesheets
       const isSurgeRatesheet = !!(rs as any).surgeConfigId;
 
-      // Skip materialized surge ratesheets ONLY in Simulation Mode when surge is enabled
-      // They're already added from appliedSurgeRatesheets with correct IDs
-      // In Live Mode OR when surge is disabled, we want to show them as regular ratesheets
-      if (isSurgeRatesheet && isSimulationEnabled && surgeEnabled) {
-        console.log('⏭️  Skipping materialized surge ratesheet in Simulation Mode (already in appliedSurgeRatesheets):', rs.name);
+      // Skip materialized surge ratesheets in Simulation Mode:
+      // - When surge IS enabled: they come from appliedSurgeRatesheets (avoid duplicates)
+      // - When surge is NOT enabled: they should not compete as SURGE layers
+      //   (prevents inflated prices since client-side SURGE evaluation ignores time windows,
+      //    while the API engine correctly checks time windows — causing price discrepancy)
+      if (isSurgeRatesheet && isSimulationEnabled) {
+        console.log('⏭️  Skipping materialized surge ratesheet in Simulation Mode:', rs.name, surgeEnabled ? '(already in appliedSurgeRatesheets)' : '(surge disabled)');
         return;
       }
 
@@ -1488,9 +1490,8 @@ export default function TimelineSimulatorPage() {
         let isActive = false;
 
         if (layer.type === 'SURGE') {
-          // SURGE layer - will be calculated in second pass
+          // SURGE layer - check materialized first, then virtual
           // For materialized surge ratesheets, match by ID (layer.id === rs._id)
-          // The effectiveFrom/effectiveTo already defines the exact time window
           const surgeRatesheet = ratesheets.find(rs => rs._id === layer.id && !!(rs as any).surgeConfigId);
 
           if (surgeRatesheet) {
@@ -1504,6 +1505,20 @@ export default function TimelineSimulatorPage() {
               // Mark as active, price will be calculated in second pass
               isActive = true;
               price = 0; // Placeholder, will be updated
+            }
+          } else if (surgePricingData?.segments) {
+            // Virtual surge — not in ratesheets DB, use API surge response to check activation
+            // Virtual surge layers have id = ratesheet name (not a DB _id)
+            const segment = surgePricingData.segments.find((seg: any) => {
+              const segStart = new Date(seg.startTime);
+              return segStart.getTime() === currentTime.getTime() &&
+                     seg.ratesheet?.level === 'SURGE' &&
+                     seg.ratesheet?.name === layer.id;
+            });
+            if (segment) {
+              // Use the API's calculated surge price directly (already includes base × multiplier)
+              isActive = true;
+              price = segment.pricePerHour;
             }
           }
         } else if (layer.type === 'RATESHEET') {
@@ -1522,6 +1537,15 @@ export default function TimelineSimulatorPage() {
                   // This allows event rates to apply but excludes free grace periods
                   if (!isEventBooking && tw.pricePerHour === 0 && ratesheet.applyTo === 'EVENT') {
                     return false; // Skip this $0/hr grace period time window
+                  }
+
+                  // Check daysOfWeek filter — skip this window if day doesn't match
+                  // Matches the API engine's daysOfWeek check in price-engine-hourly.ts
+                  if (tw.daysOfWeek && tw.daysOfWeek.length > 0) {
+                    const dayOfWeek = currentTime.getDay();
+                    if (!tw.daysOfWeek.includes(dayOfWeek)) {
+                      return false;
+                    }
                   }
 
                   const windowType = tw.windowType || 'ABSOLUTE_TIME';
@@ -1763,15 +1787,15 @@ export default function TimelineSimulatorPage() {
       let finalWinningPrice: number | undefined;
       let finalBasePrice: number | undefined;
 
-      if (isSimulationEnabled) {
-        // Simulation mode: respect layer toggles
-        // Winner is already calculated at line 880-901 and respects enabledLayers
+      if (isSimulationEnabled && surgeEnabled) {
+        // Simulation mode WITH surge: use layer-based winner (respects surge layer toggles)
+        // Winner is already calculated and respects enabledLayers
         // If SURGE won, winner.price has already been recalculated dynamically
         finalWinningPrice = winner?.price !== undefined && winner?.price !== null ? winner.price : undefined;
 
         // Debug: Log simulation mode pricing for first iteration
         if (iterationCount === 1) {
-          console.log(`💡 [SIMULATION] Hour ${hour} Pricing:`, {
+          console.log(`💡 [SIMULATION+SURGE] Hour ${hour} Pricing:`, {
             winnerPrice: winner?.price,
             finalWinningPrice,
             winnerType: winner?.layer.type,
@@ -1794,14 +1818,17 @@ export default function TimelineSimulatorPage() {
           finalBasePrice = finalWinningPrice; // Same as winning price when not showing surge
         }
       } else {
-        // Normal mode: use API pricing
+        // Live mode OR Simulation without surge: use API pricing
+        // This ensures Simulation mode (surge off) matches Live mode exactly,
+        // since the API pricing engine includes materialized surge ratesheets
+        // that the client-side layer calculation cannot fully replicate.
         apiWinningPrice = surgeEnabled ? apiSurgePrice : apiBasePrice;
         finalWinningPrice = apiWinningPrice;
         finalBasePrice = apiBasePrice;
 
-        // Debug: Log normal mode pricing for first few iterations
+        // Debug: Log API-based pricing for first few iterations
         if (iterationCount <= 5) {
-          console.log(`🐛 [Iteration ${iterationCount}, Hour ${hour}] Normal mode pricing:`, {
+          console.log(`🐛 [Iteration ${iterationCount}, Hour ${hour}] ${isSimulationEnabled ? 'Simulation (no surge)' : 'Live'} mode pricing:`, {
             surgeEnabled,
             apiBasePrice,
             apiSurgePrice,
@@ -3243,7 +3270,7 @@ export default function TimelineSimulatorPage() {
                           <div className="text-[8px] uppercase font-light text-gray-500 mb-1 tracking-wider flex items-center justify-left gap-1">
                             {isUnavailable ? 'Status' : 'Price'}
                             {/* Show surge icon if surge is ON and SURGE layer is winning */}
-                            {!isUnavailable && surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || enabledLayers.has('surge-layer')) && (
+                            {!isUnavailable && surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || (slot.winningLayer?.id && enabledLayers.has(slot.winningLayer.id))) && (
                               <Zap className="w-2 h-2 text-orange-600" />
                             )}
                           </div>

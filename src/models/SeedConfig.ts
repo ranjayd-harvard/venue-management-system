@@ -20,6 +20,9 @@ export interface SeedConfig {
   createRatesheets: boolean;
   createEvents: boolean;
   createEventRatesheets: boolean; // Create event-specific ratesheets
+  createPriorityConfigs: boolean; // Seed priority config ranges
+  createCapacitySheets: boolean; // Seed capacity sheets at all hierarchy levels
+  createSurgeConfigs: boolean; // Seed surge pricing configs
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,9 +35,9 @@ export const DEFAULT_SEED_CONFIG: Omit<SeedConfig, '_id' | 'createdAt' | 'update
   venuesPerLocation: 3,
   venuesPerSubLocation: 2,
   eventsPerSubLocation: 3,
-  eventDateRangeStart: -7, // Start 7 days ago
-  eventDateRangeEnd: 7, // End 7 days from now
-  percentActiveEvents: 40, // 40% of events are currently active
+  eventDateRangeStart: 1, // Start 1 day from now (tomorrow)
+  eventDateRangeEnd: 5, // End 5 days from now
+  percentActiveEvents: 0, // 0% active (all events are future)
   customerPrefix: 'Customer',
   locationPrefix: 'Location',
   subLocationPrefix: 'SubLocation',
@@ -44,4 +47,7 @@ export const DEFAULT_SEED_CONFIG: Omit<SeedConfig, '_id' | 'createdAt' | 'update
   createRatesheets: true,
   createEvents: true,
   createEventRatesheets: true,
+  createPriorityConfigs: true,
+  createCapacitySheets: true,
+  createSurgeConfigs: true,
 };

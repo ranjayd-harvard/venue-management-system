@@ -155,6 +155,20 @@ export interface CapacityConfig extends CapacityBounds {
   defaultCapacities?: DefaultCapacities; // Default capacity allocation breakdown
 }
 
+// ===== ENTITY LABEL TYPES =====
+
+export interface EntityLabelConfig {
+  singular: string;
+  plural: string;
+}
+
+export interface EntityLabels {
+  location?: EntityLabelConfig;
+  subLocation?: EntityLabelConfig;
+  venue?: EntityLabelConfig;
+  event?: EntityLabelConfig;
+}
+
 export interface Customer {
   _id?: ObjectId;
   name: string;
@@ -171,6 +185,7 @@ export interface Customer {
   allocatedCapacity?: number; // Sum of all location allocatedCapacity values
   timezone?: string;
   capacityConfig?: CapacityConfig;
+  entityLabels?: EntityLabels;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -63,7 +63,7 @@ export default function TimezoneSelector({
 
   const selectedTimezone = COMMON_TIMEZONES.find(tz => tz.value === value);
   const currentTime = new Date().toLocaleTimeString('en-US', {
-    timeZone: value || 'America/Detroit',
+    timeZone: selectedTimezone?.value || 'America/Detroit',
     hour: '2-digit',
     minute: '2-digit',
     hour12: true

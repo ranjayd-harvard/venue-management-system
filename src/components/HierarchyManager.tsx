@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Plus, Edit2, Trash2, Building2, MapPin, Layers, Save, X, ChevronUp } from 'lucide-react';
+import { ChevronRight, ChevronDown, Plus, Edit2, Trash2, Building2, MapPin, Layers, Save, X, ChevronUp, Tag, Pencil } from 'lucide-react';
 import AttributesManager from './AttributesManager';
 import OperatingHoursManager from './OperatingHoursManager';
 import {
@@ -10,8 +10,10 @@ import {
   DayOfWeekKey,
   TimeSlot,
   Blackout,
+  EntityLabels,
 } from '@/models/types';
 import { DAYS_OF_WEEK } from '@/lib/operating-hours';
+import { getEntityLabel, ENTITY_LABEL_PRESETS } from '@/lib/entity-labels';
 
 interface TreeNode {
   id: string;
@@ -39,6 +41,8 @@ export default function HierarchyManager() {
   const [addingChild, setAddingChild] = useState<{ parentId: string; type: string } | null>(null);
   const [newChildName, setNewChildName] = useState('');
   const [guideExpanded, setGuideExpanded] = useState(false);
+  const [editingLabels, setEditingLabels] = useState(false);
+  const [labelDraft, setLabelDraft] = useState<EntityLabels>({});
 
   useEffect(() => {
     loadHierarchy();
@@ -168,7 +172,7 @@ export default function HierarchyManager() {
   };
 
   const deleteNode = async (node: TreeNode) => {
-    if (!confirm(`Delete ${node.name}? This will delete all children as well.`)) return;
+    if (!confirm(`Delete ${getNodeTypeLabel(node)} "${node.name}"? This will delete all children as well.`)) return;
 
     try {
       await fetch(`/api/${node.type}s/${node.id}`, { method: 'DELETE' });
@@ -386,6 +390,53 @@ export default function HierarchyManager() {
     return { schedule: resolvedSchedule, blackouts: resolvedBlackouts };
   };
 
+  // Find the customer ancestor for any node in the tree
+  const findCustomerAncestor = (node: TreeNode): TreeNode | null => {
+    if (node.type === 'customer') return node;
+    for (const customerNode of tree) {
+      if (customerNode.id === node.id) return customerNode;
+      const loc = customerNode.children?.find(l => l.id === node.id);
+      if (loc) return customerNode;
+      const sub = customerNode.children?.find(l =>
+        l.children?.some(sl => sl.id === node.id)
+      );
+      if (sub) return customerNode;
+    }
+    return null;
+  };
+
+  // Resolve a display label for a node's type using the customer's entityLabels
+  const getNodeTypeLabel = (node: TreeNode, form: 'singular' | 'plural' = 'singular'): string => {
+    if (node.type === 'customer') return form === 'singular' ? 'Customer' : 'Customers';
+    const customerNode = findCustomerAncestor(node);
+    const customer = customerNode?.data;
+    if (node.type === 'location') return getEntityLabel(customer, 'location', form);
+    if (node.type === 'sublocation') return getEntityLabel(customer, 'subLocation', form);
+    return node.type;
+  };
+
+  // Resolve the child type label for "Add child" actions
+  const getChildTypeLabel = (parentNode: TreeNode): string => {
+    const customerNode = findCustomerAncestor(parentNode);
+    const customer = customerNode?.data;
+    if (parentNode.type === 'customer') return getEntityLabel(customer, 'location');
+    return getEntityLabel(customer, 'subLocation');
+  };
+
+  // Save a label preset to a customer
+  const saveEntityLabels = async (customerId: string, labels: EntityLabels) => {
+    try {
+      await fetch(`/api/customers/${customerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityLabels: labels }),
+      });
+      loadHierarchy();
+    } catch (error) {
+      alert('Failed to update entity labels');
+    }
+  };
+
   const renderTree = (nodes: TreeNode[], level = 0) => {
     return nodes.map(node => (
       <div key={node.id}>
@@ -415,6 +466,9 @@ export default function HierarchyManager() {
           
           <span onClick={() => selectNode(node)} className="flex-1 text-sm text-gray-800 truncate">
             {node.name}
+            <span className="ml-1.5 text-[10px] text-gray-400 font-normal">
+              {getNodeTypeLabel(node)}
+            </span>
           </span>
 
           <div className="flex gap-1 flex-shrink-0">
@@ -422,7 +476,7 @@ export default function HierarchyManager() {
               <button
                 onClick={(e) => { e.stopPropagation(); startAddChild(node); }}
                 className="p-1 hover:bg-green-100 rounded"
-                title="Add child"
+                title={`Add ${getChildTypeLabel(node)}`}
               >
                 <Plus className="w-3 h-3 text-green-600" />
               </button>
@@ -450,7 +504,7 @@ export default function HierarchyManager() {
               type="text"
               value={newChildName}
               onChange={(e) => setNewChildName(e.target.value)}
-              placeholder={`New ${addingChild.type} name`}
+              placeholder={`New ${getChildTypeLabel(node)} name`}
               className="flex-1 px-2 py-1 border rounded text-sm text-gray-900"
               autoFocus
               onKeyPress={(e) => e.key === 'Enter' && saveNewChild()}
@@ -583,7 +637,7 @@ export default function HierarchyManager() {
                       <h1 className="text-3xl font-bold text-gray-800">{selectedNode.name}</h1>
                     </div>
                   )}
-                  <p className="text-gray-600 mt-1 capitalize">{selectedNode.type}</p>
+                  <p className="text-gray-600 mt-1">{getNodeTypeLabel(selectedNode)}</p>
                 </div>
               </div>
 
@@ -618,6 +672,204 @@ export default function HierarchyManager() {
                   )}
                 </div>
               </div>
+
+              {/* Entity Label Preset Picker (Customer only) */}
+              {selectedNode.type === 'customer' && (() => {
+                const currentLabels = selectedNode.data.entityLabels || {};
+                const matchedPresetKey = Object.entries(ENTITY_LABEL_PRESETS).find(
+                  ([, p]) =>
+                    p.location?.singular === currentLabels.location?.singular &&
+                    p.location?.plural === currentLabels.location?.plural &&
+                    p.subLocation?.singular === currentLabels.subLocation?.singular &&
+                    p.subLocation?.plural === currentLabels.subLocation?.plural
+                )?.[0];
+                const isCustom = currentLabels.location && !matchedPresetKey;
+
+                return (
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Tag className="w-4 h-4 text-indigo-600" />
+                        <h3 className="font-semibold text-indigo-900">Hierarchy Labels</h3>
+                      </div>
+                      {!editingLabels && (
+                        <button
+                          onClick={() => {
+                            setEditingLabels(true);
+                            setLabelDraft({
+                              location: {
+                                singular: getEntityLabel(selectedNode.data, 'location'),
+                                plural: getEntityLabel(selectedNode.data, 'location', 'plural'),
+                              },
+                              subLocation: {
+                                singular: getEntityLabel(selectedNode.data, 'subLocation'),
+                                plural: getEntityLabel(selectedNode.data, 'subLocation', 'plural'),
+                              },
+                            });
+                          }}
+                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-100 transition-colors"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          Customize
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-sm text-indigo-700 mb-3">
+                      Choose a preset or customize how hierarchy levels are labeled.
+                    </p>
+
+                    {/* Preset grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {Object.entries(ENTITY_LABEL_PRESETS).map(([key, preset]) => {
+                        const isActive = matchedPresetKey === key;
+                        return (
+                          <button
+                            key={key}
+                            onClick={() => {
+                              saveEntityLabels(selectedNode.id, preset);
+                              setEditingLabels(false);
+                            }}
+                            className={`text-left p-2.5 rounded-lg border transition-all text-sm ${
+                              isActive
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50'
+                            }`}
+                          >
+                            <div className="font-medium capitalize text-xs">{key}</div>
+                            <div className={`text-[11px] mt-0.5 ${isActive ? 'text-indigo-200' : 'text-gray-400'}`}>
+                              {preset.location?.singular || 'Location'} / {preset.subLocation?.singular || 'SubLocation'}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Custom label editor */}
+                    {editingLabels && (
+                      <div className="mt-3 pt-3 border-t border-indigo-200">
+                        <p className="text-xs text-indigo-700 font-medium mb-2">Custom Labels</p>
+                        <div className="space-y-3">
+                          {/* Location labels */}
+                          <div className="bg-white rounded-lg border border-indigo-200 p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                              <MapPin className="w-3.5 h-3.5 text-green-600" />
+                              <span className="text-xs font-semibold text-gray-700">Level 2 (Location)</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] text-gray-500 uppercase tracking-wide">Singular</label>
+                                <input
+                                  type="text"
+                                  value={labelDraft.location?.singular || ''}
+                                  onChange={(e) => setLabelDraft(prev => ({
+                                    ...prev,
+                                    location: { singular: e.target.value, plural: prev.location?.plural || '' },
+                                  }))}
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                  placeholder="e.g. Facility"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-gray-500 uppercase tracking-wide">Plural</label>
+                                <input
+                                  type="text"
+                                  value={labelDraft.location?.plural || ''}
+                                  onChange={(e) => setLabelDraft(prev => ({
+                                    ...prev,
+                                    location: { singular: prev.location?.singular || '', plural: e.target.value },
+                                  }))}
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                  placeholder="e.g. Facilities"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* SubLocation labels */}
+                          <div className="bg-white rounded-lg border border-indigo-200 p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Layers className="w-3.5 h-3.5 text-orange-600" />
+                              <span className="text-xs font-semibold text-gray-700">Level 3 (SubLocation)</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] text-gray-500 uppercase tracking-wide">Singular</label>
+                                <input
+                                  type="text"
+                                  value={labelDraft.subLocation?.singular || ''}
+                                  onChange={(e) => setLabelDraft(prev => ({
+                                    ...prev,
+                                    subLocation: { singular: e.target.value, plural: prev.subLocation?.plural || '' },
+                                  }))}
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                  placeholder="e.g. Zone"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-gray-500 uppercase tracking-wide">Plural</label>
+                                <input
+                                  type="text"
+                                  value={labelDraft.subLocation?.plural || ''}
+                                  onChange={(e) => setLabelDraft(prev => ({
+                                    ...prev,
+                                    subLocation: { singular: prev.subLocation?.singular || '', plural: e.target.value },
+                                  }))}
+                                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                  placeholder="e.g. Zones"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Save / Cancel */}
+                        <div className="flex items-center gap-2 mt-3">
+                          <button
+                            onClick={() => {
+                              if (labelDraft.location?.singular && labelDraft.location?.plural &&
+                                  labelDraft.subLocation?.singular && labelDraft.subLocation?.plural) {
+                                saveEntityLabels(selectedNode.id, labelDraft);
+                                setEditingLabels(false);
+                              }
+                            }}
+                            disabled={
+                              !labelDraft.location?.singular || !labelDraft.location?.plural ||
+                              !labelDraft.subLocation?.singular || !labelDraft.subLocation?.plural
+                            }
+                            className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            Save Labels
+                          </button>
+                          <button
+                            onClick={() => setEditingLabels(false)}
+                            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Current resolved labels preview */}
+                    {!editingLabels && (
+                      <div className="mt-3 pt-3 border-t border-indigo-200">
+                        <p className="text-xs text-indigo-600 font-medium mb-1">
+                          Current labels{isCustom ? ' (custom)' : matchedPresetKey ? ` (${matchedPresetKey})` : ''}:
+                        </p>
+                        <div className="flex gap-3 text-xs">
+                          <span className="bg-white px-2 py-1 rounded border border-indigo-200 text-gray-700">
+                            <span className="text-gray-400">Level 2:</span> {getEntityLabel(selectedNode.data, 'location')} / {getEntityLabel(selectedNode.data, 'location', 'plural')}
+                          </span>
+                          <span className="bg-white px-2 py-1 rounded border border-indigo-200 text-gray-700">
+                            <span className="text-gray-400">Level 3:</span> {getEntityLabel(selectedNode.data, 'subLocation')} / {getEntityLabel(selectedNode.data, 'subLocation', 'plural')}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* All Attributes Display */}
               <div className="bg-gray-50 rounded-lg p-4">

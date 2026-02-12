@@ -32,6 +32,9 @@ export default function AdminSeedPage() {
     const totalEvents = config.createEvents ? totalSubLocations * config.eventsPerSubLocation : 0;
     const totalRatesheets = config.createRatesheets ? (totalLocations * 2 + totalSubLocations) : 0;
     const totalEventRatesheets = (config.createEvents && config.createEventRatesheets) ? totalEvents : 0;
+    const totalPriorityConfigs = config.createPriorityConfigs ? 4 : 0;
+    const totalCapacitySheets = config.createCapacitySheets ? (config.customers + totalLocations + totalSubLocations + 1) : 0; // +1 for pending sheet
+    const totalSurgeConfigs = config.createSurgeConfigs ? 3 : 0;
 
     return {
       totalLocations,
@@ -41,7 +44,10 @@ export default function AdminSeedPage() {
       totalEvents,
       totalRatesheets,
       totalEventRatesheets,
-      totalRecords: config.customers + totalLocations + totalSubLocations + config.venues + totalLocationVenueRelations + totalSubLocationVenueRelations + totalEvents + totalRatesheets + totalEventRatesheets,
+      totalPriorityConfigs,
+      totalCapacitySheets,
+      totalSurgeConfigs,
+      totalRecords: config.customers + totalLocations + totalSubLocations + config.venues + totalLocationVenueRelations + totalSubLocationVenueRelations + totalEvents + totalRatesheets + totalEventRatesheets + totalPriorityConfigs + totalCapacitySheets + totalSurgeConfigs,
     };
   };
 
@@ -399,6 +405,51 @@ export default function AdminSeedPage() {
                 <p className="text-xs text-gray-500 ml-6">
                   Generate ratesheets covering each event&apos;s exact time window (highest priority)
                 </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createPriorityConfigs}
+                    onChange={(e) => handleInputChange('createPriorityConfigs', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Priority Configs
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Seed priority ranges: Customer (1000-1999), Location (2000-2999), SubLocation (3000-3999), Event (4000-4999)
+                </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createCapacitySheets}
+                    onChange={(e) => handleInputChange('createCapacitySheets', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Capacity Sheets
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Generate capacity sheets at customer, location, and sublocation levels with time windows
+                </p>
+
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={config.createSurgeConfigs}
+                    onChange={(e) => handleInputChange('createSurgeConfigs', e.target.checked)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">
+                    Create Surge Configs
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 ml-6">
+                  Generate surge pricing configurations with demand/supply parameters
+                </p>
               </div>
             </div>
           </div>
@@ -448,6 +499,24 @@ export default function AdminSeedPage() {
               <div className="bg-white p-4 rounded-lg">
                 <p className="text-sm text-gray-600">Event Rate Sheets</p>
                 <p className="text-2xl font-bold text-amber-600">{totals.totalEventRatesheets}</p>
+              </div>
+            )}
+            {config.createPriorityConfigs && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Priority Configs</p>
+                <p className="text-2xl font-bold text-rose-600">{totals.totalPriorityConfigs}</p>
+              </div>
+            )}
+            {config.createCapacitySheets && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Capacity Sheets</p>
+                <p className="text-2xl font-bold text-emerald-600">{totals.totalCapacitySheets}</p>
+              </div>
+            )}
+            {config.createSurgeConfigs && (
+              <div className="bg-white p-4 rounded-lg">
+                <p className="text-sm text-gray-600">Surge Configs</p>
+                <p className="text-2xl font-bold text-violet-600">{totals.totalSurgeConfigs}</p>
               </div>
             )}
             <div className="bg-gradient-to-r from-blue-500 to-purple-500 p-4 rounded-lg lg:col-span-4">
