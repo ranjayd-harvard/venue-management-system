@@ -1,8 +1,8 @@
 # Surge Pricing System - Current Status
 
-**Date**: February 1, 2026
+**Date**: February 13, 2026
 **Status**: ✅ Ready for Testing
-**Last Action**: Clean slate completed - all surge configs and ratesheets deleted
+**Last Action**: Added temporal scoping, surgeDurationHours, daysOfWeek fix, and multiplier display on tiles
 
 ---
 
@@ -37,9 +37,20 @@
    - ✅ Time window constraints display
    - ✅ Calculated surge prices (not raw multipliers)
    - ✅ Mode-based layer type assignment
+   - ✅ Surge multiplier badge on orange waterfall tiles (color-coded: red >1, green <1)
+   - ✅ Multiplier included in tile tooltips
 
-5. **Documentation**
-   - ✅ [SURGE_PRICING.md](SURGE_PRICING.md) - Architecture
+5. **Temporal Scoping (Feb 13, 2026)**
+   - ✅ `surgeDurationHours` field on SurgeConfig (default: 1 hour)
+   - ✅ Materialized ratesheets are always temporary (`effectiveTo = effectiveFrom + duration`)
+   - ✅ Demand-driven path: `demandHour` option scopes to next hour
+   - ✅ Manual path: starts from config's `effectiveFrom`, bounded by duration
+   - ✅ `daysOfWeek` preserved from surge config time windows during materialization
+   - ✅ Admin UI: `surgeDurationHours` shown in config tile, create modal, and edit modal
+
+6. **Documentation** (Updated Feb 13, 2026)
+   - ✅ [SURGE_PRICING.md](SURGE_PRICING.md) - Architecture (updated with surgeDurationHours, multiplier display)
+   - ✅ [SURGE_MATERIALIZATION_IMPLEMENTATION.md](SURGE_MATERIALIZATION_IMPLEMENTATION.md) - Implementation (updated with temporal scoping)
    - ✅ [SURGE_TESTING_GUIDE.md](SURGE_TESTING_GUIDE.md) - Testing workflow
    - ✅ [SURGE_FINAL_FIX.md](SURGE_FINAL_FIX.md) - Implementation details
    - ✅ [SURGE_LIVE_MODE_FIX.md](SURGE_LIVE_MODE_FIX.md) - Display fixes
@@ -403,13 +414,17 @@ db.ratesheets.countDocuments({ surgeConfigId: { $exists: true } })  // Should be
 - Clean slate: [clean-surge-data.js](clean-surge-data.js)
 
 ### Key Files
+- Types: [src/models/types.ts](src/models/types.ts) — `SurgeConfig.surgeDurationHours`
 - Model: [src/models/SurgeConfig.ts](src/models/SurgeConfig.ts)
-- Materialization: [src/lib/surge-materialization.ts](src/lib/surge-materialization.ts)
+- Materialization: [src/lib/surge-materialization.ts](src/lib/surge-materialization.ts) — temporal scoping, daysOfWeek
 - API: [src/app/api/pricing/calculate-hourly/route.ts](src/app/api/pricing/calculate-hourly/route.ts)
-- UI: [src/app/pricing/timeline-simulator/page.tsx](src/app/pricing/timeline-simulator/page.tsx)
+- Admin: [src/app/admin/surge-pricing/page.tsx](src/app/admin/surge-pricing/page.tsx) — duration display
+- Create Modal: [src/components/CreateSurgeConfigModal.tsx](src/components/CreateSurgeConfigModal.tsx) — duration field
+- Edit Modal: [src/components/EditSurgeConfigModal.tsx](src/components/EditSurgeConfigModal.tsx) — duration field
+- Simulator: [src/app/pricing/timeline-simulator/page.tsx](src/app/pricing/timeline-simulator/page.tsx) — multiplier on tiles
 
 ---
 
-**Last Updated**: February 1, 2026
+**Last Updated**: February 13, 2026
 **Status**: ✅ Ready for end-to-end testing
 **Next Step**: Follow [SURGE_TESTING_GUIDE.md](SURGE_TESTING_GUIDE.md) for complete testing workflow

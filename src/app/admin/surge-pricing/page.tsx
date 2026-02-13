@@ -426,6 +426,10 @@ export default function AdminSurgePricingPage() {
                         <span className="text-gray-500">EMA Alpha:</span>
                         <p className="font-semibold text-gray-900">{config.surgeParams.emaAlpha}</p>
                       </div>
+                      <div>
+                        <span className="text-gray-500">Surge Duration:</span>
+                        <p className="font-semibold text-gray-900">{config.surgeDurationHours || 1}h</p>
+                      </div>
                     </div>
 
                     {/* Time Windows */}

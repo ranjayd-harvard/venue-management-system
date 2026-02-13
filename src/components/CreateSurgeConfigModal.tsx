@@ -51,6 +51,7 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 16)); // datetime-local format
   const [effectiveTo, setEffectiveTo] = useState('');
   const [timeWindows, setTimeWindows] = useState<TimeWindowConfig[]>([]);
+  const [surgeDurationHours, setSurgeDurationHours] = useState(1);
 
   // Status
   const [isActive, setIsActive] = useState(true);
@@ -215,6 +216,7 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
         },
         effectiveFrom: new Date(effectiveFrom).toISOString(),
         effectiveTo: effectiveTo ? new Date(effectiveTo).toISOString() : undefined,
+        surgeDurationHours,
         isActive,
       };
 
@@ -265,6 +267,7 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
     setEffectiveFrom(new Date().toISOString().slice(0, 16));
     setEffectiveTo('');
     setTimeWindows([]);
+    setSurgeDurationHours(1);
     setIsActive(true);
     setError('');
   };
@@ -567,6 +570,24 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
                         </p>
                       )}
                     </div>
+                  </div>
+
+                  {/* Surge Duration */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Surge Duration (hours)
+                    </label>
+                    <input
+                      type="number"
+                      value={surgeDurationHours}
+                      onChange={(e) => setSurgeDurationHours(Math.max(1, Number(e.target.value)))}
+                      min="1"
+                      max="24"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900 bg-white"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      How long each materialized surge ratesheet lasts (default: 1 hour)
+                    </p>
                   </div>
 
                   {/* Time Windows */}

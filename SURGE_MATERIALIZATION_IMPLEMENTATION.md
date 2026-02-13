@@ -1,7 +1,7 @@
 # Surge Materialization Implementation Summary
 
-**Date**: February 1, 2026
-**Status**: ✅ Phase 1 & 2 Complete (Backend + Core UI)
+**Date**: February 13, 2026
+**Status**: ✅ Phase 1 & 2 Complete (Backend + Core UI + Temporal Scoping)
 
 ## Overview
 
@@ -14,10 +14,11 @@ Successfully implemented surge materialization feature that transforms virtual s
 ### 1. Data Model Updates
 
 #### SurgeConfig Model ([src/models/types.ts](src/models/types.ts))
-Added materialization tracking fields:
+Added materialization tracking and duration fields:
 ```typescript
 materializedRatesheetId?: ObjectId;  // Reference to physical ratesheet
 lastMaterialized?: Date;              // Timestamp of last materialization
+surgeDurationHours?: number;          // Duration of materialized ratesheet (default: 1 hour)
 ```
 
 #### Ratesheet Model ([src/models/Ratesheet.ts](src/models/Ratesheet.ts))
@@ -47,13 +48,18 @@ Created [src/lib/surge-materialization.ts](src/lib/surge-materialization.ts) wit
 - Clamps result to `[minMultiplier, maxMultiplier]` bounds
 - Returns the surge factor (e.g., 1.35 for 35% increase)
 
-#### `generateTimeWindows(config: SurgeConfig, multiplier: number): TimeWindow[]`
+#### `generateTimeWindows(config: SurgeConfig, multiplier: number, demandHour?: Date): TimeWindow[]`
 - Converts surge config time windows to ratesheet time windows
-- If no time windows specified, returns 24/7 coverage
+- If `demandHour` provided (demand-driven): returns single window for next hour, duration from `config.surgeDurationHours` (default: 1)
+- If no time windows specified: returns 24/7 coverage
+- Preserves `daysOfWeek` from surge config time windows when present
 - Stores multiplier in `pricePerHour` field
 
-#### `materializeSurgeConfig(configId, userId?): Promise<Ratesheet>`
+#### `materializeSurgeConfig(configId, userId?, options?): Promise<Ratesheet>`
 - Creates a physical DRAFT surge ratesheet from a config
+- **Always temporary**: `effectiveTo = effectiveFrom + surgeDurationHours` (default: 1 hour)
+- `options.demandHour` (optional): when provided, scopes ratesheet to next hour from demand observation
+- Without `demandHour` (manual path): starts from config's `effectiveFrom`
 - Priority: `10000 + config.priority` (ensures surge wins over all other layers)
 - Captures demand/supply snapshot at materialization time
 - Updates surge config with `materializedRatesheetId` reference
@@ -240,7 +246,8 @@ Surge ratesheets follow the same workflow as regular ratesheets:
      - Name: "SURGE: Weekend Rush Hour"
      - Priority: 10700 (10000 + 700)
      - Multiplier: 1.35x (calculated from 3x pressure)
-     - Time windows: Sat-Sun 10:00-18:00
+     - Time windows: Sat-Sun 10:00-18:00 (with daysOfWeek preserved)
+     - Duration: `effectiveFrom` + `surgeDurationHours` (e.g. 1 hour)
      - Status: DRAFT
 
 3. **Approval**:
@@ -318,12 +325,14 @@ Surge ratesheets follow the same workflow as regular ratesheets:
 ## Files Modified
 
 ### Models
-- `src/models/types.ts` - Added materialization fields to SurgeConfig
+- `src/models/types.ts` - Added materialization fields and `surgeDurationHours` to SurgeConfig
 - `src/models/Ratesheet.ts` - Added surge metadata fields
 - `src/models/SurgeConfig.ts` - Fixed timestamp bug
 
 ### Core Logic
 - `src/lib/surge-materialization.ts` - **NEW** - All materialization functions
+  - `generateTimeWindows()` - Supports `demandHour` for predictive scoping, preserves `daysOfWeek`
+  - `materializeSurgeConfig()` - Supports `options.demandHour`, always-temporary via `surgeDurationHours`
 
 ### API Routes
 - `src/app/api/surge-pricing/configs/[id]/materialize/route.ts` - **NEW**
@@ -331,8 +340,10 @@ Surge ratesheets follow the same workflow as regular ratesheets:
 - `src/app/api/surge-pricing/configs/[id]/ratesheet/route.ts` - **NEW**
 
 ### UI Pages
-- `src/app/admin/surge-pricing/page.tsx` - Added materialization UI
-- `src/app/pricing/timeline-simulator/page.tsx` - Added Promote to Production
+- `src/app/admin/surge-pricing/page.tsx` - Added materialization UI, shows `surgeDurationHours` in config tile
+- `src/components/CreateSurgeConfigModal.tsx` - Added `surgeDurationHours` field
+- `src/components/EditSurgeConfigModal.tsx` - Added `surgeDurationHours` field
+- `src/app/pricing/timeline-simulator/page.tsx` - Added Promote to Production, surge multiplier on orange waterfall tiles
 
 ---
 

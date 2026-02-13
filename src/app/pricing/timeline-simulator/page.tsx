@@ -3552,7 +3552,9 @@ export default function TimelineSimulatorPage() {
                                 isDisabled
                                   ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority}) - DISABLED`
                                   : layerData?.isActive
-                                    ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})`
+                                    ? layer.type === 'SURGE'
+                                      ? `${layer.name} - $${layerData.price}/hr (${((ratesheets.find(rs => rs._id === layer.id) as any)?.surgeMultiplierSnapshot || 0).toFixed(2)}x) (Priority: ${layer.priority})`
+                                      : `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})`
                                     : 'Not active for this time'
                               }
                               className={`rounded-lg transition-all cursor-pointer ${
@@ -3585,6 +3587,18 @@ export default function TimelineSimulatorPage() {
                                   }`}>
                                     ${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}
                                   </div>
+                                  {/* Surge Multiplier */}
+                                  {layer.type === 'SURGE' && (() => {
+                                    const multiplier = (ratesheets.find(rs => rs._id === layer.id) as any)?.surgeMultiplierSnapshot;
+                                    if (!multiplier) return null;
+                                    return (
+                                      <div className={`text-[9px] font-bold drop-shadow-md ${
+                                        isDisabled ? 'text-gray-500' : multiplier > 1 ? 'text-red-200' : multiplier < 1 ? 'text-green-200' : 'text-white opacity-90'
+                                      }`}>
+                                        {multiplier.toFixed(2)}x
+                                      </div>
+                                    );
+                                  })()}
                                   {/* Capacity */}
                                   {slot.capacity && (
                                     <div className="flex flex-col items-center gap-0.5 w-full">

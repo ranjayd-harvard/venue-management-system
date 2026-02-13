@@ -70,6 +70,9 @@ interface SurgeConfig {
     endTime?: string;              // "HH:MM" (optional)
   }>;
 
+  // Duration of a single materialized surge ratesheet in hours (default: 1)
+  surgeDurationHours?: number;
+
   // Status
   isActive: boolean;
   createdBy?: string;
@@ -525,6 +528,7 @@ if (window.startTime > window.endTime) {
 5. **Time Applicability** (Optional)
    - Effective From (date picker)
    - Effective To (date picker, optional)
+   - Surge Duration (number, 1-24 hours, default: 1) — how long each materialized ratesheet lasts
    - Days of Week (checkboxes)
    - Time Range (HH:MM inputs)
 
@@ -567,6 +571,7 @@ Same form as Create, pre-populated with existing values. Live preview updates as
 │ 🔥 Surge: 1.15x  (15 demand / 10 supply)       │
 │ Range: 0.75x - 1.8x                            │
 │ Baseline Pressure: 1.2                         │
+│ Surge Duration: 1h                             │
 │                                                 │
 │ 📅 Effective: Jan 1, 2024 - Jan 7, 2024       │
 │ ⏰ Fri-Sat, 7:00 PM - 3:00 AM                  │
@@ -607,7 +612,9 @@ Simulation (Parent)
 
 **Surge Layer Enabled:**
 - Appears at top of waterfall (priority 10000)
-- Shows multiplier value in tile
+- Shows dollar price and multiplier badge (e.g. "$7.50" + "0.75x") on orange tiles
+- Multiplier color-coded: red for >1 (surge up), green for <1 (discount)
+- Tooltip includes multiplier: "$7.50/hr (0.75x) (Priority: 10700)"
 - Orange gradient color
 - Can be toggled off in simulation mode
 
@@ -909,6 +916,6 @@ console.log('Clamped:', clamp(rawFactor, min, max));
 
 ---
 
-**Last Updated**: January 31, 2026
-**Version**: 1.0
+**Last Updated**: February 13, 2026
+**Version**: 1.1
 **Maintained By**: Development Team

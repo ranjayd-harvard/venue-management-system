@@ -488,6 +488,9 @@ export interface SurgeConfig {
   effectiveTo?: Date;
   timeWindows?: SurgeTimeWindow[];
 
+  // Duration of a single materialized surge ratesheet in hours (default: 1)
+  surgeDurationHours?: number;
+
   // Status
   isActive: boolean;
   createdBy?: string;

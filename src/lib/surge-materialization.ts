@@ -47,8 +47,28 @@ export function calculateSurgeMultiplier(config: SurgeConfig): number {
  */
 export function generateTimeWindows(
   config: SurgeConfig,
-  multiplier: number
+  multiplier: number,
+  demandHour?: Date
 ): TimeWindow[] {
+  // PREDICTIVE SURGE: When demandHour is provided, create a single window for the NEXT hour
+  // Duration is controlled by config.surgeDurationHours (default: 1)
+  if (demandHour) {
+    const durationHours = config.surgeDurationHours || 1;
+    const nextHour = (demandHour.getUTCHours() + 1) % 24;
+    const endHour = (nextHour + durationHours) % 24;
+    const startTime = `${String(nextHour).padStart(2, '0')}:00`;
+    const endTime = `${String(endHour).padStart(2, '0')}:00`;
+
+    console.log(`📅 Predictive surge: Demand at ${demandHour.getUTCHours()}:00 → Surge for ${startTime}-${endTime} (${durationHours}h)`);
+
+    return [{
+      windowType: 'ABSOLUTE_TIME',
+      startTime,
+      endTime,
+      pricePerHour: multiplier
+    }];
+  }
+
   // If no time windows specified, apply 24/7
   if (!config.timeWindows || config.timeWindows.length === 0) {
     return [{
@@ -64,7 +84,8 @@ export function generateTimeWindows(
     windowType: 'ABSOLUTE_TIME' as const,
     startTime: tw.startTime || '00:00',
     endTime: tw.endTime || '23:59',
-    pricePerHour: multiplier
+    pricePerHour: multiplier,
+    ...(tw.daysOfWeek && tw.daysOfWeek.length > 0 && { daysOfWeek: tw.daysOfWeek })
   }));
 }
 
@@ -74,7 +95,8 @@ export function generateTimeWindows(
  */
 export async function materializeSurgeConfig(
   configId: string | ObjectId,
-  userId?: string
+  userId?: string,
+  options?: { demandHour?: Date }
 ): Promise<Ratesheet> {
   const config = await SurgeConfigRepository.findById(configId);
   if (!config) {
@@ -86,11 +108,35 @@ export async function materializeSurgeConfig(
   // Calculate current surge multiplier
   const multiplier = calculateSurgeMultiplier(config);
 
-  // Generate time windows
-  const timeWindows = generateTimeWindows(config, multiplier);
+  // Generate time windows (scoped to next hour when demand-driven)
+  const timeWindows = generateTimeWindows(config, multiplier, options?.demandHour);
 
   // Calculate demand/supply pressure for snapshot
   const pressure = config.demandSupplyParams.currentDemand / config.demandSupplyParams.currentSupply;
+
+  // Surge ratesheets are always temporary — duration from config (default: 1 hour)
+  const durationHours = config.surgeDurationHours || 1;
+  let effectiveFrom: Date;
+  let effectiveTo: Date;
+
+  if (options?.demandHour) {
+    // Demand-driven: start at next hour from the demand observation
+    const nextHour = (options.demandHour.getUTCHours() + 1) % 24;
+    effectiveFrom = new Date(options.demandHour);
+    effectiveFrom.setUTCHours(nextHour, 0, 0, 0);
+  } else {
+    // Manual: start from the config's effectiveFrom
+    effectiveFrom = config.effectiveFrom;
+  }
+
+  effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
+
+  console.log('📅 Surge ratesheet effective period:', {
+    mode: options?.demandHour ? 'demand-driven' : 'manual',
+    durationHours,
+    effectiveFrom: effectiveFrom.toISOString(),
+    effectiveTo: effectiveTo.toISOString()
+  });
 
   // Create surge ratesheet
   const db = await getDb();
@@ -98,7 +144,9 @@ export async function materializeSurgeConfig(
 
   const surgeRatesheet: Omit<Ratesheet, '_id'> = {
     name: `SURGE: ${config.name}`,
-    description: `Auto-generated surge ratesheet from config ${config._id}`,
+    description: options?.demandHour
+      ? `Predictive surge for ${options.demandHour.toISOString()}`
+      : `Auto-generated surge ratesheet from config ${config._id}`,
     type: 'SURGE_MULTIPLIER',  // CRITICAL: Use SURGE_MULTIPLIER type so backend applies multiplier logic
     appliesTo: config.appliesTo,
 
@@ -106,9 +154,9 @@ export async function materializeSurgeConfig(
     priority: 10000 + config.priority,
     conflictResolution: 'PRIORITY',
 
-    // Temporal constraints from config
-    effectiveFrom: config.effectiveFrom,
-    effectiveTo: config.effectiveTo,
+    // Temporal constraints (scoped to next hour for demand-driven)
+    effectiveFrom,
+    effectiveTo,
 
     // Time windows with surge multiplier
     timeWindows,
