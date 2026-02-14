@@ -111,14 +111,20 @@ interface CustomerNodeLabelProps {
   customer: any;
   isHighlighted: boolean;
   metrics?: CapacityMetrics;
+  entityTypeLabel?: string;
 }
 
-export function CustomerNodeLabel({ customer, isHighlighted, metrics }: CustomerNodeLabelProps) {
+export function CustomerNodeLabel({ customer, isHighlighted, metrics, entityTypeLabel }: CustomerNodeLabelProps) {
   return (
     <div className="text-center px-4 py-3">
       <div className={`font-bold text-lg mb-1 ${isHighlighted ? 'text-white' : 'text-blue-900'}`}>
         {customer.name}
       </div>
+      {entityTypeLabel && (
+        <div className={`text-[10px] font-medium mb-0.5 ${isHighlighted ? 'text-blue-200' : 'text-blue-400'}`}>
+          {entityTypeLabel}
+        </div>
+      )}
       <div className={`text-xs ${isHighlighted ? 'text-blue-100' : 'text-blue-600'}`}>
         {customer.email}
       </div>
@@ -164,6 +170,7 @@ interface LocationNodeLabelProps {
   metrics?: CapacityMetrics;
   totalAllocated?: number;
   remainingCapacity?: number | null;
+  entityTypeLabel?: string;
 }
 
 export function LocationNodeLabel({
@@ -171,13 +178,19 @@ export function LocationNodeLabel({
   isHighlighted,
   metrics,
   totalAllocated = 0,
-  remainingCapacity = null
+  remainingCapacity = null,
+  entityTypeLabel
 }: LocationNodeLabelProps) {
   return (
     <div className="text-center px-4 py-3">
       <div className={`font-bold text-base mb-1 ${isHighlighted ? 'text-white' : 'text-emerald-900'}`}>
         {location.name}
       </div>
+      {entityTypeLabel && (
+        <div className={`text-[10px] font-medium mb-0.5 ${isHighlighted ? 'text-emerald-200' : 'text-emerald-400'}`}>
+          {entityTypeLabel}
+        </div>
+      )}
       <div className={`text-xs mb-2 ${isHighlighted ? 'text-emerald-100' : 'text-emerald-600'}`}>
         {location.city}, {location.state}
       </div>
@@ -236,6 +249,7 @@ interface SubLocationNodeLabelProps {
   metrics?: CapacityMetrics;
   venueCount?: number;
   totalVenueCapacity?: number;
+  entityTypeLabel?: string;
 }
 
 export function SubLocationNodeLabel({
@@ -243,13 +257,19 @@ export function SubLocationNodeLabel({
   isHighlighted,
   metrics,
   venueCount = 0,
-  totalVenueCapacity = 0
+  totalVenueCapacity = 0,
+  entityTypeLabel
 }: SubLocationNodeLabelProps) {
   return (
     <div className="text-center px-4 py-3">
       <div className={`font-bold text-sm mb-1 ${isHighlighted ? 'text-white' : 'text-orange-900'}`}>
         {sublocation.label}
       </div>
+      {entityTypeLabel && (
+        <div className={`text-[10px] font-medium mb-0.5 ${isHighlighted ? 'text-orange-200' : 'text-orange-400'}`}>
+          {entityTypeLabel}
+        </div>
+      )}
       {metrics && (
         <div className={`text-xs space-y-1 ${isHighlighted ? 'text-orange-100' : 'text-orange-700'}`}>
           <div className="flex justify-between gap-2">

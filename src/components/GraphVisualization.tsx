@@ -50,6 +50,7 @@ import {
   getAttributeBreakdown as getAttributeBreakdownUtil,
   findAllPathsToRoot as findAllPathsToRootUtil
 } from './graph/graphUtils';
+import { getEntityLabel } from '@/lib/entity-labels';
 
 export default function GraphVisualization() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -672,7 +673,7 @@ export default function GraphVisualization() {
           id: customerId,
           type: 'default',
           data: {
-            label: <CustomerNodeLabel customer={customer} isHighlighted={isHighlighted} metrics={metrics} />
+            label: <CustomerNodeLabel customer={customer} isHighlighted={isHighlighted} metrics={metrics} entityTypeLabel="Customer" />
           },
           position: { x: 0, y: cIndex * 800 },
           draggable: true,
@@ -713,6 +714,7 @@ export default function GraphVisualization() {
                 metrics={locMetrics}
                 totalAllocated={totalAllocated}
                 remainingCapacity={remainingCapacity}
+                entityTypeLabel={getEntityLabel(customer, 'location')}
               />
             },
             position: { x: xSpacing, y: locationY },
@@ -787,6 +789,7 @@ export default function GraphVisualization() {
                   metrics={slMetrics}
                   venueCount={sublocationVenues.length}
                   totalVenueCapacity={totalVenueCapacity}
+                  entityTypeLabel={getEntityLabel(customer, 'subLocation')}
                 />
               },
               position: { x: xSpacing * 2, y: sublocationY },

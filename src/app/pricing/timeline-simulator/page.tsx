@@ -442,18 +442,12 @@ export default function TimelineSimulatorPage() {
   // NOTE: Surge pricing is now handled automatically in /api/pricing/calculate-hourly
   // No separate surge calculation needed - it's integrated into the pricing waterfall
 
-  // Capture baseline price when simulation mode is FIRST enabled
+  // Reset baseline when simulation mode is turned off
   useEffect(() => {
-    if (isSimulationEnabled && timeSlots.length > 0 && preSimulationBaselinePrice === 0) {
-      // Capture the current total price as the pre-simulation baseline (only once)
-      const currentTotal = timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
-      setPreSimulationBaselinePrice(currentTotal);
-    }
-    // Reset baseline when simulation mode is turned off
     if (!isSimulationEnabled && preSimulationBaselinePrice > 0) {
       setPreSimulationBaselinePrice(0);
     }
-  }, [isSimulationEnabled, timeSlots, preSimulationBaselinePrice]);
+  }, [isSimulationEnabled]);
 
   // Auto-disable surge when switching from Simulation to Live mode
   // Live mode doesn't support surge toggle - it only shows materialized surge ratesheets
@@ -1877,6 +1871,17 @@ export default function TimelineSimulatorPage() {
 
     // NOTE: Surge pricing now happens automatically in the pricing engine (SURGE ratesheets)
     // No post-processing needed - surge ratesheets are generated and applied in the pricing waterfall
+
+    // Update baseline price from API base pricing for the CURRENT time range.
+    // This ensures the baseline always reflects the non-surge total for the
+    // exact hours being displayed, so the delta accurately shows surge effect
+    // (not drift from a stale time range captured when simulation was first enabled).
+    if (isSimulationEnabled && basePricingData?.segments) {
+      const baselineTotal = basePricingData.segments.reduce(
+        (sum: number, seg: any) => sum + (seg.pricePerHour || 0), 0
+      );
+      setPreSimulationBaselinePrice(baselineTotal);
+    }
 
     setTimeSlots(slots);
     setPricingDataLoading(false);

@@ -864,7 +864,7 @@ async function seed(config = DEFAULT_CONFIG) {
       console.log(`\n⚡ Creating surge configs...`);
       const surgeCollection = db.collection('surge_configs');
 
-      // Normal demand surge config
+      // Normal demand surge config — weekday business hours, 1-hour surge duration
       const normalSurge = {
         name: `${subLocations[0].label} - Normal Surge`,
         description: 'Standard surge pricing with moderate sensitivity',
@@ -881,6 +881,11 @@ async function seed(config = DEFAULT_CONFIG) {
           maxMultiplier: 1.5,
           emaAlpha: 0.3,
         },
+        surgeDurationHours: 1,
+        timeWindows: [
+          { startTime: '09:00', endTime: '12:00', daysOfWeek: [1, 2, 3, 4, 5] },
+          { startTime: '14:00', endTime: '18:00', daysOfWeek: [1, 2, 3, 4, 5] },
+        ],
         effectiveFrom: new Date('2024-01-01'),
         isActive: true,
         createdBy: 'seed-script',
@@ -889,12 +894,12 @@ async function seed(config = DEFAULT_CONFIG) {
       };
       await surgeCollection.insertOne(normalSurge);
       surgeConfigs.push(normalSurge);
-      console.log(`  ✓ ${normalSurge.name} (alpha: ${normalSurge.surgeParams.alpha}, range: ${normalSurge.surgeParams.minMultiplier}-${normalSurge.surgeParams.maxMultiplier}x)`);
+      console.log(`  ✓ ${normalSurge.name} (alpha: ${normalSurge.surgeParams.alpha}, range: ${normalSurge.surgeParams.minMultiplier}-${normalSurge.surgeParams.maxMultiplier}x, duration: ${normalSurge.surgeDurationHours}h, windows: weekdays)`);
 
-      // High demand surge config
+      // High demand surge config — weekends only, 2-hour surge duration
       const highSurge = {
         name: `${subLocations[1].label} - High Demand Surge`,
-        description: 'Aggressive surge pricing for high-demand periods',
+        description: 'Aggressive surge pricing for high-demand weekend periods',
         appliesTo: { level: 'SUBLOCATION', entityId: subLocations[1]._id! },
         priority: 500,
         demandSupplyParams: {
@@ -908,6 +913,10 @@ async function seed(config = DEFAULT_CONFIG) {
           maxMultiplier: 1.8,
           emaAlpha: 0.25,
         },
+        surgeDurationHours: 2,
+        timeWindows: [
+          { startTime: '10:00', endTime: '18:00', daysOfWeek: [0, 6] },
+        ],
         effectiveFrom: new Date('2024-01-01'),
         isActive: true,
         createdBy: 'seed-script',
@@ -916,9 +925,9 @@ async function seed(config = DEFAULT_CONFIG) {
       };
       await surgeCollection.insertOne(highSurge);
       surgeConfigs.push(highSurge);
-      console.log(`  ✓ ${highSurge.name} (alpha: ${highSurge.surgeParams.alpha}, range: ${highSurge.surgeParams.minMultiplier}-${highSurge.surgeParams.maxMultiplier}x)`);
+      console.log(`  ✓ ${highSurge.name} (alpha: ${highSurge.surgeParams.alpha}, range: ${highSurge.surgeParams.minMultiplier}-${highSurge.surgeParams.maxMultiplier}x, duration: ${highSurge.surgeDurationHours}h, windows: weekends)`);
 
-      // Location-level surge config
+      // Location-level surge config — 24/7 (no daysOfWeek), 1-hour surge duration
       if (locations.length > 0) {
         const locationSurge = {
           name: `${locations[0].name} - Location Surge`,
@@ -936,6 +945,10 @@ async function seed(config = DEFAULT_CONFIG) {
             maxMultiplier: 1.4,
             emaAlpha: 0.35,
           },
+          surgeDurationHours: 1,
+          timeWindows: [
+            { startTime: '07:00', endTime: '22:00' },
+          ],
           effectiveFrom: new Date('2024-01-01'),
           isActive: true,
           createdBy: 'seed-script',
@@ -944,7 +957,7 @@ async function seed(config = DEFAULT_CONFIG) {
         };
         await surgeCollection.insertOne(locationSurge);
         surgeConfigs.push(locationSurge);
-        console.log(`  ✓ ${locationSurge.name} (Location-level, Priority: ${locationSurge.priority})`);
+        console.log(`  ✓ ${locationSurge.name} (Location-level, Priority: ${locationSurge.priority}, duration: ${locationSurge.surgeDurationHours}h, windows: all days)`);
       }
 
       console.log(`  ✓ Created ${surgeConfigs.length} surge configs`);
