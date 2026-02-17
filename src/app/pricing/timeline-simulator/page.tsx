@@ -2,127 +2,22 @@
 
 import { useState, useEffect, useRef } from 'react';
 import {
-  Calendar,
   Clock,
-  DollarSign,
-  Building2,
-  MapPin,
-  User,
-  Award,
   ChevronDown,
   ChevronUp,
-  Filter
 } from 'lucide-react';
 import DecisionAuditPanel from '@/components/DecisionAuditPanel';
 import PricingFiltersModal from '@/components/PricingFiltersModal';
+import SaveScenarioModal from '@/components/SaveScenarioModal';
+import SimulatorHeader from '@/components/SimulatorHeader';
+import TotalCostDisplay from '@/components/TotalCostDisplay';
+import HourlyRateChart from '@/components/HourlyRateChart';
+import WinningPriceGrid from '@/components/WinningPriceGrid';
+import PricingWaterfallGrid from '@/components/PricingWaterfallGrid';
 import { getTimeInTimezone } from '@/lib/timezone-utils';
-import { Save, FolderOpen, X, Zap, FileText, Lock, Activity, Rocket, RefreshCw, Loader2 } from 'lucide-react';
 import { PricingScenario, SurgeConfig } from '@/models/types';
-
-interface TimeWindow {
-  windowType?: 'ABSOLUTE_TIME' | 'DURATION_BASED';
-  startTime?: string;
-  endTime?: string;
-  startMinute?: number;
-  endMinute?: number;
-  pricePerHour: number;
-}
-
-interface Ratesheet {
-  _id: string;
-  name: string;
-  type: string;
-  priority: number;
-  effectiveFrom: string;
-  effectiveTo: string | null;
-  timeWindows?: TimeWindow[];
-  applyTo: 'CUSTOMER' | 'LOCATION' | 'SUBLOCATION' | 'EVENT';
-  customerId?: string;
-  locationId?: string;
-  subLocationId?: string;
-  eventId?: string;
-  customer?: { _id: string; name: string };
-  location?: { _id: string; name: string };
-  sublocation?: { _id: string; label: string };
-  event?: { _id: string; name: string };
-}
-
-interface Location {
-  _id: string;
-  name: string;
-  customerId: string;
-  defaultHourlyRate?: number;
-}
-
-interface SubLocation {
-  _id: string;
-  label: string;
-  locationId: string;
-  defaultHourlyRate?: number;
-}
-
-interface Customer {
-  _id: string;
-  name: string;
-  defaultHourlyRate?: number;
-}
-
-interface Event {
-  _id: string;
-  name: string;
-  description?: string;
-  startDate: string;
-  endDate: string;
-  isActive: boolean;
-  subLocationId?: string;
-  locationId?: string;
-  customerId?: string;
-}
-
-interface PricingConfig {
-  customerPriorityRange: { min: number; max: number };
-  locationPriorityRange: { min: number; max: number };
-  sublocationPriorityRange: { min: number; max: number };
-  eventPriorityRange?: { min: number; max: number };
-}
-
-interface PricingLayer {
-  id: string;
-  name: string;
-  type: 'RATESHEET' | 'SUBLOCATION_DEFAULT' | 'LOCATION_DEFAULT' | 'CUSTOMER_DEFAULT' | 'SURGE';
-  priority: number;
-  rate?: number;
-  color: string;
-  applyTo?: string;
-}
-
-interface TimeSlot {
-  hour: number;
-  label: string;
-  date: Date;
-  layers: Array<{
-    layer: PricingLayer;
-    price: number | null;
-    isActive: boolean;
-  }>;
-  winningLayer?: PricingLayer;
-  winningPrice?: number;        // Final price (surge if enabled, base otherwise)
-  basePrice?: number;           // Base price before surge
-  surgePrice?: number;          // Surge-adjusted price
-  surgeMultiplier?: number;     // The surge factor applied
-  decisionLog?: any;
-  pricingData?: any;
-  capacity?: {
-    allocated: number;
-    max: number;
-    available: number;
-  };
-  eventNames?: string[]; // Changed from eventName to eventNames array
-  events?: Array<{ name: string; priority: number }>; // Store events with priority for sorting
-  // Operating hours status
-  isAvailable?: boolean;
-  unavailableReason?: 'CLOSED' | 'BLACKOUT';
-}
+import type { Ratesheet, Location, SubLocation, Customer, Event, PricingConfig, PricingLayer, TimeSlot } from '@/lib/timeline-simulator-types';
+import { formatPriceWithSuperscript } from '@/lib/timeline-simulator-types';
 
 export default function TimelineSimulatorPage() {
   const [selectedLocation, setSelectedLocation] = useState<string>('');
@@ -142,13 +37,17 @@ export default function TimelineSimulatorPage() {
 
   // Initialize all dates from the same timestamp to prevent timing drift on initial render
   // Range covers 1 day in past to 3 days in future (default)
+  // All times snapped to hour boundaries
   const [initialDates] = useState(() => {
     const now = new Date();
+    // Snap to start of current hour
+    const hourStart = new Date(now);
+    hourStart.setMinutes(0, 0, 0);
     return {
-      rangeStart: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
-      rangeEnd: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000), // 3 days from now (total 4 day window)
-      viewStart: new Date(now.getTime() - 6 * 60 * 60 * 1000), // 6 hours ago (default view)
-      viewEnd: new Date(now.getTime() + 6 * 60 * 60 * 1000) // 6 hours from now (12 hour default view)
+      rangeStart: new Date(hourStart.getTime() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
+      rangeEnd: new Date(hourStart.getTime() + 3 * 24 * 60 * 60 * 1000), // 3 days from now (total 4 day window)
+      viewStart: new Date(hourStart.getTime()), // Start of current hour
+      viewEnd: new Date(hourStart.getTime() + 12 * 60 * 60 * 1000) // 12 hours from current hour
     };
   });
 
@@ -1921,16 +1820,6 @@ export default function TimelineSimulatorPage() {
     return `${hour - 12} PM`;
   };
 
-  const formatDateTime = (date: Date): string => {
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  };
-
   const setQuickRange = (hours: number) => {
     setSelectedDuration(hours);
     // If duration context is enabled, calculate from booking start time
@@ -1960,8 +1849,11 @@ export default function TimelineSimulatorPage() {
   const handleStartTimeChange = (position: number) => {
     const totalMs = rangeEnd.getTime() - rangeStart.getTime();
     const newMs = rangeStart.getTime() + (position / 100) * totalMs;
-    const newViewStart = new Date(newMs);
-    const newViewEnd = new Date(newViewStart.getTime() + selectedDuration * 60 * 60 * 1000);
+    // Snap to nearest hour
+    const hourMs = 60 * 60 * 1000;
+    const snappedMs = Math.round(newMs / hourMs) * hourMs;
+    const newViewStart = new Date(snappedMs);
+    const newViewEnd = new Date(newViewStart.getTime() + selectedDuration * hourMs);
 
     setViewStart(newViewStart);
     setViewEnd(newViewEnd);
@@ -2003,16 +1895,6 @@ export default function TimelineSimulatorPage() {
   // Get current total based on active layers
   const getTotalCost = (): number => {
     return timeSlots.reduce((sum, slot) => sum + (slot.winningPrice || 0), 0);
-  };
-
-  // Helper function to format price with superscript decimals
-  const formatPriceWithSuperscript = (price: number) => {
-    const formatted = price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const parts = formatted.split('.');
-    return {
-      dollars: parts[0],
-      cents: parts[1] || '00'
-    };
   };
 
   // Component to render price with superscript cents
@@ -2174,254 +2056,30 @@ export default function TimelineSimulatorPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-indigo-50 overflow-x-hidden">
       {/* Header - Event Admin Style */}
-      <div className="bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-2xl">
-        <div className="max-w-[1800px] mx-auto px-8 py-8">
-          <div className="flex justify-between items-center">
-            <div>
-              {/* Dynamic Title: Show SubLocation name or default */}
-              <div className="flex items-center gap-3 mb-2">
-                <h1 className="text-4xl font-bold">
-                  {currentSubLocation ? currentSubLocation.label : 'Pricing Simulator'}
-                </h1>
-                <button
-                  onClick={() => setIsFiltersModalOpen(true)}
-                  className="bg-white/10 backdrop-blur-sm border border-white/30 text-white p-2 rounded-lg hover:bg-white/20 transition-all shadow-lg"
-                  title="Change SubLocation"
-                >
-                  <Filter className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Location context and description */}
-              {currentLocation && currentSubLocation ? (
-                <p className="text-pink-100 font-thin">
-                  📍 {currentLocation.name} • Visual waterfall showing pricing hierarchy
-                </p>
-              ) : (
-                <p className="text-pink-100 font-thin">Visual waterfall showing pricing hierarchy and winning rates for each hour</p>
-              )}
-
-              {/* Selected Values Display - More compact, without duplicating sublocation/location */}
-              {selectedSubLocation && (
-                <div className="flex flex-wrap items-center gap-2 text-sm mt-4">
-                  {currentEvent && (
-                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                      🗓️ {currentEvent.name}
-                    </span>
-                  )}
-                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                    ⏱️ {selectedDuration}h
-                  </span>
-                  {isEventBooking && (
-                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                      🎫 Event Booking
-                    </span>
-                  )}
-                  {/* Timezone Info */}
-                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white font-medium border border-white/30">
-                    <Clock className="w-3 h-3 mr-1.5" />
-                    {new Date().toLocaleString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true
-                    })}
-                  </span>
-                  <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-white text-xs font-medium border border-white/30">
-                    {Intl.DateTimeFormat().resolvedOptions().timeZone}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-3 items-end">
-              {/* Mode Toggles - Hierarchical Structure */}
-              <div className="flex flex-col gap-3 items-end w-full">
-                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 flex flex-col gap-2 border border-white/20">
-                  {/* Mode Toggle - Radio Button Style */}
-                  <div className="flex items-center gap-2">
-                    <div className="bg-white/20 backdrop-blur-sm rounded-lg p-1 flex gap-1">
-                      {/* Live Mode Button */}
-                      <button
-                        onClick={() => setIsSimulationEnabled(false)}
-                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                          !isSimulationEnabled
-                            ? 'bg-white text-purple-600 shadow-sm'
-                            : 'text-white hover:bg-white/10'
-                        }`}
-                      >
-                        <Activity className="w-3.5 h-3.5" />
-                        Live Mode
-                      </button>
-
-                      {/* Simulation Mode Button */}
-                      <button
-                        onClick={() => setIsSimulationEnabled(true)}
-                        className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                          isSimulationEnabled
-                            ? 'bg-white text-purple-600 shadow-sm'
-                            : 'text-white hover:bg-white/10'
-                        }`}
-                      >
-                        <Zap className="w-3.5 h-3.5" />
-                        Simulation
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Children of Simulation - Only show when Simulation is enabled */}
-                  {isSimulationEnabled && (
-                    <div className="ml-6 flex flex-col gap-2 border-l-2 border-white/30 pl-4">
-                      {/* Surge Pricing Toggle - Child of Simulation */}
-                      <button
-                        onClick={() => setSurgeEnabled(!surgeEnabled)}
-                        disabled={!activeSurgeConfig}
-                        className={`flex items-center gap-2 group ${
-                          !activeSurgeConfig ? 'opacity-40 cursor-not-allowed' : ''
-                        }`}
-                        title={!activeSurgeConfig ? 'No surge config available for this sublocation' : 'Toggle surge pricing'}
-                      >
-                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
-                          surgeEnabled && activeSurgeConfig
-                            ? 'bg-white border-white'
-                            : 'border-white/50 group-hover:border-white/70'
-                        }`}>
-                          {surgeEnabled && activeSurgeConfig && (
-                            <svg className="w-3 h-3 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                            </svg>
-                          )}
-                        </div>
-                        <Zap className="w-4 h-4 text-white" />
-                        <span className="text-white font-semibold text-sm">Surge Pricing</span>
-                        {surgeEnabled && activeSurgeConfig && (
-                          <span className="px-2 py-0.5 bg-orange-500 text-white text-xs font-bold rounded-full">
-                            {(() => {
-                              const { demandSupplyParams, surgeParams } = activeSurgeConfig;
-                              const pressure = demandSupplyParams.currentDemand / demandSupplyParams.currentSupply;
-                              const normalized = pressure / demandSupplyParams.historicalAvgPressure;
-                              const rawFactor = 1 + surgeParams.alpha * Math.log(normalized);
-                              const surgeFactor = Math.max(
-                                surgeParams.minMultiplier,
-                                Math.min(surgeParams.maxMultiplier, rawFactor)
-                              );
-                              return `${surgeFactor.toFixed(2)}x`;
-                            })()}
-                          </span>
-                        )}
-                      </button>
-
-                      {/* Planning Toggle - Child of Simulation */}
-                      <button
-                        onClick={() => setIsPlanningEnabled(!isPlanningEnabled)}
-                        className="flex items-center gap-2 group"
-                      >
-                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
-                          isPlanningEnabled
-                            ? 'bg-white border-white'
-                            : 'border-white/50 group-hover:border-white/70'
-                        }`}>
-                          {isPlanningEnabled && (
-                            <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                            </svg>
-                          )}
-                        </div>
-                        <FileText className="w-4 h-4 text-white" />
-                        <span className="text-white font-semibold text-sm">Planning</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Scenario Management - Compact Card */}
-                {isPlanningEnabled && isSimulationEnabled && selectedSubLocation && (
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 border border-white/20 min-w-[280px]">
-                    {/* Current Scenario Status */}
-                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/20">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${hasUnsavedChanges ? 'bg-yellow-400 animate-pulse' : currentScenarioId ? 'bg-green-400' : 'bg-gray-400'}`}></div>
-                        <span className="text-white/70 text-xs font-medium">
-                          {currentScenarioId
-                            ? (hasUnsavedChanges ? 'Modified' : 'Saved')
-                            : 'No scenario'}
-                        </span>
-                      </div>
-                      {currentScenarioId && (
-                        <button
-                          onClick={clearScenario}
-                          className="text-white/60 hover:text-red-400 transition-colors"
-                          title="Clear scenario"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="space-y-2">
-                      {/* Save Button */}
-                      <button
-                        onClick={saveScenario}
-                        className="w-full bg-white/20 hover:bg-white/30 border border-white/30 text-white px-3 py-2 rounded-lg font-medium text-sm transition-all flex items-center justify-center gap-2 group"
-                      >
-                        <Save className="w-4 h-4 group-hover:scale-110 transition-transform" />
-                        <span>{currentScenarioId && !hasUnsavedChanges ? 'Save As New' : 'Save Scenario'}</span>
-                      </button>
-
-                      {/* Load Scenario - Custom Dropdown */}
-                      {scenarios.length > 0 && (
-                        <div className="relative">
-                          <select
-                            onChange={(e) => {
-                              const scenario = scenarios.find(s => s._id?.toString() === e.target.value);
-                              if (scenario) loadScenario(scenario);
-                            }}
-                            value={currentScenarioId || ''}
-                            className="w-full bg-white/20 hover:bg-white/30 border border-white/30 text-white px-3 py-2 pl-9 pr-8 rounded-lg font-medium text-sm transition-all appearance-none cursor-pointer"
-                            style={{ backgroundImage: 'none' }}
-                          >
-                            <option value="" className="bg-purple-600 text-white">Load Scenario...</option>
-                            {scenarios.map((scenario) => (
-                              <option
-                                key={scenario._id?.toString()}
-                                value={scenario._id?.toString()}
-                                className="bg-purple-600 text-white"
-                              >
-                                {scenario.name}
-                                {scenario._id?.toString() === currentScenarioId && hasUnsavedChanges ? ' •' : ''}
-                              </option>
-                            ))}
-                          </select>
-                          <FolderOpen className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-white/70" />
-                          <ChevronDown className="w-4 h-4 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-white/70" />
-                        </div>
-                      )}
-
-                      {/* Promote to Production Button */}
-                      {currentScenarioId && surgeEnabled && appliedSurgeRatesheets.length > 0 && (
-                        <div className="pt-2 border-t border-white/20">
-                          <button
-                            onClick={promoteToProduction}
-                            className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-3 py-2 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg group"
-                          >
-                            <Rocket className="w-4 h-4 group-hover:scale-110 transition-transform" />
-                            <span>Promote to Production</span>
-                          </button>
-                          <p className="text-xs text-white/60 text-center mt-1">
-                            Materialize {appliedSurgeRatesheets.length} surge config{appliedSurgeRatesheets.length > 1 ? 's' : ''}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <SimulatorHeader
+        currentSubLocationLabel={currentSubLocation?.label}
+        currentLocationName={currentLocation?.name}
+        currentEventName={currentEvent?.name}
+        selectedSubLocation={selectedSubLocation}
+        selectedDuration={selectedDuration}
+        isEventBooking={isEventBooking}
+        isSimulationEnabled={isSimulationEnabled}
+        onSimulationToggle={setIsSimulationEnabled}
+        isPlanningEnabled={isPlanningEnabled}
+        onPlanningToggle={setIsPlanningEnabled}
+        surgeEnabled={surgeEnabled}
+        onSurgeToggle={setSurgeEnabled}
+        activeSurgeConfig={activeSurgeConfig}
+        appliedSurgeRatesheets={appliedSurgeRatesheets}
+        scenarios={scenarios}
+        currentScenarioId={currentScenarioId}
+        hasUnsavedChanges={hasUnsavedChanges}
+        onSaveScenario={saveScenario}
+        onLoadScenario={loadScenario}
+        onClearScenario={clearScenario}
+        onPromoteToProduction={promoteToProduction}
+        onOpenFilters={() => setIsFiltersModalOpen(true)}
+      />
 
       <div className="max-w-[1800px] mx-auto px-8 py-8">
 
@@ -2453,85 +2111,21 @@ export default function TimelineSimulatorPage() {
         />
 
         {/* Save Scenario Modal */}
-        {isSaveScenarioModalOpen && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-              {/* Header */}
-              <div className="bg-gradient-to-r from-pink-600 to-purple-600 px-6 py-4">
-                <h2 className="text-2xl font-bold text-white">Save Scenario</h2>
-                <p className="text-pink-100 text-sm mt-1">Save current simulation configuration</p>
-              </div>
-
-              {/* Body */}
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Scenario Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={saveScenarioName}
-                    onChange={(e) => setSaveScenarioName(e.target.value)}
-                    placeholder="e.g., Peak Season Pricing"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-black focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                    autoFocus
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Description (Optional)
-                  </label>
-                  <textarea
-                    value={saveScenarioDescription}
-                    onChange={(e) => setSaveScenarioDescription(e.target.value)}
-                    placeholder="Brief description of this scenario..."
-                    rows={3}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all resize-none"
-                  />
-                </div>
-
-                {/* Summary of what will be saved */}
-                <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-4">
-                  <p className="text-xs font-semibold text-purple-800 mb-2">What will be saved:</p>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-purple-700">
-                    <div>✓ {enabledLayers.size} enabled layers</div>
-                    <div>✓ {selectedDuration}h duration</div>
-                    <div>✓ Time window settings</div>
-                    <div>✓ {isEventBooking ? 'Event' : 'Standard'} booking</div>
-                    {surgeEnabled && activeSurgeConfig && (
-                      <div>✓ Surge pricing ({activeSurgeConfig.name})</div>
-                    )}
-                    {(pricingCoefficientsUp !== undefined || pricingCoefficientsDown !== undefined || bias !== undefined) && (
-                      <div className="col-span-2">✓ Pricing coefficients</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="bg-gray-50 px-6 py-4 flex justify-end gap-3 border-t border-gray-200">
-                <button
-                  onClick={() => {
-                    setIsSaveScenarioModalOpen(false);
-                    setSaveScenarioName('');
-                    setSaveScenarioDescription('');
-                  }}
-                  className="px-6 py-2 rounded-xl font-semibold text-gray-700 hover:bg-gray-200 transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveScenarioSubmit}
-                  disabled={!saveScenarioName.trim()}
-                  className="px-6 py-2 bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-xl font-semibold hover:from-pink-700 hover:to-purple-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Save Scenario
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <SaveScenarioModal
+          isOpen={isSaveScenarioModalOpen}
+          onClose={() => { setIsSaveScenarioModalOpen(false); setSaveScenarioName(''); setSaveScenarioDescription(''); }}
+          onSubmit={handleSaveScenarioSubmit}
+          scenarioName={saveScenarioName}
+          onScenarioNameChange={setSaveScenarioName}
+          scenarioDescription={saveScenarioDescription}
+          onScenarioDescriptionChange={setSaveScenarioDescription}
+          enabledLayersCount={enabledLayers.size}
+          selectedDuration={selectedDuration}
+          isEventBooking={isEventBooking}
+          surgeEnabled={surgeEnabled}
+          activeSurgeConfigName={activeSurgeConfig?.name}
+          hasPricingCoefficients={pricingCoefficientsUp !== undefined || pricingCoefficientsDown !== undefined || bias !== undefined}
+        />
 
         {loading && (
           <div className="flex items-center justify-center h-64">
@@ -2551,70 +2145,14 @@ export default function TimelineSimulatorPage() {
               {/* Premium Header with Glassmorphism */}
               <div className="relative px-8 pt-8 pb-6">
                 {/* Total Cost - Hero Section */}
-                <div className="text-center mb-8">
-                  <div className="inline-flex items-baseline gap-2 mb-2">
-                    <span className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Cost</span>
-                    {surgeEnabled && activeSurgeConfig && (
-                      <span className="px-2 py-0.5 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold rounded-full flex items-center gap-1">
-                        <Zap className="w-3 h-3" />
-                        SURGE
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center justify-center gap-3">
-                    {isSimulationEnabled && preSimulationBaselinePrice > 0 && getTotalCost() !== preSimulationBaselinePrice ? (
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="flex items-baseline gap-4">
-                          {(() => {
-                            const baselinePrice = formatPriceWithSuperscript(preSimulationBaselinePrice);
-                            return (
-                              <div className="relative text-4xl font-medium text-gray-400 line-through" style={{ lineHeight: 1 }}>
-                                ${baselinePrice.dollars}<span className="text-xs relative -top-2 ml-0.5">.{baselinePrice.cents}</span>
-                              </div>
-                            );
-                          })()}
-                          {(() => {
-                            const currentPrice = formatPriceWithSuperscript(getTotalCost());
-                            const isIncrease = getTotalCost() > preSimulationBaselinePrice;
-                            return (
-                              <div className={`relative ${isIncrease ? 'bg-gradient-to-br from-orange-600 to-red-600' : 'bg-gradient-to-br from-green-600 to-emerald-600'} bg-clip-text text-transparent`} style={{ lineHeight: 1 }}>
-                                <span className="text-8xl font-semibold tracking-tight">
-                                  ${currentPrice.dollars}
-                                </span>
-                                <span className="text-xl font-thin relative -top-4 ml-1">
-                                  .{currentPrice.cents}
-                                </span>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                        <span className={`text-sm font-bold ${getTotalCost() > preSimulationBaselinePrice ? 'text-red-600' : 'text-green-600'}`}>
-                          {getTotalCost() > preSimulationBaselinePrice ? '+' : ''}
-                          ${(getTotalCost() - preSimulationBaselinePrice).toLocaleString()}
-                          {' '}
-                          ({((getTotalCost() / preSimulationBaselinePrice - 1) * 100).toFixed(1)}%)
-                        </span>
-                      </div>
-                    ) : (
-                      (() => {
-                        const price = formatPriceWithSuperscript(getTotalCost());
-                        return (
-                          <div className="relative bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 bg-clip-text text-transparent" style={{ lineHeight: 1 }}>
-                            <span className="text-8xl font-semibold tracking-tight">
-                              ${price.dollars}
-                            </span>
-                            <span className="text-3xl font-thin relative -top-4 ml-1">
-                              .{price.cents}
-                            </span>
-                          </div>
-                        );
-                      })()
-                    )}
-                  </div>
-                  <div className="mt-3 text-sm text-gray-500 font-medium">
-                    {getTotalDuration()}
-                  </div>
-                </div>
+                <TotalCostDisplay
+                  totalCost={getTotalCost()}
+                  totalDuration={getTotalDuration()}
+                  isSimulationEnabled={isSimulationEnabled}
+                  preSimulationBaselinePrice={preSimulationBaselinePrice}
+                  surgeEnabled={surgeEnabled}
+                  hasSurgeConfig={!!activeSurgeConfig}
+                />
 
                 {/* Start and End Times - Minimal Pills */}
                 <div className="flex items-center justify-center gap-3 mb-8">
@@ -2753,650 +2291,30 @@ export default function TimelineSimulatorPage() {
 
 
               {/* Hourly Rate Breakdown Chart */}
-              {timeSlots.length > 0 && (
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 mt-6 ml-6 mr-6 relative">
-                  {/* Loading Overlay */}
-                  {(pricingDataLoading || isRefreshing) && (
-                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center">
-                      <div className="flex flex-col items-center gap-3">
-                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
-                        <span className="text-sm font-medium text-gray-600">Loading pricing data...</span>
-                      </div>
-                    </div>
-                  )}
-                  {/* Header with Stats */}
-                  <div className="flex items-start justify-between mb-6">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-1">
-                        <h3 className="text-xl font-bold text-gray-900">
-                          Hourly Rate Breakdown
-                        </h3>
-                        <button
-                          onClick={handleRefresh}
-                          disabled={isRefreshing || !selectedSubLocation}
-                          className={`p-1.5 rounded-lg transition-all ${
-                            isRefreshing
-                              ? 'bg-blue-100 text-blue-600 cursor-wait'
-                              : 'bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-600'
-                          }`}
-                          title="Refresh pricing data"
-                        >
-                          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                        </button>
-                      </div>
-                      <p className="text-sm text-gray-600">
-                        Next {timeSlots.length} hours starting from {formatDateTime(viewStart)}
-                      </p>
-                    </div>
+              <HourlyRateChart
+                timeSlots={timeSlots}
+                viewStart={viewStart}
+                selectedDuration={selectedDuration}
+                onDurationChange={setQuickRange}
+                onRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
+                pricingDataLoading={pricingDataLoading}
+              />
 
-                    {/* Min/Avg/Max Visual Slider */}
-                    <div className="flex items-center gap-4 min-w-[280px]">
-                      {(() => {
-                        const prices = timeSlots.filter(s => s.winningPrice).map(s => s.winningPrice!);
-                        if (prices.length === 0) return null;
-
-                        const min = Math.min(...prices);
-                        const avg = prices.reduce((sum, p) => sum + p, 0) / prices.length;
-                        const max = Math.max(...prices);
-
-                        // Calculate percentage position of avg between min and max
-                        const range = max - min;
-                        const avgPosition = range > 0 ? ((avg - min) / range) * 100 : 50;
-
-                        return (
-                          <div className="flex-1">
-                            {/* Price Range Slider */}
-                            <div className="relative pt-2 pb-1">
-                              {/* Track */}
-                              <div className="relative h-2 bg-gradient-to-r from-blue-100 via-blue-200 to-red-100 rounded-full overflow-hidden shadow-inner">
-                                {/* Gradient overlay for depth */}
-                                <div className="absolute inset-0 bg-gradient-to-b from-white/40 to-transparent"></div>
-                              </div>
-
-                              {/* Average Marker */}
-                              <div
-                                className="absolute top-0 transform -translate-x-1/2"
-                                style={{ left: `${avgPosition}%` }}
-                              >
-                                {/* Connecting line */}
-                                <div className="absolute left-1/2 -translate-x-1/2 w-0.5 h-2 bg-blue-600"></div>
-
-                                {/* Marker dot */}
-                                <div className="relative mt-2">
-                                  <div className="w-3 h-3 bg-blue-600 rounded-full border-2 border-white shadow-lg"></div>
-                                  <div className="absolute inset-0 w-3 h-3 bg-blue-600 rounded-full animate-ping opacity-75"></div>
-                                </div>
-
-                                {/* Average value label */}
-                                <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
-                                  <div className="bg-blue-600 text-white px-2 py-1 rounded-md text-xs font-bold shadow-lg">
-                                    ${avg.toFixed(2)}
-                                  </div>
-                                  <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-2 h-2 bg-blue-600 transform rotate-45"></div>
-                                </div>
-                              </div>
-
-                              {/* Min and Max labels */}
-                              <div className="flex justify-between mt-2 text-xs">
-                                <div className="text-blue-600 font-semibold">${min.toFixed(2)}</div>
-                                <div className="text-red-600 font-semibold">${max.toFixed(2)}</div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Duration Toggle */}
-                    <div className="flex gap-2 ml-6">
-                      <button
-                        onClick={() => setQuickRange(12)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                          selectedDuration === 12
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        12h
-                      </button>
-                      <button
-                        onClick={() => setQuickRange(24)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                          selectedDuration === 24
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        24h
-                      </button>
-                      <button
-                        onClick={() => setQuickRange(48)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                          selectedDuration === 48
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        48h
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* SVG Chart */}
-                  <div className="relative w-full" style={{ height: '320px' }}>
-                    <svg className="w-full h-full" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid meet">
-                      {/* Gradients */}
-                      <defs>
-                        <linearGradient id="lineGradient" x1="0" y1="0" x2="1000" y2="0" gradientUnits="userSpaceOnUse">
-                          <stop offset="0%" stopColor="#3b82f6" />
-                          <stop offset="50%" stopColor="#8b5cf6" />
-                          <stop offset="100%" stopColor="#ec4899" />
-                        </linearGradient>
-                        <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
-                          <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0.1" />
-                        </linearGradient>
-                        <linearGradient id="eventIconGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" stopColor="#ec4899" />
-                          <stop offset="100%" stopColor="#a855f7" />
-                        </linearGradient>
-                      </defs>
-
-                      {/* Chart calculation and rendering */}
-                      {(() => {
-                        const prices = timeSlots.map(s => s.winningPrice || 0);
-                        const maxPrice = Math.max(...prices);
-                        const validPrices = prices.filter(p => p > 0);
-                        const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : maxPrice;
-                        const range = maxPrice - minPrice || 1;
-                        const padding = range * 0.15;
-
-                        const chartHeight = 180;
-                        const chartBaseline = 240;
-                        const leftMargin = 40;
-                        const rightMargin = 20;
-                        const chartWidth = 1000 - leftMargin - rightMargin;
-
-                        // Calculate Y-axis values for grid lines with intelligent scaling
-                        let yAxisMax, yAxisMin, yAxisRange;
-
-                        if (range < 1) {
-                          // Very small range - show a fixed $1 range centered on the price
-                          const avgPrice = (maxPrice + minPrice) / 2;
-                          yAxisMin = Math.floor(avgPrice) - 0.5;
-                          yAxisMax = Math.ceil(avgPrice) + 0.5;
-                          yAxisRange = yAxisMax - yAxisMin;
-                        } else if (range < 5) {
-                          // Small range - add moderate padding
-                          yAxisMax = maxPrice + padding;
-                          yAxisMin = minPrice - padding;
-                          yAxisRange = yAxisMax - yAxisMin;
-                        } else {
-                          // Larger range - use standard padding
-                          yAxisMax = Math.ceil(maxPrice + padding);
-                          yAxisMin = Math.floor(minPrice - padding);
-                          yAxisRange = yAxisMax - yAxisMin;
-                        }
-
-                        // Safety check: ensure yAxisRange is always at least 1 to prevent division by zero or invalid rendering
-                        if (!isFinite(yAxisRange) || yAxisRange < 0.1) {
-                          yAxisRange = 1;
-                          yAxisMax = maxPrice + 0.5;
-                          yAxisMin = maxPrice - 0.5;
-                        }
-
-                        const points = timeSlots.map((slot, i) => {
-                          // Handle single slot case (avoid division by zero)
-                          const x = timeSlots.length === 1
-                            ? leftMargin + chartWidth / 2  // Center single point
-                            : leftMargin + (i / (timeSlots.length - 1)) * chartWidth;
-
-                          // Use Y-axis range for normalization to ensure consistency
-                          const normalizedPrice = ((slot.winningPrice || 0) - yAxisMin) / yAxisRange;
-                          const y = chartBaseline - (normalizedPrice * chartHeight);
-
-                          return { x, y, slot };
-                        });
-
-                        const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
-
-                        // Validate points to ensure no NaN or Infinity values
-                        const hasInvalidPoints = points.some(p => !isFinite(p.x) || !isFinite(p.y));
-
-                        return (
-                          <>
-                            {/* Grid lines - positioned to match Y-axis labels and chart scale */}
-                            {[0, 1, 2, 3, 4].map(i => {
-                              // Calculate price for this grid line
-                              const price = yAxisMax - (i * yAxisRange / 4);
-                              // Convert price to Y coordinate using same formula as chart points
-                              const normalizedPrice = (price - yAxisMin) / yAxisRange;
-                              const y = chartBaseline - (normalizedPrice * chartHeight);
-
-                              return (
-                                <line
-                                  key={`grid-${i}`}
-                                  x1={leftMargin}
-                                  y1={y}
-                                  x2={leftMargin + chartWidth}
-                                  y2={y}
-                                  stroke="#e5e7eb"
-                                  strokeWidth="0.5"
-                                  opacity="0.5"
-                                />
-                              );
-                            })}
-
-                            {/* Area fill - consistent gradient for all cases */}
-                            <polygon
-                              points={`${leftMargin},${chartBaseline} ${pointsStr} ${leftMargin + chartWidth},${chartBaseline}`}
-                              fill="url(#areaGradient)"
-                            />
-
-                            {/* Render line only if all points are valid - use polyline for all cases */}
-                            {!hasInvalidPoints && (
-                              <>
-                                {/* Fallback solid color base - ensures line always visible */}
-                                <polyline
-                                  points={pointsStr}
-                                  fill="none"
-                                  stroke="#8b5cf6"
-                                  strokeWidth="3"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                                {/* Glow effect with gradient */}
-                                <polyline
-                                  points={pointsStr}
-                                  fill="none"
-                                  stroke="url(#lineGradient)"
-                                  strokeWidth="6"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  opacity="0.2"
-                                  filter="blur(4px)"
-                                />
-                                {/* Main line with gradient overlay */}
-                                <polyline
-                                  points={pointsStr}
-                                  fill="none"
-                                  stroke="url(#lineGradient)"
-                                  strokeWidth="3"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </>
-                            )}
-
-                            {/* Data points */}
-                            {points.map(({ x, y, slot }, i) => {
-                              const hasEvents = slot.events && slot.events.length > 0;
-                              const eventCount = slot.events?.length || 0;
-
-                              return (
-                                <g key={i}>
-                                  {/* Concentric circles for each event - rendered from outside to inside */}
-                                  {hasEvents && slot.events!.map((event, eventIdx) => {
-                                    // Each event gets a larger concentric circle
-                                    // Start from outer ring and work inward
-                                    const ringRadius = 10 + ((eventCount - eventIdx - 1) * 4);
-
-                                    return (
-                                      <g key={`event-circle-${i}-${eventIdx}`}>
-                                        {/* Subtle glow effect for each event ring */}
-                                        <circle
-                                          cx={x}
-                                          cy={y}
-                                          r={ringRadius + 2}
-                                          fill="none"
-                                          stroke="url(#lineGradient)"
-                                          strokeWidth="4"
-                                          opacity="0.15"
-                                        />
-
-                                        {/* Event circle ring - styled to match chart */}
-                                        <circle
-                                          cx={x}
-                                          cy={y}
-                                          r={ringRadius}
-                                          fill="rgba(255, 255, 255, 0.95)"
-                                          stroke="url(#lineGradient)"
-                                          strokeWidth="2"
-                                          opacity="0.9"
-                                        />
-                                        {/* Tooltip for this event */}
-                                        <title>{event.name} (Priority: {event.priority})</title>
-                                      </g>
-                                    );
-                                  })}
-
-                                  {/* Main dot */}
-                                  <circle
-                                    cx={x}
-                                    cy={y}
-                                    r="5"
-                                    fill="#ffffff"
-                                    stroke="url(#lineGradient)"
-                                    strokeWidth="3"
-                                  />
-
-                                  {/* Tooltip for main dot */}
-                                  <title>
-                                    {slot.label} - ${slot.winningPrice?.toFixed(2) || '0.00'}/hr
-                                    {hasEvents && `\n\n🗓️ ${eventCount} Event${eventCount > 1 ? 's' : ''}:\n${slot.events!.map(e => `• ${e.name} (Priority: ${e.priority})`).join('\n')}`}
-                                  </title>
-                                </g>
-                              );
-                            })}
-
-                            {/* X-axis labels */}
-                            {points.map(({ x, slot }, i) => {
-                              const labelInterval = timeSlots.length <= 12 ? 2 : timeSlots.length <= 24 ? 4 : 8;
-                              if (i % labelInterval !== 0 && i !== points.length - 1) return null;
-
-                              const showDayLabel = i === 0 || slot.date.getDate() !== points[i - 1]?.slot.date.getDate();
-
-                              return (
-                                <g key={`label-${i}`}>
-                                  <line
-                                    x1={x}
-                                    y1={chartBaseline}
-                                    x2={x}
-                                    y2={chartBaseline + 6}
-                                    stroke="#cbd5e1"
-                                    strokeWidth="1.5"
-                                  />
-                                  <text
-                                    x={x}
-                                    y={chartBaseline + 20}
-                                    textAnchor="middle"
-                                    fill="#64748b"
-                                    fontSize="11"
-                                    fontWeight="600"
-                                  >
-                                    {slot.label}
-                                  </text>
-                                  {showDayLabel && (
-                                    <text
-                                      x={x}
-                                      y={chartBaseline + 34}
-                                      textAnchor="middle"
-                                      fill="#94a3b8"
-                                      fontSize="9"
-                                      fontWeight="500"
-                                    >
-                                      {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                    </text>
-                                  )}
-                                </g>
-                              );
-                            })}
-
-                            {/* Y-axis labels - positioned to match grid lines */}
-                            {[0, 1, 2, 3, 4].map(i => {
-                              // Calculate price for this label (same as grid line)
-                              const price = yAxisMax - (i * yAxisRange / 4);
-                              // Convert price to Y coordinate using same formula as chart points
-                              const normalizedPrice = (price - yAxisMin) / yAxisRange;
-                              const y = chartBaseline - (normalizedPrice * chartHeight);
-
-                              // Dynamic decimal precision based on range
-                              let decimals;
-                              if (yAxisRange < 2) {
-                                decimals = 2; // Very small range - show cents
-                              } else if (yAxisRange < 10) {
-                                decimals = 1; // Small range - show one decimal
-                              } else {
-                                decimals = 0; // Large range - whole dollars
-                              }
-
-                              return (
-                                <text
-                                  key={`y-${i}`}
-                                  x="30"
-                                  y={y + 5}
-                                  textAnchor="end"
-                                  fill="#64748b"
-                                  fontSize="11"
-                                  fontWeight="600"
-                                >
-                                  ${price.toFixed(decimals)}
-                                </text>
-                              );
-                            })}
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  </div>
-                </div>
-              )}
-
-              {/* Time markers in grid with winning prices */}
-              <h3 className="text-xl font-bold text-gray-900 text-center ml-6">
-                Winning Price by Hour
-              </h3>
-
-              {/* Operating Hours Legend */}
-              {timeSlots.some(slot => slot.isAvailable === false) && (
-                <div className="flex items-center justify-center gap-6 mt-3 mb-2 text-xs">
-                  <div className="flex items-center gap-4 bg-gray-50 px-4 py-2 rounded-lg border border-gray-200">
-                    <span className="font-medium text-gray-600">Legend:</span>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded bg-gradient-to-r from-blue-500 to-purple-500"></div>
-                      <span className="text-gray-600">Open</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded bg-gradient-to-r from-gray-400 to-gray-500"></div>
-                      <span className="text-gray-600">Closed</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded bg-gradient-to-r from-red-500 to-red-600"></div>
-                      <span className="text-gray-600">Blackout</span>
-                    </div>
-                  </div>
-                  <div className="text-gray-500">
-                    {timeSlots.filter(s => s.isAvailable !== false).length} available / {timeSlots.length} total hours
-                  </div>
-                </div>
-              )}
-
-              <div className="relative mb-6 mt-6 ml-6 mr-6">
-                {/* Loading Overlay */}
-                {(pricingDataLoading || isRefreshing) && (
-                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center min-h-[120px]">
-                    <div className="flex flex-col items-center gap-3">
-                      <Loader2 className="w-8 h-8 text-pink-600 animate-spin" />
-                      <span className="text-sm font-medium text-gray-600">Calculating prices...</span>
-                    </div>
-                  </div>
-                )}
-                <div className="grid grid-cols-12 gap-1">
-                  {timeSlots.map((slot, idx) => {
-                    const isSelected = selectedSlot?.slotIdx === idx;
-                    const isHovered = hoveredSlot?.slotIdx === idx;
-                    const isClosed = slot.isAvailable === false && slot.unavailableReason === 'CLOSED';
-                    const isBlackout = slot.isAvailable === false && slot.unavailableReason === 'BLACKOUT';
-                    const isUnavailable = isClosed || isBlackout;
-
-                    // Debug log for rendering
-                    if (slot.eventNames && slot.eventNames.length > 0) {
-                      console.log(`🎨 Rendering slot ${idx} with eventNames: [${slot.eventNames.join(', ')}]`);
-                    }
-
-                    return (
-                      <div
-                        key={idx}
-                        className={`relative border rounded-xl overflow-hidden cursor-pointer transition-all ${
-                          isClosed
-                            ? 'bg-gradient-to-br from-gray-200 via-gray-100 to-gray-200'
-                            : isBlackout
-                            ? 'bg-gradient-to-br from-red-100 via-red-50 to-red-100'
-                            : 'bg-gradient-to-br from-silver-500 via-silver-50 to-silver-100'
-                        } ${
-                          isSelected
-                            ? 'border-blue-600 border-2 shadow-xl ring-2 ring-blue-300'
-                            : isHovered
-                            ? 'border-blue-400 border-2 shadow-lg'
-                            : isClosed
-                            ? 'border-gray-300 shadow-sm'
-                            : isBlackout
-                            ? 'border-red-300 shadow-sm'
-                            : 'border-gray-200 shadow-sm'
-                        }`}
-                        onClick={() => handleTileClick(idx, 'pricing-tile', slot)}
-                        onMouseEnter={() => handleTileHover(idx, 'pricing-tile')}
-                        onMouseLeave={handleTileLeave}
-                      >
-                        {/* Header with time */}
-                        <div className={`px-2 py-1.5 text-center ${
-                          isClosed
-                            ? 'bg-gradient-to-r from-gray-500 to-gray-600'
-                            : isBlackout
-                            ? 'bg-gradient-to-r from-red-600 to-red-700'
-                            : 'bg-gradient-to-r from-slate-600 to-slate-700'
-                        }`}>
-                          <div className="text-[11px] font-bold text-white tracking-tight">{slot.label}</div>
-                          <div className={`text-[9px] font-medium ${
-                            isClosed ? 'text-gray-300' : isBlackout ? 'text-red-200' : 'text-slate-300'
-                          }`}>
-                            {slot.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          </div>
-                        </div>
-
-                        {/* Pricing Section */}
-                        <div className={`px-2 py-3 border-b border-gray-100 ${
-                          isClosed
-                            ? 'bg-gradient-to-br from-gray-100 via-gray-50 to-gray-100'
-                            : isBlackout
-                            ? 'bg-gradient-to-br from-red-50 via-red-25 to-red-50'
-                            : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'
-                        }`}>
-                          <div className="text-[8px] uppercase font-light text-gray-500 mb-1 tracking-wider flex items-center justify-left gap-1">
-                            {isUnavailable ? 'Status' : 'Price'}
-                            {/* Show surge icon if surge is ON and SURGE layer is winning */}
-                            {!isUnavailable && surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || (slot.winningLayer?.id && enabledLayers.has(slot.winningLayer.id))) && (
-                              <Zap className="w-2 h-2 text-orange-600" />
-                            )}
-                          </div>
-                          {isUnavailable ? (
-                            /* Show CLOSED or BLACKOUT status */
-                            <div className="flex flex-col items-start gap-1">
-                              <div className={`text-base font-bold ${
-                                isClosed ? 'text-gray-500' : 'text-red-600'
-                              }`}>
-                                {isClosed ? 'CLOSED' : 'BLACKOUT'}
-                              </div>
-                              <div className="text-[9px] text-gray-400">
-                                {isClosed ? 'Outside hours' : 'Holiday/Closure'}
-                              </div>
-                            </div>
-                          ) : slot.winningPrice !== undefined && slot.winningPrice !== null ? (
-                            /* Show surge price only if: surge enabled AND SURGE layer is winning */
-                            surgeEnabled && slot.surgePrice !== undefined && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || (slot.winningLayer?.id && enabledLayers.has(slot.winningLayer.id))) ? (
-                              <div className="space-y-1">
-                                {slot.basePrice !== undefined && (() => {
-                                  const { dollars, cents } = formatPriceWithSuperscript(slot.basePrice);
-                                  return (
-                                    <div className="relative text-sm font-bold text-gray-400 line-through" style={{ lineHeight: 1 }}>
-                                      ${dollars}<span className="text-xs relative -top-0.5 ml-0.5">.{cents}</span>
-                                    </div>
-                                  );
-                                })()}
-                                {(() => {
-                                  const { dollars, cents } = formatPriceWithSuperscript(slot.surgePrice);
-                                  return (
-                                    <div className={`relative text-2xl font-black ${
-                                      slot.basePrice && slot.surgePrice > slot.basePrice
-                                        ? 'bg-gradient-to-r from-orange-600 to-red-600'
-                                        : slot.basePrice && slot.surgePrice < slot.basePrice
-                                        ? 'bg-gradient-to-r from-green-600 to-emerald-600'
-                                        : 'bg-gradient-to-r from-gray-600 to-gray-700'
-                                    } bg-clip-text text-transparent`} style={{ lineHeight: 1 }}>
-                                      ${dollars}<span className="text-sm relative -top-1 ml-0.5">.{cents}</span>
-                                    </div>
-                                  );
-                                })()}
-                                {slot.surgeMultiplier && (
-                                  <div className={`text-[9px] font-bold ${
-                                    slot.surgeMultiplier > 1
-                                      ? 'text-red-600'
-                                      : slot.surgeMultiplier < 1
-                                      ? 'text-green-600'
-                                      : 'text-gray-600'
-                                  }`}>
-                                    {slot.surgeMultiplier.toFixed(2)}x
-                                  </div>
-                                )}
-                              </div>
-                            ) : (() => {
-                              const { dollars, cents } = formatPriceWithSuperscript(slot.winningPrice);
-                              return (
-                                <div className="relative text-xl font-extrabold font-black bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent" style={{ lineHeight: 1 }}>
-                                  ${dollars}<span className="text-xs font-thin relative -top-1 ml-0.5">.{cents}</span>
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            <div className="text-base font-extrabold text-gray-300">
-                              -
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Capacity Section */}
-                        {slot.capacity && (
-                          <div className="bg-white px-2 py-2.5 border-b border-gray-100">
-                            <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Capacity</div>
-                            <div className="flex items-baseline justify-left gap-0">
-                              <span className="text-base font-extrabold font-black text-slate-700">{slot.capacity.allocated}</span>
-                              <span className="text-xs font-thin text-gray-400">/</span>
-                              <span className="text-xs font-thin text-slate-600">{slot.capacity.max}</span>
-                            </div>
-                            {/* Capacity bar */}
-                            <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full transition-all"
-                                style={{
-                                  width: `${Math.min((slot.capacity.allocated / slot.capacity.max) * 100, 100)}%`
-                                }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Revenue Section */}
-                        {slot.capacity && (slot.winningPrice !== undefined && slot.winningPrice !== null) && (
-                          <div className="bg-gradient-to-br from-red-50 to-orange-50 px-2 py-2.5 border-b-2 border-silver-900 border-dashed">
-                            <div className="text-[8px] uppercase font-semibold text-gray-500 mb-1 tracking-wider">Revenue Max</div>
-                            <div className="flex items-baseline justify-left gap-0.5">
-                              <span className="text-lg font-black bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
-                                ${Math.ceil(slot.capacity.max * (surgeEnabled && slot.surgePrice && slot.winningLayer?.type === 'SURGE' && (!isSimulationEnabled || (slot.winningLayer?.id && enabledLayers.has(slot.winningLayer.id))) ? slot.surgePrice : slot.winningPrice)).toLocaleString()}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Event Section */}
-                        {slot.eventNames && slot.eventNames.length > 0 && (
-                          <div className="bg-gradient-to-br from-zinc-50 via-silver-50 to-silver-100 px-2 py-2.5">
-                            <div className="text-[8px] uppercase font-thin text-black mb-1 tracking-wider">
-                              {slot.eventNames.length > 1 ? 'Events' : 'Event'}
-                            </div>
-                            <div className="text-[10px] font-light text-gray-700 text-left space-y-1">
-                              {slot.eventNames.map((eventName, eventIdx) => (
-                                <div key={eventIdx} className="line-clamp-1 bg-white/40 rounded px-1 py-0.5">
-                                  {eventName}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              {/* Winning Price Grid */}
+              <WinningPriceGrid
+                timeSlots={timeSlots}
+                selectedSlot={selectedSlot}
+                hoveredSlot={hoveredSlot}
+                onTileClick={handleTileClick}
+                onTileHover={handleTileHover}
+                onTileLeave={handleTileLeave}
+                surgeEnabled={surgeEnabled}
+                isSimulationEnabled={isSimulationEnabled}
+                enabledLayers={enabledLayers}
+                pricingDataLoading={pricingDataLoading}
+                isRefreshing={isRefreshing}
+              />
 
               {/* Toggle button for waterfall */}
               <div className="mt-4 pt-4 border-t border-gray-200">
@@ -3422,223 +2340,21 @@ export default function TimelineSimulatorPage() {
             {/* Waterfall Visualization - Collapsible */}
 
             {showWaterfall && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 relative">
-                <h3 className="text-xl font-bold text-gray-900 text-center ml-6">
-                  All Tiles Evaluated By Hour
-                </h3>  
-                {/* Loading Overlay */}
-                {(pricingDataLoading || isRefreshing) && (
-                  <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-xl z-10 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-3">
-                      <Loader2 className="w-8 h-8 text-purple-600 animate-spin" />
-                      <span className="text-sm font-medium text-gray-600">Loading waterfall data...</span>
-                    </div>
-                  </div>
-                )}
-                {/* Waterfall layers */}
-                <div className="space-y-2 mb-6">
-                {allLayers.length === 0 && (
-                  <div className="text-center py-12 text-gray-500">
-                    <p className="text-lg font-medium">No pricing rules found</p>
-                    <p className="text-sm mt-2">
-                      No ratesheets or default rates are configured for this sublocation.
-                    </p>
-                  </div>
-                )}
-                {allLayers.map((layer, layerIdx) => {
-                  // Check if this layer has any active tiles in the current time window
-                  const hasActiveTiles = timeSlots.some(slot => {
-                    const layerData = slot.layers.find(l => l.layer.id === layer.id);
-                    return layerData?.isActive;
-                  });
-
-                  // Skip rendering this layer if it has no active tiles
-                  // ONLY in Live Mode - in Simulation Mode, show all layers (for planning)
-                  if (!hasActiveTiles && !isSimulationEnabled) {
-                    return null;
-                  }
-
-                  const isLayerEnabled = enabledLayers.has(layer.id);
-
-                  // Check if this layer can be disabled
-                  // Count enabled DEFAULT layers AFTER removing this layer
-                  // DEFAULT layers are always active, so we need at least one
-                  const enabledDefaultLayersAfterDisable = Array.from(enabledLayers)
-                    .filter(id => id !== layer.id) // Exclude current layer
-                    .filter(id => {
-                      const l = allLayers.find(layer => layer.id === id);
-                      return l && (
-                        l.type === 'SUBLOCATION_DEFAULT' ||
-                        l.type === 'LOCATION_DEFAULT' ||
-                        l.type === 'CUSTOMER_DEFAULT'
-                      );
-                    });
-
-                  // Cannot disable if it would leave zero DEFAULT layers
-                  // BUT SURGE and RATESHEET layers can always be toggled off
-                  const wouldLeaveNoDefaultLayers = enabledDefaultLayersAfterDisable.length === 0;
-                  const canToggleOff = layer.type === 'SURGE' || layer.type === 'RATESHEET' || !wouldLeaveNoDefaultLayers;
-
-                  // Debug logging for layer toggle state
-                  if (layerIdx === 0 || layer.type === 'SURGE') {
-                    console.log(`🔒 [Layer Toggle Debug] ${layer.name}:`, {
-                      layerId: layer.id,
-                      layerType: layer.type,
-                      isEnabled: isLayerEnabled,
-                      enabledDefaultLayersAfterDisable: enabledDefaultLayersAfterDisable.length,
-                      wouldLeaveNoDefaultLayers,
-                      canToggleOff,
-                      shouldShowLock: isLayerEnabled && !canToggleOff,
-                      allEnabledLayers: Array.from(enabledLayers),
-                      allLayers: allLayers.map(l => ({ id: l.id, name: l.name, type: l.type }))
-                    });
-                  }
-
-                  return (
-                  <div key={layer.id}>
-                    {/* Layer label with toggle */}
-                    <div className="flex items-center gap-2 mb-1">
-                      {/* Toggle switch */}
-                      <button
-                        onClick={() => isSimulationEnabled && canToggleOff && toggleLayer(layer.id)}
-                        disabled={!isSimulationEnabled || (isLayerEnabled && !canToggleOff)}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                          !isSimulationEnabled || (isLayerEnabled && !canToggleOff) ? 'bg-gray-400 opacity-60 cursor-not-allowed' :
-                          isLayerEnabled ? 'bg-blue-600' : 'bg-gray-300'
-                        }`}
-                        title={
-                          !isSimulationEnabled ? 'Enable Simulation mode to toggle layers' :
-                          (isLayerEnabled && !canToggleOff) ? 'Cannot disable - at least one DEFAULT layer must remain enabled (always-active pricing)' :
-                          isLayerEnabled ? 'Click to disable this layer' : 'Click to enable this layer'
-                        }
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            isLayerEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                          }`}
-                        />
-                      </button>
-                      <div className="text-xs font-medium text-gray-700 flex items-center gap-1" title={layer.name}>
-                        <span className="font-semibold">{layer.name}</span>
-                        {(isLayerEnabled && !canToggleOff) && (
-                          <span title="Cannot disable - at least one DEFAULT layer required (always-active pricing)">
-                            <Lock className="w-3 h-3 text-gray-500" />
-                          </span>
-                        )}
-                        <span className="text-[10px] text-gray-500 ml-2">Priority: {layer.priority}</span>
-                      </div>
-                    </div>
-
-                    {/* Tiles for each time slot in a grid */}
-                    <div className="grid grid-cols-12 gap-1">
-                      {timeSlots.length === 0 ? (
-                        <div className="col-span-12 rounded-lg border-2 border-gray-300 bg-gray-50 h-[60px] flex items-center justify-center">
-                          <div className="text-gray-500 font-medium text-xs text-center px-2">
-                            No Price Info
-                          </div>
-                        </div>
-                      ) : (
-                        timeSlots.map((slot, slotIdx) => {
-                          const layerData = slot.layers.find(l => l.layer.id === layer.id);
-                          const isWinner = slot.winningLayer?.id === layer.id;
-                          const isHovered = hoveredSlot?.slotIdx === slotIdx && hoveredSlot?.layerId === layer.id;
-                          const isSelected = selectedSlot?.slotIdx === slotIdx && selectedSlot?.layerId === layer.id;
-
-                          // Determine if this tile should be grayed out (active but layer is disabled)
-                          const isDisabled = !isLayerEnabled && layerData?.isActive;
-
-                          return (
-                            <div
-                              key={slotIdx}
-                              onClick={() => layerData?.isActive && isLayerEnabled && handleTileClick(slotIdx, layer.id, slot)}
-                              onMouseEnter={() => handleTileHover(slotIdx, layer.id)}
-                              onMouseLeave={handleTileLeave}
-                              title={
-                                isDisabled
-                                  ? `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority}) - DISABLED`
-                                  : layerData?.isActive
-                                    ? layer.type === 'SURGE'
-                                      ? `${layer.name} - $${layerData.price}/hr (${((ratesheets.find(rs => rs._id === layer.id) as any)?.surgeMultiplierSnapshot || 0).toFixed(2)}x) (Priority: ${layer.priority})`
-                                      : `${layer.name} - $${layerData.price}/hr (Priority: ${layer.priority})`
-                                    : 'Not active for this time'
-                              }
-                              className={`rounded-lg transition-all cursor-pointer ${
-                                isDisabled
-                                  ? 'bg-gray-400 border-gray-500 opacity-40'
-                                  : layerData?.isActive
-                                    ? isWinner
-                                      ? `${layer.color} border-black shadow-xl`
-                                      : `${layer.color} border-gray-400 opacity-70 shadow-sm`
-                                    : 'bg-gray-100 border-gray-300 opacity-30'
-                              }`}
-                              style={{
-                                height: '60px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderWidth: isSelected ? '5px' : isWinner ? '4px' : '2px',
-                                borderStyle: isWinner ? 'solid' : 'dotted',
-                                borderColor: isSelected ? '#2563eb' : undefined,
-                                transform: isHovered || isSelected ? 'scale(1.05)' : 'scale(1)',
-                                zIndex: isSelected ? 15 : isHovered ? 10 : 1
-                              }}
-                            >
-                              {layerData?.isActive && layerData.price !== null && (
-                                <div className="flex flex-col items-center justify-center gap-0.5 px-1">
-                                  {/* Price (all layers show dollar amount) */}
-                                  <div className={`font-bold text-sm drop-shadow-md ${
-                                    isDisabled ? 'text-gray-600 line-through' : 'text-white'
-                                  }`}>
-                                    ${typeof layerData.price === 'number' ? layerData.price.toFixed(2) : layerData.price}
-                                  </div>
-                                  {/* Surge Multiplier */}
-                                  {layer.type === 'SURGE' && (() => {
-                                    const multiplier = (ratesheets.find(rs => rs._id === layer.id) as any)?.surgeMultiplierSnapshot;
-                                    if (!multiplier) return null;
-                                    return (
-                                      <div className={`text-[9px] font-bold drop-shadow-md ${
-                                        isDisabled ? 'text-gray-500' : multiplier > 1 ? 'text-red-200' : multiplier < 1 ? 'text-green-200' : 'text-white opacity-90'
-                                      }`}>
-                                        {multiplier.toFixed(2)}x
-                                      </div>
-                                    );
-                                  })()}
-                                  {/* Capacity */}
-                                  {slot.capacity && (
-                                    <div className="flex flex-col items-center gap-0 w-full">
-                                      <div className={`text-[8px] font-semibold flex items-baseline gap-0.5 ${
-                                        isDisabled ? 'text-gray-500' : 'text-white'
-                                      }`}>
-                                        <span className="opacity-90">{slot.capacity.allocated}</span>
-                                        <span className="opacity-60 text-[7px]">/</span>
-                                        <span className="opacity-70 text-[7px]">{slot.capacity.max}</span>
-                                      </div>
-                                      {/* Mini capacity bar */}
-                                      {!isDisabled && (
-                                        <div className="w-full h-0.5 bg-white bg-opacity-30 rounded-full overflow-hidden">
-                                          <div
-                                            className="h-full bg-white"
-                                            style={{
-                                              width: `${Math.min((slot.capacity.allocated / slot.capacity.max) * 100, 100)}%`
-                                            }}
-                                          />
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                  );
-                })}
-                </div>
-              </div>
+              <PricingWaterfallGrid
+                timeSlots={timeSlots}
+                allLayers={allLayers}
+                enabledLayers={enabledLayers}
+                isSimulationEnabled={isSimulationEnabled}
+                ratesheets={ratesheets}
+                onToggleLayer={toggleLayer}
+                onTileClick={handleTileClick}
+                onTileHover={handleTileHover}
+                onTileLeave={handleTileLeave}
+                selectedSlot={selectedSlot}
+                hoveredSlot={hoveredSlot}
+                pricingDataLoading={pricingDataLoading}
+                isRefreshing={isRefreshing}
+              />
             )}
 
             {/* Decision Panel - Shows when tile is selected (persistent) */}
