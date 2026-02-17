@@ -1,11 +1,15 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Treemap,
   ResponsiveContainer,
   Tooltip,
+  PieChart,
+  Pie,
+  Cell,
 } from 'recharts';
+import { BarChart3, Circle, LayoutGrid } from 'lucide-react';
 
 // Color scheme matching capacity theme
 const COLORS = {
@@ -16,6 +20,12 @@ const COLORS = {
   // Unallocated colors
   unavailable: '#9CA3AF',  // gray-400
   readyToUse: '#F59E0B',   // amber-500
+};
+
+// Group colors for the outer ring / headers
+const GROUP_COLORS = {
+  allocated: '#0D9488',    // teal-600
+  unallocated: '#D97706',  // amber-600
 };
 
 const LABELS = {
@@ -42,10 +52,14 @@ export interface AllocationData {
   readyToUse: number;
 }
 
+type ViewMode = 'grouped-bar' | 'donut' | 'treemap';
+
 interface CapacityAllocationChartProps {
   data: AllocationData;
   totalCapacity: number;
+  /** @deprecated Use the built-in view mode toggle instead */
   showTreemap?: boolean;
+  /** @deprecated Use the built-in view mode toggle instead */
   showStackedBar?: boolean;
   height?: number;
 }
@@ -139,13 +153,29 @@ const CustomTooltip = ({ active, payload }: any) => {
   return null;
 };
 
+// Custom label for donut chart
+const renderDonutLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percentage }: any) => {
+  const RADIAN = Math.PI / 180;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+  if (percentage < 5) return null;
+
+  return (
+    <text x={x} y={y} fill="white" textAnchor="middle" dominantBaseline="central" fontSize={12} fontWeight="bold">
+      {percentage}%
+    </text>
+  );
+};
+
 export default function CapacityAllocationChart({
   data,
   totalCapacity,
-  showTreemap = true,
-  showStackedBar = true,
   height = 300,
 }: CapacityAllocationChartProps) {
+  const [viewMode, setViewMode] = useState<ViewMode>('grouped-bar');
+
   // Calculate percentages
   const percentages = useMemo(() => {
     const total = data.transient + data.events + data.reserved + data.unavailable + data.readyToUse;
@@ -161,222 +191,368 @@ export default function CapacityAllocationChart({
     };
   }, [data]);
 
-  // Prepare treemap data with hierarchical structure
-  const treemapData = useMemo(() => {
-    return [
-      {
-        name: 'Allocated',
-        children: [
-          {
-            name: LABELS.transient,
-            size: data.transient || 1,
-            value: data.transient,
-            color: COLORS.transient,
-            percentage: percentages.transient,
-            description: DESCRIPTIONS.transient,
-          },
-          {
-            name: LABELS.events,
-            size: data.events || 1,
-            value: data.events,
-            color: COLORS.events,
-            percentage: percentages.events,
-            description: DESCRIPTIONS.events,
-          },
-          {
-            name: LABELS.reserved,
-            size: data.reserved || 1,
-            value: data.reserved,
-            color: COLORS.reserved,
-            percentage: percentages.reserved,
-            description: DESCRIPTIONS.reserved,
-          },
-        ],
-      },
-      {
-        name: 'Unallocated',
-        children: [
-          {
-            name: LABELS.unavailable,
-            size: data.unavailable || 1,
-            value: data.unavailable,
-            color: COLORS.unavailable,
-            percentage: percentages.unavailable,
-            description: DESCRIPTIONS.unavailable,
-          },
-          {
-            name: LABELS.readyToUse,
-            size: data.readyToUse || 1,
-            value: data.readyToUse,
-            color: COLORS.readyToUse,
-            percentage: percentages.readyToUse,
-            description: DESCRIPTIONS.readyToUse,
-          },
-        ],
-      },
-    ];
-  }, [data, percentages]);
+  // Group totals
+  const allocatedTotal = data.transient + data.events + data.reserved;
+  const unallocatedTotal = data.unavailable + data.readyToUse;
+  const grandTotal = allocatedTotal + unallocatedTotal;
+  const allocatedPct = grandTotal > 0 ? Math.round((allocatedTotal / grandTotal) * 100) : 0;
+  const unallocatedPct = grandTotal > 0 ? Math.round((unallocatedTotal / grandTotal) * 100) : 0;
 
-  // Flatten data for treemap
-  const flatTreemapData = useMemo(() => {
-    return treemapData.flatMap(group =>
-      group.children.map(child => ({
-        ...child,
-        parentName: group.name,
-      }))
-    );
-  }, [treemapData]);
+  // Within-group percentages (for grouped bar segments)
+  const allocatedSegments = useMemo(() => {
+    if (allocatedTotal === 0) return { transient: 33, events: 33, reserved: 34 };
+    return {
+      transient: Math.round((data.transient / allocatedTotal) * 100),
+      events: Math.round((data.events / allocatedTotal) * 100),
+      reserved: Math.round((data.reserved / allocatedTotal) * 100),
+    };
+  }, [data, allocatedTotal]);
+
+  const unallocatedSegments = useMemo(() => {
+    if (unallocatedTotal === 0) return { unavailable: 50, readyToUse: 50 };
+    return {
+      unavailable: Math.round((data.unavailable / unallocatedTotal) * 100),
+      readyToUse: Math.round((data.readyToUse / unallocatedTotal) * 100),
+    };
+  }, [data, unallocatedTotal]);
+
+  // Donut chart data
+  const allocatedDonutData = useMemo(() => [
+    { name: LABELS.transient, value: data.transient, color: COLORS.transient, percentage: percentages.transient, description: DESCRIPTIONS.transient },
+    { name: LABELS.events, value: data.events, color: COLORS.events, percentage: percentages.events, description: DESCRIPTIONS.events },
+    { name: LABELS.reserved, value: data.reserved, color: COLORS.reserved, percentage: percentages.reserved, description: DESCRIPTIONS.reserved },
+  ].filter(d => d.value > 0), [data, percentages]);
+
+  const unallocatedDonutData = useMemo(() => [
+    { name: LABELS.unavailable, value: data.unavailable, color: COLORS.unavailable, percentage: percentages.unavailable, description: DESCRIPTIONS.unavailable },
+    { name: LABELS.readyToUse, value: data.readyToUse, color: COLORS.readyToUse, percentage: percentages.readyToUse, description: DESCRIPTIONS.readyToUse },
+  ].filter(d => d.value > 0), [data, percentages]);
+
+  // Prepare treemap data - separate for allocated and unallocated
+  const allocatedTreemapData = useMemo(() => [
+    { name: LABELS.transient, size: data.transient || 1, value: data.transient, color: COLORS.transient, percentage: percentages.transient, description: DESCRIPTIONS.transient },
+    { name: LABELS.events, size: data.events || 1, value: data.events, color: COLORS.events, percentage: percentages.events, description: DESCRIPTIONS.events },
+    { name: LABELS.reserved, size: data.reserved || 1, value: data.reserved, color: COLORS.reserved, percentage: percentages.reserved, description: DESCRIPTIONS.reserved },
+  ], [data, percentages]);
+
+  const unallocatedTreemapData = useMemo(() => [
+    { name: LABELS.unavailable, size: data.unavailable || 1, value: data.unavailable, color: COLORS.unavailable, percentage: percentages.unavailable, description: DESCRIPTIONS.unavailable },
+    { name: LABELS.readyToUse, size: data.readyToUse || 1, value: data.readyToUse, color: COLORS.readyToUse, percentage: percentages.readyToUse, description: DESCRIPTIONS.readyToUse },
+  ], [data, percentages]);
+
+  const VIEW_OPTIONS: { mode: ViewMode; icon: typeof BarChart3; label: string }[] = [
+    { mode: 'grouped-bar', icon: BarChart3, label: 'Grouped Bar' },
+    { mode: 'donut', icon: Circle, label: 'Donut' },
+    { mode: 'treemap', icon: LayoutGrid, label: 'Treemap' },
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Stacked Bar Overview */}
-      {showStackedBar && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
-            <span>Capacity Distribution</span>
-            <span className="font-medium">{totalCapacity} total</span>
-          </div>
-          <div className="relative h-10 bg-gray-100 rounded-lg overflow-hidden flex">
-            {/* Allocated: Transient */}
-            <div
-              className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
-              style={{
-                width: `${percentages.transient}%`,
-                backgroundColor: COLORS.transient,
-              }}
-              title={`${LABELS.transient}: ${data.transient} (${percentages.transient}%)`}
+      {/* View Mode Toggle */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between text-sm text-gray-600">
+          <span className="font-medium">{totalCapacity} total capacity</span>
+        </div>
+        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+          {VIEW_OPTIONS.map(({ mode, icon: Icon, label }) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                viewMode === mode
+                  ? 'bg-white text-teal-700 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
             >
-              {percentages.transient > 10 && `${percentages.transient}%`}
-            </div>
-            {/* Allocated: Events */}
-            <div
-              className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
-              style={{
-                width: `${percentages.events}%`,
-                backgroundColor: COLORS.events,
-              }}
-              title={`${LABELS.events}: ${data.events} (${percentages.events}%)`}
-            >
-              {percentages.events > 10 && `${percentages.events}%`}
-            </div>
-            {/* Allocated: Reserved */}
-            <div
-              className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
-              style={{
-                width: `${percentages.reserved}%`,
-                backgroundColor: COLORS.reserved,
-              }}
-              title={`${LABELS.reserved}: ${data.reserved} (${percentages.reserved}%)`}
-            >
-              {percentages.reserved > 10 && `${percentages.reserved}%`}
-            </div>
-            {/* Unallocated: Unavailable */}
-            <div
-              className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
-              style={{
-                width: `${percentages.unavailable}%`,
-                backgroundColor: COLORS.unavailable,
-              }}
-              title={`${LABELS.unavailable}: ${data.unavailable} (${percentages.unavailable}%)`}
-            >
-              {percentages.unavailable > 10 && `${percentages.unavailable}%`}
-            </div>
-            {/* Unallocated: Ready To Use */}
-            <div
-              className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
-              style={{
-                width: `${percentages.readyToUse}%`,
-                backgroundColor: COLORS.readyToUse,
-              }}
-              title={`${LABELS.readyToUse}: ${data.readyToUse} (${percentages.readyToUse}%)`}
-            >
-              {percentages.readyToUse > 10 && `${percentages.readyToUse}%`}
-            </div>
-          </div>
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-          {/* Legend for stacked bar */}
-          <div className="flex flex-wrap gap-4 justify-center mt-2">
-            {Object.entries(LABELS).map(([key, label]) => (
-              <div key={key} className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 rounded"
-                  style={{ backgroundColor: COLORS[key as keyof typeof COLORS] }}
-                />
-                <span className="text-sm text-gray-700">{label}</span>
+      {/* ===== GROUPED BAR VIEW ===== */}
+      {viewMode === 'grouped-bar' && (
+        <div className="space-y-4">
+          {/* Allocated Group */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.allocated }} />
+                <span className="text-sm font-semibold text-gray-700">Allocated</span>
               </div>
-            ))}
+              <span className="text-sm font-bold text-teal-600">{allocatedTotal} people ({allocatedPct}%)</span>
+            </div>
+            <div className="relative h-10 bg-gray-100 rounded-lg overflow-hidden flex">
+              <div
+                className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
+                style={{ width: `${allocatedSegments.transient}%`, backgroundColor: COLORS.transient }}
+                title={`${LABELS.transient}: ${data.transient} (${percentages.transient}%)`}
+              >
+                {allocatedSegments.transient > 12 && (
+                  <span>{LABELS.transient} {data.transient}</span>
+                )}
+              </div>
+              <div
+                className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
+                style={{ width: `${allocatedSegments.events}%`, backgroundColor: COLORS.events }}
+                title={`${LABELS.events}: ${data.events} (${percentages.events}%)`}
+              >
+                {allocatedSegments.events > 12 && (
+                  <span>{LABELS.events} {data.events}</span>
+                )}
+              </div>
+              <div
+                className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
+                style={{ width: `${allocatedSegments.reserved}%`, backgroundColor: COLORS.reserved }}
+                title={`${LABELS.reserved}: ${data.reserved} (${percentages.reserved}%)`}
+              >
+                {allocatedSegments.reserved > 12 && (
+                  <span>{LABELS.reserved} {data.reserved}</span>
+                )}
+              </div>
+            </div>
+            {/* Mini legend for allocated */}
+            <div className="flex flex-wrap gap-4 pl-4">
+              {(['transient', 'events', 'reserved'] as const).map((key) => (
+                <div key={key} className="flex items-center gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: COLORS[key] }} />
+                  <span className="text-xs text-gray-600">{LABELS[key]}: <span className="font-semibold">{data[key]}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Unallocated Group */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.unallocated }} />
+                <span className="text-sm font-semibold text-gray-700">Unallocated</span>
+              </div>
+              <span className="text-sm font-bold text-amber-600">{unallocatedTotal} people ({unallocatedPct}%)</span>
+            </div>
+            <div className="relative h-10 bg-gray-100 rounded-lg overflow-hidden flex">
+              <div
+                className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
+                style={{ width: `${unallocatedSegments.unavailable}%`, backgroundColor: COLORS.unavailable }}
+                title={`${LABELS.unavailable}: ${data.unavailable} (${percentages.unavailable}%)`}
+              >
+                {unallocatedSegments.unavailable > 15 && (
+                  <span>{LABELS.unavailable} {data.unavailable}</span>
+                )}
+              </div>
+              <div
+                className="h-full flex items-center justify-center text-white text-xs font-medium transition-all duration-500"
+                style={{ width: `${unallocatedSegments.readyToUse}%`, backgroundColor: COLORS.readyToUse }}
+                title={`${LABELS.readyToUse}: ${data.readyToUse} (${percentages.readyToUse}%)`}
+              >
+                {unallocatedSegments.readyToUse > 15 && (
+                  <span>{LABELS.readyToUse} {data.readyToUse}</span>
+                )}
+              </div>
+            </div>
+            {/* Mini legend for unallocated */}
+            <div className="flex flex-wrap gap-4 pl-4">
+              {(['unavailable', 'readyToUse'] as const).map((key) => (
+                <div key={key} className="flex items-center gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: COLORS[key] }} />
+                  <span className="text-xs text-gray-600">{LABELS[key]}: <span className="font-semibold">{data[key]}</span></span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Treemap Visualization */}
-      {showTreemap && (
-        <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg p-4">
-          <ResponsiveContainer width="100%" height={height}>
-            <Treemap
-              data={flatTreemapData}
-              dataKey="size"
-              aspectRatio={4 / 3}
-              stroke="#fff"
-              fill="#8884d8"
-              content={<CustomTreemapContent />}
-            >
-              <Tooltip content={<CustomTooltip />} />
-            </Treemap>
-          </ResponsiveContainer>
+      {/* ===== DONUT VIEW ===== */}
+      {viewMode === 'donut' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Allocated Donut */}
+          <div className="bg-gradient-to-br from-teal-50 to-emerald-50 rounded-xl p-4 border border-teal-100">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.allocated }} />
+              <h4 className="text-sm font-semibold text-gray-700">Allocated Capacity</h4>
+              <span className="ml-auto text-sm font-bold text-teal-600">{allocatedTotal} ({allocatedPct}%)</span>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={allocatedDonutData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={90}
+                  paddingAngle={3}
+                  dataKey="value"
+                  label={renderDonutLabel}
+                  labelLine={false}
+                >
+                  {allocatedDonutData.map((entry, index) => (
+                    <Cell key={`alloc-${index}`} fill={entry.color} stroke="#fff" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="flex flex-wrap gap-3 justify-center">
+              {allocatedDonutData.map((entry) => (
+                <div key={entry.name} className="flex items-center gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: entry.color }} />
+                  <span className="text-xs text-gray-600">{entry.name}: <span className="font-semibold">{entry.value}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Unallocated Donut */}
+          <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-100">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.unallocated }} />
+              <h4 className="text-sm font-semibold text-gray-700">Unallocated Capacity</h4>
+              <span className="ml-auto text-sm font-bold text-amber-600">{unallocatedTotal} ({unallocatedPct}%)</span>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={unallocatedDonutData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={90}
+                  paddingAngle={3}
+                  dataKey="value"
+                  label={renderDonutLabel}
+                  labelLine={false}
+                >
+                  {unallocatedDonutData.map((entry, index) => (
+                    <Cell key={`unalloc-${index}`} fill={entry.color} stroke="#fff" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="flex flex-wrap gap-3 justify-center">
+              {unallocatedDonutData.map((entry) => (
+                <div key={entry.name} className="flex items-center gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded" style={{ backgroundColor: entry.color }} />
+                  <span className="text-xs text-gray-600">{entry.name}: <span className="font-semibold">{entry.value}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Detailed breakdown cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {/* Allocated: Transient */}
-        <div className="bg-white rounded-lg border-2 border-teal-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-3 h-3 rounded-full bg-teal-500" />
-            <span className="text-sm font-semibold text-gray-700">{LABELS.transient}</span>
+      {/* ===== TREEMAP VIEW ===== */}
+      {viewMode === 'treemap' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Allocated Treemap */}
+          <div className="bg-gradient-to-br from-teal-50 to-emerald-50 rounded-xl p-4 border border-teal-100">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.allocated }} />
+              <h4 className="text-sm font-semibold text-gray-700">Allocated</h4>
+              <span className="ml-auto text-sm font-bold text-teal-600">{allocatedTotal} ({allocatedPct}%)</span>
+            </div>
+            <ResponsiveContainer width="100%" height={height - 40}>
+              <Treemap
+                data={allocatedTreemapData}
+                dataKey="size"
+                aspectRatio={4 / 3}
+                stroke="#fff"
+                fill="#8884d8"
+                content={<CustomTreemapContent />}
+              >
+                <Tooltip content={<CustomTooltip />} />
+              </Treemap>
+            </ResponsiveContainer>
           </div>
-          <div className="text-2xl font-bold text-teal-600">{data.transient}</div>
-          <div className="text-sm text-gray-500">{percentages.transient}% of capacity</div>
+
+          {/* Unallocated Treemap */}
+          <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-100">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.unallocated }} />
+              <h4 className="text-sm font-semibold text-gray-700">Unallocated</h4>
+              <span className="ml-auto text-sm font-bold text-amber-600">{unallocatedTotal} ({unallocatedPct}%)</span>
+            </div>
+            <ResponsiveContainer width="100%" height={height - 40}>
+              <Treemap
+                data={unallocatedTreemapData}
+                dataKey="size"
+                aspectRatio={4 / 3}
+                stroke="#fff"
+                fill="#8884d8"
+                content={<CustomTreemapContent />}
+              >
+                <Tooltip content={<CustomTooltip />} />
+              </Treemap>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Grouped Breakdown Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Allocated Cards */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.allocated }} />
+            <span className="text-sm font-semibold text-gray-700">Allocated</span>
+            <span className="ml-auto text-xs font-medium text-teal-600">{allocatedTotal} people</span>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white rounded-lg border-2 border-teal-200 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-teal-500" />
+                <span className="text-xs font-semibold text-gray-700">{LABELS.transient}</span>
+              </div>
+              <div className="text-xl font-bold text-teal-600">{data.transient}</div>
+              <div className="text-xs text-gray-500">{percentages.transient}%</div>
+            </div>
+            <div className="bg-white rounded-lg border-2 border-pink-200 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-pink-500" />
+                <span className="text-xs font-semibold text-gray-700">{LABELS.events}</span>
+              </div>
+              <div className="text-xl font-bold text-pink-600">{data.events}</div>
+              <div className="text-xs text-gray-500">{percentages.events}%</div>
+            </div>
+            <div className="bg-white rounded-lg border-2 border-violet-200 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-violet-500" />
+                <span className="text-xs font-semibold text-gray-700">{LABELS.reserved}</span>
+              </div>
+              <div className="text-xl font-bold text-violet-600">{data.reserved}</div>
+              <div className="text-xs text-gray-500">{percentages.reserved}%</div>
+            </div>
+          </div>
         </div>
 
-        {/* Allocated: Events */}
-        <div className="bg-white rounded-lg border-2 border-pink-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-3 h-3 rounded-full bg-pink-500" />
-            <span className="text-sm font-semibold text-gray-700">{LABELS.events}</span>
+        {/* Unallocated Cards */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 px-1">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: GROUP_COLORS.unallocated }} />
+            <span className="text-sm font-semibold text-gray-700">Unallocated</span>
+            <span className="ml-auto text-xs font-medium text-amber-600">{unallocatedTotal} people</span>
           </div>
-          <div className="text-2xl font-bold text-pink-600">{data.events}</div>
-          <div className="text-sm text-gray-500">{percentages.events}% of capacity</div>
-        </div>
-
-        {/* Allocated: Reserved */}
-        <div className="bg-white rounded-lg border-2 border-violet-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-3 h-3 rounded-full bg-violet-500" />
-            <span className="text-sm font-semibold text-gray-700">{LABELS.reserved}</span>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white rounded-lg border-2 border-gray-200 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-gray-400" />
+                <span className="text-xs font-semibold text-gray-700">{LABELS.unavailable}</span>
+              </div>
+              <div className="text-xl font-bold text-gray-600">{data.unavailable}</div>
+              <div className="text-xs text-gray-500">{percentages.unavailable}%</div>
+            </div>
+            <div className="bg-white rounded-lg border-2 border-amber-200 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                <span className="text-xs font-semibold text-gray-700">{LABELS.readyToUse}</span>
+              </div>
+              <div className="text-xl font-bold text-amber-600">{data.readyToUse}</div>
+              <div className="text-xs text-gray-500">{percentages.readyToUse}%</div>
+            </div>
           </div>
-          <div className="text-2xl font-bold text-violet-600">{data.reserved}</div>
-          <div className="text-sm text-gray-500">{percentages.reserved}% of capacity</div>
-        </div>
-
-        {/* Unallocated: Unavailable */}
-        <div className="bg-white rounded-lg border-2 border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-3 h-3 rounded-full bg-gray-400" />
-            <span className="text-sm font-semibold text-gray-700">{LABELS.unavailable}</span>
-          </div>
-          <div className="text-2xl font-bold text-gray-600">{data.unavailable}</div>
-          <div className="text-sm text-gray-500">{percentages.unavailable}% of capacity</div>
-        </div>
-
-        {/* Unallocated: Ready To Use */}
-        <div className="bg-white rounded-lg border-2 border-amber-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-3 h-3 rounded-full bg-amber-500" />
-            <span className="text-sm font-semibold text-gray-700">{LABELS.readyToUse}</span>
-          </div>
-          <div className="text-2xl font-bold text-amber-600">{data.readyToUse}</div>
-          <div className="text-sm text-gray-500">{percentages.readyToUse}% of capacity</div>
         </div>
       </div>
     </div>

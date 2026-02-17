@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Power, Trash2, Edit, Plus, ChevronDown, ChevronUp, Clock, DollarSign } from 'lucide-react';
+import { Power, Trash2, Edit, Plus, ChevronDown, ChevronUp, Clock, DollarSign, AlertTriangle } from 'lucide-react';
 import CreateRateSheetModal from '@/components/CreateRateSheetModal';
 import EditRateSheetModal from '@/components/EditRateSheetModal';
 import { PriorityConfig } from '@/models/types';
+import { analyzeTimeWindowAlignment } from '@/lib/time-window-validation';
 
 interface TimeWindow {
   startTime: string;
@@ -408,30 +409,51 @@ export default function AdminPricingPage() {
                       {/* Expanded Details */}
                       {isExpanded && (
                         <div className="mt-3 space-y-2">
-                          {(ratesheet.type === 'TIMING_BASED' || ratesheet.type === 'SURGE_MULTIPLIER') && ratesheet.timeWindows?.map((tw: any, idx) => (
-                            <div key={idx} className={`p-3 rounded-lg border ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'}`}>
-                              <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-3">
-                                  <Clock className={ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-600' : 'text-blue-600'} size={16} />
-                                  <span className={`font-semibold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
-                                    {tw.windowType === 'DURATION_BASED' || tw.startMinute !== undefined
-                                      ? `${tw.startMinute || 0}min - ${tw.endMinute || 0}min`
-                                      : `${tw.startTime || '-'} - ${tw.endTime || '-'}`
-                                    }
-                                  </span>
-                                </div>
-                                <div className="text-right">
-                                  <div className={`text-lg font-bold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
-                                    {ratesheet.type === 'SURGE_MULTIPLIER' ? (
-                                      <>{tw.pricePerHour}x<span className="text-sm font-normal"> surge</span></>
-                                    ) : (
-                                      <>${tw.pricePerHour}<span className="text-sm font-normal">/hr</span></>
-                                    )}
+                          {(ratesheet.type === 'TIMING_BASED' || ratesheet.type === 'SURGE_MULTIPLIER') && ratesheet.timeWindows?.map((tw: any, idx) => {
+                            const alignment = (tw.windowType !== 'DURATION_BASED' && tw.startMinute === undefined)
+                              ? analyzeTimeWindowAlignment(tw.startTime, tw.endTime)
+                              : null;
+                            const showWarning = alignment && !alignment.isAligned;
+                            return (
+                              <div key={idx} className={`p-3 rounded-lg border ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'bg-orange-50 border-orange-200' : 'bg-blue-50 border-blue-200'}`}>
+                                <div className="flex justify-between items-center">
+                                  <div className="flex items-center gap-3">
+                                    <Clock className={ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-600' : 'text-blue-600'} size={16} />
+                                    <span className={`font-semibold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
+                                      {tw.windowType === 'DURATION_BASED' || tw.startMinute !== undefined
+                                        ? `${tw.startMinute || 0}min - ${tw.endMinute || 0}min`
+                                        : `${tw.startTime || '-'} - ${tw.endTime || '-'}`
+                                      }
+                                    </span>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className={`text-lg font-bold ${ratesheet.type === 'SURGE_MULTIPLIER' ? 'text-orange-900' : 'text-blue-900'}`}>
+                                      {ratesheet.type === 'SURGE_MULTIPLIER' ? (
+                                        <>{tw.pricePerHour}x<span className="text-sm font-normal"> surge</span></>
+                                      ) : (
+                                        <>${tw.pricePerHour}<span className="text-sm font-normal">/hr</span></>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
+                                {showWarning && (
+                                  <div className={`mt-2 ${alignment.isDeadZone ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} border rounded-lg p-2`}>
+                                    <div className="flex items-start gap-2">
+                                      <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${alignment.isDeadZone ? 'text-red-500' : 'text-amber-500'}`} />
+                                      <div className="text-xs">
+                                        <span className={`font-semibold ${alignment.isDeadZone ? 'text-red-700' : 'text-amber-700'}`}>
+                                          {alignment.isDeadZone ? 'Dead Zone — No Hours Matched' : 'Non-aligned Time Window'}
+                                        </span>
+                                        <p className={`mt-0.5 ${alignment.isDeadZone ? 'text-red-600' : 'text-amber-600'}`}>
+                                          {alignment.warningMessage}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
 
                           {ratesheet.type === 'DURATION_BASED' && ratesheet.durationRules?.map((dr, idx) => (
                             <div key={idx} className="p-3 bg-purple-50 rounded-lg border border-purple-200">

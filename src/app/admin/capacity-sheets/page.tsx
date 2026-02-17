@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Power, Trash2, Edit, Plus, ChevronDown, ChevronUp, Users, TrendingUp } from 'lucide-react';
+import { Power, Trash2, Edit, Plus, ChevronDown, ChevronUp, Users, TrendingUp, AlertTriangle } from 'lucide-react';
 import CreateCapacitySheetModal from '@/components/CreateCapacitySheetModal';
 import EditCapacitySheetModal from '@/components/EditCapacitySheetModal';
 import { PriorityConfig } from '@/models/types';
+import { analyzeTimeWindowAlignment } from '@/lib/time-window-validation';
 
 interface TimeCapacityWindow {
   startTime: string;
@@ -470,24 +471,43 @@ export default function AdminCapacitySheetsPage() {
                       {/* Expanded Details */}
                       {isExpanded && (
                         <div className="mt-3 space-y-2">
-                          {sheet.type === 'TIME_BASED' && sheet.timeWindows?.map((tw, idx) => (
-                            <div key={idx} className="p-3 bg-teal-50 rounded-lg border border-teal-200">
-                              <div className="flex justify-between items-center">
-                                <div className="font-semibold text-teal-900">
-                                  {tw.startTime} - {tw.endTime}
-                                </div>
-                                <div className="text-right text-sm">
-                                  <div className="text-teal-900">
-                                    Min: <span className="font-bold">{tw.minCapacity}</span> |
-                                    Max: <span className="font-bold">{tw.maxCapacity}</span>
+                          {sheet.type === 'TIME_BASED' && sheet.timeWindows?.map((tw, idx) => {
+                            const alignment = analyzeTimeWindowAlignment(tw.startTime, tw.endTime);
+                            const showWarning = alignment && !alignment.isAligned;
+                            return (
+                              <div key={idx} className="p-3 bg-teal-50 rounded-lg border border-teal-200">
+                                <div className="flex justify-between items-center">
+                                  <div className="font-semibold text-teal-900">
+                                    {tw.startTime} - {tw.endTime}
                                   </div>
-                                  <div className="text-teal-700">
-                                    Default: {tw.defaultCapacity} | Allocated: {tw.allocatedCapacity || 0}
+                                  <div className="text-right text-sm">
+                                    <div className="text-teal-900">
+                                      Min: <span className="font-bold">{tw.minCapacity}</span> |
+                                      Max: <span className="font-bold">{tw.maxCapacity}</span>
+                                    </div>
+                                    <div className="text-teal-700">
+                                      Default: {tw.defaultCapacity} | Allocated: {tw.allocatedCapacity || 0}
+                                    </div>
                                   </div>
                                 </div>
+                                {showWarning && (
+                                  <div className={`mt-2 ${alignment.isDeadZone ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} border rounded-lg p-2`}>
+                                    <div className="flex items-start gap-2">
+                                      <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${alignment.isDeadZone ? 'text-red-500' : 'text-amber-500'}`} />
+                                      <div className="text-xs">
+                                        <span className={`font-semibold ${alignment.isDeadZone ? 'text-red-700' : 'text-amber-700'}`}>
+                                          {alignment.isDeadZone ? 'Dead Zone — No Hours Matched' : 'Non-aligned Time Window'}
+                                        </span>
+                                        <p className={`mt-0.5 ${alignment.isDeadZone ? 'text-red-600' : 'text-amber-600'}`}>
+                                          {alignment.warningMessage}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
 
                           {sheet.type === 'DATE_BASED' && sheet.dateRanges?.map((dr, idx) => (
                             <div key={idx} className="p-3 bg-green-50 rounded-lg border border-green-200">

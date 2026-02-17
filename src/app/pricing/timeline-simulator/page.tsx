@@ -3606,7 +3606,7 @@ export default function TimelineSimulatorPage() {
                                   })()}
                                   {/* Capacity */}
                                   {slot.capacity && (
-                                    <div className="flex flex-col items-center gap-0.5 w-full">
+                                    <div className="flex flex-col items-center gap-0 w-full">
                                       <div className={`text-[8px] font-semibold flex items-baseline gap-0.5 ${
                                         isDisabled ? 'text-gray-500' : 'text-white'
                                       }`}>

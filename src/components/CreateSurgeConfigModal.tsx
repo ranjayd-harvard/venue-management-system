@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Zap, TrendingUp, TrendingDown, AlertCircle, Plus, Trash2 } from 'lucide-react';
+import { X, Zap, TrendingUp, TrendingDown, AlertCircle, AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import { ObjectId } from 'bson';
+import { analyzeTimeWindowAlignment } from '@/lib/time-window-validation';
 
 interface CreateSurgeConfigModalProps {
   isOpen: boolean;
@@ -672,6 +673,25 @@ export default function CreateSurgeConfigModal({ isOpen, onClose, onSuccess }: C
                                 />
                               </div>
                             </div>
+                            {(() => {
+                              const alignment = analyzeTimeWindowAlignment(tw.startTime, tw.endTime);
+                              if (!alignment || alignment.isAligned) return null;
+                              return (
+                                <div className={`${alignment.isDeadZone ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} border rounded-lg p-3 mt-2`}>
+                                  <div className="flex items-start gap-2">
+                                    <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${alignment.isDeadZone ? 'text-red-500' : 'text-amber-500'}`} />
+                                    <div className="text-xs">
+                                      <span className={`font-semibold ${alignment.isDeadZone ? 'text-red-700' : 'text-amber-700'}`}>
+                                        {alignment.isDeadZone ? 'Dead Zone — No Hours Matched' : 'Non-aligned Time Window'}
+                                      </span>
+                                      <p className={`mt-1 ${alignment.isDeadZone ? 'text-red-600' : 'text-amber-600'}`}>
+                                        {alignment.warningMessage}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))}
                       </div>

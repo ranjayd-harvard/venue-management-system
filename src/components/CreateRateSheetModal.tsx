@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Clock, Calendar, Globe } from 'lucide-react';
+import { X, Plus, Trash2, Clock, Calendar, Globe, AlertTriangle } from 'lucide-react';
 import TimezoneSelector from './TimezoneSelector';
 import { PriorityConfig } from '@/models/types';
+import { analyzeTimeWindowAlignment } from '@/lib/time-window-validation';
 
 interface Customer {
   _id: string;
@@ -931,45 +932,66 @@ export default function CreateRateSheetModal({ isOpen, onClose, onSuccess }: Cre
 
                         {/* Inputs based on window type */}
                         {windowType === 'ABSOLUTE_TIME' ? (
-                          <div className="grid grid-cols-3 gap-3">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1">
-                                Start Time
-                              </label>
-                              <input
-                                type="time"
-                                value={tw.startTime || ''}
-                                onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
-                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                              />
-                            </div>
+                          <>
+                            <div className="grid grid-cols-3 gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">
+                                  Start Time
+                                </label>
+                                <input
+                                  type="time"
+                                  value={tw.startTime || ''}
+                                  onChange={(e) => updateTimeWindow(index, 'startTime', e.target.value)}
+                                  className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                />
+                              </div>
 
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1">
-                                End Time
-                              </label>
-                              <input
-                                type="time"
-                                value={tw.endTime || ''}
-                                onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
-                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                              />
-                            </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">
+                                  End Time
+                                </label>
+                                <input
+                                  type="time"
+                                  value={tw.endTime || ''}
+                                  onChange={(e) => updateTimeWindow(index, 'endTime', e.target.value)}
+                                  className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                />
+                              </div>
 
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1">
-                                Price/Hour ($)
-                              </label>
-                              <input
-                                type="number"
-                                value={tw.pricePerHour}
-                                onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
-                                className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
-                                min="0"
-                                step="0.01"
-                              />
+                              <div>
+                                <label className="block text-xs font-medium text-gray-700 mb-1">
+                                  Price/Hour ($)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={tw.pricePerHour}
+                                  onChange={(e) => updateTimeWindow(index, 'pricePerHour', parseFloat(e.target.value))}
+                                  className="w-full px-3 py-2 rounded border border-gray-300 text-gray-900 bg-white"
+                                  min="0"
+                                  step="0.01"
+                                />
+                              </div>
                             </div>
-                          </div>
+                            {(() => {
+                              const alignment = analyzeTimeWindowAlignment(tw.startTime, tw.endTime);
+                              if (!alignment || alignment.isAligned) return null;
+                              return (
+                                <div className={`${alignment.isDeadZone ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} border rounded-lg p-3 mt-2`}>
+                                  <div className="flex items-start gap-2">
+                                    <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${alignment.isDeadZone ? 'text-red-500' : 'text-amber-500'}`} />
+                                    <div className="text-xs">
+                                      <span className={`font-semibold ${alignment.isDeadZone ? 'text-red-700' : 'text-amber-700'}`}>
+                                        {alignment.isDeadZone ? 'Dead Zone — No Hours Matched' : 'Non-aligned Time Window'}
+                                      </span>
+                                      <p className={`mt-1 ${alignment.isDeadZone ? 'text-red-600' : 'text-amber-600'}`}>
+                                        {alignment.warningMessage}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </>
                         ) : (
                           <div className="grid grid-cols-3 gap-3">
                             <div>

@@ -46,36 +46,80 @@ export async function POST(request: Request) {
 
     console.log(`🔥 Materializing ${configs.length} surge configs`);
 
+    const now = new Date();
     const results = [];
+    const skipped = [];
 
     for (const config of configs) {
-      // Get latest demand data for this config
-      const demandData = await getLatestDemandData(db, config);
-
-      if (demandData) {
-        // Update surge config with latest demand data
-        const updatedParams = {
-          currentDemand: demandData.bookingsCount,
-          currentSupply: config.demandSupplyParams?.currentSupply || (demandData.availableCapacity / 10),
-          historicalAvgPressure: demandData.historicalAvgPressure
-        };
-
-        await db.collection('surge_configs').updateOne(
-          { _id: config._id },
-          {
-            $set: {
-              demandSupplyParams: updatedParams,
-              updatedAt: new Date()
-            }
-          }
-        );
-
-        console.log(`✅ Updated surge config: ${config.name}`, updatedParams);
+      // --- Temporal validation ---
+      // 1. Check if the config's effective period has expired
+      if (config.effectiveTo && new Date(config.effectiveTo) < now) {
+        console.log(`⏭️ Skipping ${config.name}: config effective period ended ${new Date(config.effectiveTo).toISOString()}`);
+        skipped.push({ configName: config.name, reason: `Config expired on ${new Date(config.effectiveTo).toLocaleDateString()}` });
+        continue;
       }
 
-      // For predictive surge: Only supersede ratesheets with FUTURE overlapping time windows
-      // Keep historical ratesheets (past time windows) as APPROVED for analysis
-      const now = new Date();
+      // 2. Check if today's day-of-week falls within the config's time window daysOfWeek constraints
+      if (config.timeWindows && config.timeWindows.length > 0) {
+        const todayDow = now.getDay(); // 0=Sun, 6=Sat
+        const nowTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const hasActiveWindow = config.timeWindows.some((tw: any) => {
+          // Check day-of-week filter
+          if (tw.daysOfWeek && tw.daysOfWeek.length > 0 && !tw.daysOfWeek.includes(todayDow)) {
+            return false;
+          }
+          // Check if current time is within the window (or close enough for the next hour)
+          const windowEnd = tw.endTime || '23:59';
+          return nowTimeStr < windowEnd; // Still has remaining time today
+        });
+
+        if (!hasActiveWindow) {
+          console.log(`⏭️ Skipping ${config.name}: no active time window for today (day=${todayDow}, time=${nowTimeStr})`);
+          skipped.push({ configName: config.name, reason: `No active time window for today (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][todayDow]}, ${nowTimeStr})` });
+          continue;
+        }
+      }
+
+      // Get latest demand data for this config
+      const rawDemandData = await getLatestDemandData(db, config);
+
+      // 3. Determine if demand data is usable (recent + would produce a future ratesheet)
+      let usableDemandData: any = null;
+
+      if (rawDemandData && rawDemandData.hour) {
+        const demandAge = now.getTime() - new Date(rawDemandData.timestamp || rawDemandData.createdAt).getTime();
+        const maxAgeMs = 2 * 60 * 60 * 1000; // 2 hours
+        const durationHours = config.surgeDurationHours || 1;
+
+        // Check if the demand hour would produce a future effective period
+        const demandHour = new Date(rawDemandData.hour);
+        const nextHour = (demandHour.getUTCHours() + 1) % 24;
+        const effectiveFrom = new Date(demandHour);
+        effectiveFrom.setUTCHours(nextHour, 0, 0, 0);
+        const effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
+
+        if (demandAge > maxAgeMs) {
+          console.log(`⚠️ Demand data for ${config.name} is stale (${Math.round(demandAge / 3600000)}h old), using manual mode`);
+        } else if (effectiveTo < now) {
+          console.log(`⚠️ Demand data for ${config.name} would produce a past ratesheet (${effectiveFrom.toISOString()} - ${effectiveTo.toISOString()}), using manual mode`);
+        } else {
+          // Demand data is valid — use it and update surge config
+          usableDemandData = rawDemandData;
+
+          const updatedParams = {
+            currentDemand: rawDemandData.bookingsCount,
+            currentSupply: config.demandSupplyParams?.currentSupply || (rawDemandData.availableCapacity / 10),
+            historicalAvgPressure: rawDemandData.historicalAvgPressure
+          };
+
+          await db.collection('surge_configs').updateOne(
+            { _id: config._id },
+            { $set: { demandSupplyParams: updatedParams, updatedAt: new Date() } }
+          );
+
+          console.log(`✅ Updated surge config: ${config.name}`, updatedParams);
+        }
+      }
 
       // Find existing ratesheets for this surge config
       const existingRatesheets = await db.collection('ratesheets').find({
@@ -117,8 +161,8 @@ export async function POST(request: Request) {
         console.log(`🗑️  Superseded ${deactivateResult.modifiedCount} future ratesheets`);
       }
 
-      // Materialize new ratesheet with demand data
-      const ratesheet = await materializeSurgeConfig(db, config._id, demandData);
+      // Materialize new ratesheet (uses usableDemandData if available, otherwise manual mode with current time)
+      const ratesheet = await materializeSurgeConfig(db, config._id, usableDemandData);
 
       results.push({
         configId: config._id.toString(),
@@ -131,10 +175,22 @@ export async function POST(request: Request) {
       });
     }
 
+    // If all configs were skipped, return an error with reasons
+    if (results.length === 0 && skipped.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'No surge configs are active for the current period — no ratesheets were materialized',
+          skipped
+        },
+        { status: 409 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      message: `Materialized ${results.length} surge ratesheets`,
-      ratesheets: results
+      message: `Materialized ${results.length} surge ratesheet(s)` + (skipped.length > 0 ? `, skipped ${skipped.length}` : ''),
+      ratesheets: results,
+      ...(skipped.length > 0 && { skipped })
     });
 
   } catch (error) {
@@ -232,20 +288,22 @@ function calculateSurgeMultiplier(config: any): number {
 
 /**
  * Generate time windows for surge ratesheet
- * For dynamic demand-driven surge, create a 1-hour window for the NEXT hour (predictive)
+ * For demand-driven surge: create a window for the NEXT hour scoped by surgeDurationHours
+ * For manual surge: use config's time windows with daysOfWeek preserved
  */
 function generateTimeWindows(config: any, multiplier: number, demandData?: any): any[] {
-  // If demand data is provided (dynamic surge), create 1-hour window for NEXT hour
-  // This allows predictive surge pricing based on current demand
+  // PREDICTIVE SURGE: When demand data is provided, create a window for the NEXT hour
+  // Duration is controlled by config.surgeDurationHours (default: 1)
   if (demandData && demandData.hour) {
+    const durationHours = config.surgeDurationHours || 1;
     const hourDate = new Date(demandData.hour);
-    const nextHour = (hourDate.getUTCHours() + 1) % 24; // NEXT hour
-    const endHour = (nextHour + 1) % 24;
+    const nextHour = (hourDate.getUTCHours() + 1) % 24;
+    const endHour = (nextHour + durationHours) % 24;
 
     const startTime = `${String(nextHour).padStart(2, '0')}:00`;
     const endTime = `${String(endHour).padStart(2, '0')}:00`;
 
-    console.log(`📅 Predictive surge: Demand at ${hourDate.getUTCHours()}:00 → Surge for ${nextHour}:00-${endHour}:00`);
+    console.log(`📅 Predictive surge: Demand at ${hourDate.getUTCHours()}:00 → Surge for ${startTime}-${endTime} (${durationHours}h)`);
 
     return [{
       windowType: 'ABSOLUTE_TIME',
@@ -255,7 +313,7 @@ function generateTimeWindows(config: any, multiplier: number, demandData?: any):
     }];
   }
 
-  // Otherwise, use config's time windows (static surge)
+  // MANUAL SURGE: use config's time windows (with daysOfWeek preserved)
   if (!config.timeWindows || config.timeWindows.length === 0) {
     return [{
       windowType: 'ABSOLUTE_TIME',
@@ -269,7 +327,8 @@ function generateTimeWindows(config: any, multiplier: number, demandData?: any):
     windowType: 'ABSOLUTE_TIME',
     startTime: tw.startTime || '00:00',
     endTime: tw.endTime || '23:59',
-    pricePerHour: multiplier
+    pricePerHour: multiplier,
+    ...(tw.daysOfWeek && tw.daysOfWeek.length > 0 && { daysOfWeek: tw.daysOfWeek })
   }));
 }
 
@@ -296,39 +355,43 @@ async function materializeSurgeConfig(db: any, configId: ObjectId, demandData?: 
   // Create surge ratesheet
   const now = new Date();
 
-  // Determine effective dates based on demand data or config
+  // Surge ratesheets are always temporary — duration from config (default: 1 hour)
+  const durationHours = config.surgeDurationHours || 1;
   let effectiveFrom: Date;
   let effectiveTo: Date;
 
   if (demandData && demandData.hour) {
-    // For predictive surge, create ratesheet for NEXT hour
-    // Set effective period to cover the next hour only
+    // PREDICTIVE: start at next hour from the demand observation
     const demandDate = new Date(demandData.hour);
     const nextHour = (demandDate.getUTCHours() + 1) % 24;
 
-    // Start from next hour
     effectiveFrom = new Date(demandDate);
     effectiveFrom.setUTCHours(nextHour, 0, 0, 0);
-
-    // End after next hour
-    effectiveTo = new Date(effectiveFrom);
-    effectiveTo.setUTCHours(effectiveTo.getUTCHours() + 1, 0, 0, 0);
 
     console.log('📅 Predictive surge ratesheet effective period:', {
       demandHour: demandData.hour,
       predictionHour: `${nextHour}:00`,
-      effectiveFrom: effectiveFrom.toISOString(),
-      effectiveTo: effectiveTo.toISOString()
+      durationHours,
     });
   } else {
-    // Use config dates for static surge
-    effectiveFrom = config.effectiveFrom;
-    effectiveTo = config.effectiveTo;
+    // MANUAL: start from now (not from config.effectiveFrom which may be in the past)
+    effectiveFrom = now;
   }
+
+  effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
+
+  console.log('📅 Surge ratesheet effective period:', {
+    mode: demandData ? 'demand-driven' : 'manual',
+    durationHours,
+    effectiveFrom: effectiveFrom.toISOString(),
+    effectiveTo: effectiveTo.toISOString()
+  });
 
   const surgeRatesheet = {
     name: `SURGE: ${config.name}`,
-    description: demandData ? `Dynamic surge for ${demandData.hour}` : `Manual materialization from config ${config._id}`,
+    description: demandData
+      ? `Predictive surge for ${demandData.hour} (${durationHours}h)`
+      : `Manual surge from ${now.toISOString()} (${durationHours}h)`,
     type: 'SURGE_MULTIPLIER',
     appliesTo: config.appliesTo,
 

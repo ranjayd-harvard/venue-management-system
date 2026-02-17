@@ -264,17 +264,22 @@ export default function KafkaMonitoringPage() {
 
       if (res.ok) {
         const data = await res.json();
-        alert(
-          `✅ Surge ratesheets materialized!\n\n` +
-          `Created: ${data.ratesheets.length} ratesheet(s)\n\n` +
+        let msg = `✅ Surge ratesheets materialized!\n\nCreated: ${data.ratesheets.length} ratesheet(s)\n\n` +
           data.ratesheets.map((r: any) =>
             `• ${r.configName}\n  Multiplier: ${r.multiplier.toFixed(3)}\n  Demand: ${r.demand}, Supply: ${r.supply}`
-          ).join('\n\n')
-        );
+          ).join('\n\n');
+        if (data.skipped?.length > 0) {
+          msg += '\n\n⏭️ Skipped:\n' + data.skipped.map((s: any) => `• ${s.configName}: ${s.reason}`).join('\n');
+        }
+        alert(msg);
         await loadMetrics();
       } else {
-        const error = await res.json();
-        alert(`Failed to materialize surge: ${error.error}`);
+        const errData = await res.json();
+        let msg = `⚠️ ${errData.error}`;
+        if (errData.skipped?.length > 0) {
+          msg += '\n\n' + errData.skipped.map((s: any) => `• ${s.configName}: ${s.reason}`).join('\n');
+        }
+        alert(msg);
       }
     } catch (error) {
       alert('Error materializing surge');
