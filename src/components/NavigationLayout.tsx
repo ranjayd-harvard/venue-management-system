@@ -158,6 +158,12 @@ export default function NavigationLayout({ children }: { children: React.ReactNo
       description: 'Visualize capacity distribution'
     },
     {
+      href: '/capacity/inventory-status',
+      icon: Shield,
+      label: 'Inventory Status (4D)',
+      description: '4-dimensional status view'
+    },
+    {
       href: '/admin/capacity-sheets',
       icon: Users,
       label: 'Manage CapacitySheets',

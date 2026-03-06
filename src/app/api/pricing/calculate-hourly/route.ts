@@ -502,10 +502,11 @@ export async function POST(request: NextRequest) {
             surgeRatesheetsMap.set(configId, []);
           }
 
-          const startTimeStr = `${hourTimestamp.getHours().toString().padStart(2, '0')}:${hourTimestamp.getMinutes().toString().padStart(2, '0')}`;
-          const endHour = new Date(hourTimestamp);
-          endHour.setHours(endHour.getHours() + 1);
-          const endTimeStr = `${endHour.getHours().toString().padStart(2, '0')}:00`;
+          // CRITICAL: Use UTC hours for SURGE_MULTIPLIER windows because the pricing engine
+          // evaluates SURGE_MULTIPLIER time windows using getUTCHours() (see price-engine-hourly.ts)
+          const startTimeStr = `${hourTimestamp.getUTCHours().toString().padStart(2, '0')}:${hourTimestamp.getUTCMinutes().toString().padStart(2, '0')}`;
+          const endUTCHour = (hourTimestamp.getUTCHours() + 1) % 24;
+          const endTimeStr = `${endUTCHour.toString().padStart(2, '0')}:00`;
 
           surgeRatesheetsMap.get(configId)!.push({
             startTime: startTimeStr,

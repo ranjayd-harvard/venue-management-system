@@ -1,6 +1,6 @@
 import { Db, ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
-import { SubLocation } from './types';
+import { SubLocation, PhysicalStatusCounts, PhysicalStatusSnapshot } from './types';
 import {
   setCapacityForDate,
   setCapacityForDateRange,
@@ -209,6 +209,49 @@ export class SubLocationRepository {
     removeRevenueGoal(config, startDate, endDate);
 
     return this.update(id, { capacityConfig: config });
+  }
+
+  // ===== PHYSICAL STATUS METHODS =====
+
+  /**
+   * Updates the physical status snapshot for a sublocation.
+   * Validates that counts sum equals the sublocation's maxCapacity.
+   */
+  static async updatePhysicalStatus(
+    id: ObjectId,
+    counts: PhysicalStatusCounts,
+    updatedBy: string = 'manual',
+    source: 'MANUAL' | 'EVENT_DRIVEN' = 'MANUAL'
+  ): Promise<boolean> {
+    const sublocation = await this.findById(id);
+    if (!sublocation) return false;
+
+    const maxCapacity = sublocation.maxCapacity || 0;
+    const sum = counts.free + counts.occupied + counts.occupiedUnconfirmed + counts.unknown;
+    if (sum !== maxCapacity) {
+      throw new Error(
+        `Physical status counts sum (${sum}) must equal maxCapacity (${maxCapacity})`
+      );
+    }
+
+    const snapshot: PhysicalStatusSnapshot = {
+      counts,
+      updatedAt: new Date(),
+      updatedBy,
+      source,
+    };
+
+    const collection = await this.getCollection();
+    const result = await collection.updateOne(
+      { _id: id },
+      {
+        $set: {
+          physicalStatus: snapshot,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    return result.modifiedCount > 0;
   }
 
   // ===== HOURLY CAPACITY METHODS =====

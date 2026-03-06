@@ -288,48 +288,25 @@ function calculateSurgeMultiplier(config: any): number {
 
 /**
  * Generate time windows for surge ratesheet
- * For demand-driven surge: create a window for the NEXT hour scoped by surgeDurationHours
- * For manual surge: use config's time windows with daysOfWeek preserved
+ * Always scoped to the next hour from the reference date (demand observation or current time)
+ * Duration is controlled by config.surgeDurationHours (default: 1)
  */
-function generateTimeWindows(config: any, multiplier: number, demandData?: any): any[] {
-  // PREDICTIVE SURGE: When demand data is provided, create a window for the NEXT hour
-  // Duration is controlled by config.surgeDurationHours (default: 1)
-  if (demandData && demandData.hour) {
-    const durationHours = config.surgeDurationHours || 1;
-    const hourDate = new Date(demandData.hour);
-    const nextHour = (hourDate.getUTCHours() + 1) % 24;
-    const endHour = (nextHour + durationHours) % 24;
+function generateTimeWindows(config: any, multiplier: number, referenceDate: Date): any[] {
+  const durationHours = config.surgeDurationHours || 1;
+  const nextHour = (referenceDate.getUTCHours() + 1) % 24;
+  const endHour = (nextHour + durationHours) % 24;
 
-    const startTime = `${String(nextHour).padStart(2, '0')}:00`;
-    const endTime = `${String(endHour).padStart(2, '0')}:00`;
+  const startTime = `${String(nextHour).padStart(2, '0')}:00`;
+  const endTime = `${String(endHour).padStart(2, '0')}:00`;
 
-    console.log(`📅 Predictive surge: Demand at ${hourDate.getUTCHours()}:00 → Surge for ${startTime}-${endTime} (${durationHours}h)`);
+  console.log(`📅 Surge window: Reference at ${referenceDate.getUTCHours()}:00 UTC → ${startTime}-${endTime} (${durationHours}h)`);
 
-    return [{
-      windowType: 'ABSOLUTE_TIME',
-      startTime,
-      endTime,
-      pricePerHour: multiplier
-    }];
-  }
-
-  // MANUAL SURGE: use config's time windows (with daysOfWeek preserved)
-  if (!config.timeWindows || config.timeWindows.length === 0) {
-    return [{
-      windowType: 'ABSOLUTE_TIME',
-      startTime: '00:00',
-      endTime: '23:59',
-      pricePerHour: multiplier
-    }];
-  }
-
-  return config.timeWindows.map((tw: any) => ({
+  return [{
     windowType: 'ABSOLUTE_TIME',
-    startTime: tw.startTime || '00:00',
-    endTime: tw.endTime || '23:59',
-    pricePerHour: multiplier,
-    ...(tw.daysOfWeek && tw.daysOfWeek.length > 0 && { daysOfWeek: tw.daysOfWeek })
-  }));
+    startTime,
+    endTime,
+    pricePerHour: multiplier
+  }];
 }
 
 /**
@@ -346,42 +323,26 @@ async function materializeSurgeConfig(db: any, configId: ObjectId, demandData?: 
   // Calculate current surge multiplier
   const multiplier = calculateSurgeMultiplier(config);
 
-  // Generate time windows (use demand hour if available)
-  const timeWindows = generateTimeWindows(config, multiplier, demandData);
-
   // Calculate demand/supply pressure for snapshot
   const pressure = config.demandSupplyParams.currentDemand / config.demandSupplyParams.currentSupply;
 
-  // Create surge ratesheet
-  const now = new Date();
-
   // Surge ratesheets are always temporary — duration from config (default: 1 hour)
+  const now = new Date();
   const durationHours = config.surgeDurationHours || 1;
-  let effectiveFrom: Date;
-  let effectiveTo: Date;
 
-  if (demandData && demandData.hour) {
-    // PREDICTIVE: start at next hour from the demand observation
-    const demandDate = new Date(demandData.hour);
-    const nextHour = (demandDate.getUTCHours() + 1) % 24;
+  // Scope to the next UTC hour boundary from the reference point (demand observation or current time)
+  const referenceDate = (demandData && demandData.hour) ? new Date(demandData.hour) : now;
+  const nextUTCHour = (referenceDate.getUTCHours() + 1) % 24;
+  const effectiveFrom = new Date(referenceDate);
+  effectiveFrom.setUTCHours(nextUTCHour, 0, 0, 0);
+  const effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
 
-    effectiveFrom = new Date(demandDate);
-    effectiveFrom.setUTCHours(nextHour, 0, 0, 0);
-
-    console.log('📅 Predictive surge ratesheet effective period:', {
-      demandHour: demandData.hour,
-      predictionHour: `${nextHour}:00`,
-      durationHours,
-    });
-  } else {
-    // MANUAL: start from now (not from config.effectiveFrom which may be in the past)
-    effectiveFrom = now;
-  }
-
-  effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
+  // Generate time windows scoped to the next hour
+  const timeWindows = generateTimeWindows(config, multiplier, referenceDate);
 
   console.log('📅 Surge ratesheet effective period:', {
     mode: demandData ? 'demand-driven' : 'manual',
+    referenceDate: referenceDate.toISOString(),
     durationHours,
     effectiveFrom: effectiveFrom.toISOString(),
     effectiveTo: effectiveTo.toISOString()
@@ -390,8 +351,8 @@ async function materializeSurgeConfig(db: any, configId: ObjectId, demandData?: 
   const surgeRatesheet = {
     name: `SURGE: ${config.name}`,
     description: demandData
-      ? `Predictive surge for ${demandData.hour} (${durationHours}h)`
-      : `Manual surge from ${now.toISOString()} (${durationHours}h)`,
+      ? `Predictive surge for ${demandData.hour} → ${effectiveFrom.toISOString()}`
+      : `Manual surge → ${effectiveFrom.toISOString()} (${durationHours}h)`,
     type: 'SURGE_MULTIPLIER',
     appliesTo: config.appliesTo,
 

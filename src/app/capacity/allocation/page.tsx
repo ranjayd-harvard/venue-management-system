@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { PieChart, Users, Building2, MapPin, Clock, RefreshCw } from 'lucide-react';
+import { PieChart, Users, Building2, MapPin, Clock, RefreshCw, Shield } from 'lucide-react';
+import Link from 'next/link';
 import PricingFilters from '@/components/PricingFilters';
 import CapacityAllocationChart, { AllocationData } from '@/components/CapacityAllocationChart';
 
@@ -127,16 +128,25 @@ export default function CapacityAllocationPage() {
                 </p>
               </div>
             </div>
-            {selectedSubLocation && (
-              <button
-                onClick={handleRefresh}
-                disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors disabled:opacity-50"
+            <div className="flex items-center gap-2">
+              <Link
+                href="/capacity/inventory-status"
+                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
               >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
-            )}
+                <Shield className="w-4 h-4" />
+                4D Status
+              </Link>
+              {selectedSubLocation && (
+                <button
+                  onClick={handleRefresh}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

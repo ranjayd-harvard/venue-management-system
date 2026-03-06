@@ -147,6 +147,145 @@ export interface DefaultCapacities {
   };
 }
 
+// ===== INVENTORY STATUS FLAG TYPES (4-Dimensional) =====
+
+// Dimension 2: PhysicalStatus — Reality layer
+// Reflects what is physically true about the spot
+// Driver: Latest event driven (manual input or check-in/check-out events)
+export enum PhysicalStatus {
+  FREE = 'FREE',
+  OCCUPIED = 'OCCUPIED',
+  OCCUPIED_UNCONFIRMED = 'OCCUPIED_UNCONFIRMED',
+  UNKNOWN = 'UNKNOWN',
+}
+
+// Dimension 3: CommercialStatus — Contract layer
+// Reflects what is contractually true, independent of physical presence
+// Driver: Always event driven + depends on currentTime and reservation window
+export enum CommercialStatus {
+  NONE = 'NONE',
+  RESERVED_UPCOMING = 'RESERVED_UPCOMING',
+  RESERVED_ACTIVE = 'RESERVED_ACTIVE',
+  NO_SHOW = 'NO_SHOW',
+  OVERSTAY = 'OVERSTAY',
+}
+
+// Dimension 4: OperationalStatus — Action layer
+// Protects from operational chaos; always derived from PhysicalStatus, CommercialStatus and time
+export enum OperationalStatus {
+  SELLABLE = 'SELLABLE',
+  NON_SELLABLE = 'NON_SELLABLE',
+  ATTENTION_REQUIRED = 'ATTENTION_REQUIRED',
+  BILLING_REQUIRED = 'BILLING_REQUIRED',
+  OTHER = 'OTHER',
+}
+
+// Aggregate counts for each status dimension (anonymous capacity model)
+export interface PhysicalStatusCounts {
+  free: number;
+  occupied: number;
+  occupiedUnconfirmed: number;
+  unknown: number;
+}
+
+export interface CommercialStatusCounts {
+  none: number;
+  reservedUpcoming: number;
+  reservedActive: number;
+  noShow: number;
+  overstay: number;
+}
+
+export interface OperationalStatusCounts {
+  sellable: number;
+  nonSellable: number;
+  attentionRequired: number;
+  billingRequired: number;
+  other: number;
+}
+
+// Stored snapshot of physical status on a SubLocation
+export interface PhysicalStatusSnapshot {
+  counts: PhysicalStatusCounts;
+  updatedAt: Date;
+  updatedBy: string; // operator ID or 'event-system'
+  source: 'MANUAL' | 'EVENT_DRIVEN';
+}
+
+// Cross-tabulation cell: Physical x Commercial → Operational
+export interface CrossTabulationCell {
+  physicalStatus: PhysicalStatus;
+  commercialStatus: CommercialStatus;
+  count: number;
+  operationalStatus: OperationalStatus;
+  reason: string;
+}
+
+export interface CrossTabulationResult {
+  cells: CrossTabulationCell[];
+  assumptions: string[];
+}
+
+// Full 4-dimensional inventory status result
+export interface InventoryStatus4D {
+  subLocationId: string;
+  subLocationLabel: string;
+  timestamp: Date;
+  totalCapacity: number;
+
+  // Dimension 1: CapacityStatus (planning layer) — from DefaultCapacities
+  capacityStatus: DefaultCapacities | null;
+
+  // Dimension 2: PhysicalStatus (reality layer) — stored
+  physicalStatus: PhysicalStatusCounts;
+
+  // Dimension 3: CommercialStatus (contract layer) — computed
+  commercialStatus: CommercialStatusCounts;
+
+  // Dimension 4: OperationalStatus (action layer) — derived
+  operationalStatus: OperationalStatusCounts;
+
+  // Cross-tabulation details (for transparency/debugging)
+  crossTabulation: CrossTabulationResult;
+
+  // Active events used in computation
+  activeEvents: Array<{
+    eventId: string;
+    name: string;
+    startDate: Date;
+    endDate: Date;
+    attendees: number;
+    commercialStatus: CommercialStatus;
+  }>;
+
+  // Allocation consumption: bridges planning (D1) with reality (D2-D4)
+  allocationConsumption?: AllocationConsumption;
+}
+
+// Per-category consumption breakdown — answers "how am I doing against my allocation?"
+export type CapacityCategory = 'transient' | 'events' | 'reserved' | 'unavailable' | 'readyToUse';
+
+export interface CategoryConsumption {
+  category: CapacityCategory;
+  planned: number;           // From CapacityStatus allocation
+  consumed: number;          // Physically occupied + commercially active
+  upcoming: number;          // Held for incoming reservation
+  noShow: number;            // Expected but not present
+  overstay: number;          // Past end but still present
+  unauthorized: number;      // Occupied with no reservation
+  available: number;         // Remaining within this category
+  utilizationPct: number;    // consumed / planned * 100 (0 if planned=0)
+}
+
+export interface AllocationConsumption {
+  categories: CategoryConsumption[];
+  totalPlanned: number;
+  totalConsumed: number;
+  totalAvailable: number;
+  overallUtilizationPct: number;
+  attributionAssumptions: string[];
+}
+
 export interface CapacityConfig extends CapacityBounds {
   dailyCapacities: DailyCapacity[]; // Explicit daily overrides (deprecated - use hourlyCapacities)
   hourlyCapacities?: HourlyCapacityOverride[]; // Hour-level capacity overrides
@@ -235,6 +374,8 @@ export interface SubLocation {
   timezone?: string;
   capacityConfig?: CapacityConfig;
   revenueGoalType?: RevenueGoalType; // Which calculation method to use for revenue goals (default: 'max')
+  // Inventory status: Physical reality layer (stored, updated by operator or events)
+  physicalStatus?: PhysicalStatusSnapshot;
   createdAt: Date;
   updatedAt: Date;
 }

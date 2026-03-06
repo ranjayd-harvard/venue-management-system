@@ -59,7 +59,7 @@ export function generateTimeWindows(
     const startTime = `${String(nextHour).padStart(2, '0')}:00`;
     const endTime = `${String(endHour).padStart(2, '0')}:00`;
 
-    console.log(`📅 Predictive surge: Demand at ${demandHour.getUTCHours()}:00 → Surge for ${startTime}-${endTime} (${durationHours}h)`);
+    console.log(`📅 Surge window: Reference at ${demandHour.getUTCHours()}:00 UTC → Surge for ${startTime}-${endTime} (${durationHours}h)`);
 
     return [{
       windowType: 'ABSOLUTE_TIME',
@@ -105,48 +105,42 @@ export async function materializeSurgeConfig(
 
   console.log('🚀 Materializing surge config:', config.name);
 
+  // Create surge ratesheet
+  const db = await getDb();
+  const now = new Date();
+
   // Calculate current surge multiplier
   const multiplier = calculateSurgeMultiplier(config);
 
-  // Generate time windows (scoped to next hour when demand-driven)
-  const timeWindows = generateTimeWindows(config, multiplier, options?.demandHour);
+  // Surge ratesheets are always temporary — duration from config (default: 1 hour)
+  const durationHours = config.surgeDurationHours || 1;
+
+  // Scope to the next hour from the reference point (demand observation or current time for manual)
+  const referenceHour = options?.demandHour ?? now;
+  const nextUTCHour = (referenceHour.getUTCHours() + 1) % 24;
+  const effectiveFrom = new Date(referenceHour);
+  effectiveFrom.setUTCHours(nextUTCHour, 0, 0, 0);
+  const effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
+
+  // Generate time windows (scoped to next hour — always pass reference so no "00:00-23:59" fallback)
+  const timeWindows = generateTimeWindows(config, multiplier, referenceHour);
 
   // Calculate demand/supply pressure for snapshot
   const pressure = config.demandSupplyParams.currentDemand / config.demandSupplyParams.currentSupply;
 
-  // Surge ratesheets are always temporary — duration from config (default: 1 hour)
-  const durationHours = config.surgeDurationHours || 1;
-  let effectiveFrom: Date;
-  let effectiveTo: Date;
-
-  if (options?.demandHour) {
-    // Demand-driven: start at next hour from the demand observation
-    const nextHour = (options.demandHour.getUTCHours() + 1) % 24;
-    effectiveFrom = new Date(options.demandHour);
-    effectiveFrom.setUTCHours(nextHour, 0, 0, 0);
-  } else {
-    // Manual: start from the config's effectiveFrom
-    effectiveFrom = config.effectiveFrom;
-  }
-
-  effectiveTo = new Date(effectiveFrom.getTime() + durationHours * 60 * 60 * 1000);
-
   console.log('📅 Surge ratesheet effective period:', {
     mode: options?.demandHour ? 'demand-driven' : 'manual',
     durationHours,
+    referenceHour: referenceHour.toISOString(),
     effectiveFrom: effectiveFrom.toISOString(),
     effectiveTo: effectiveTo.toISOString()
   });
-
-  // Create surge ratesheet
-  const db = await getDb();
-  const now = new Date();
 
   const surgeRatesheet: Omit<Ratesheet, '_id'> = {
     name: `SURGE: ${config.name}`,
     description: options?.demandHour
       ? `Predictive surge for ${options.demandHour.toISOString()}`
-      : `Auto-generated surge ratesheet from config ${config._id}`,
+      : `Manual surge from ${now.toISOString()} → ${effectiveFrom.toISOString()}`,
     type: 'SURGE_MULTIPLIER',  // CRITICAL: Use SURGE_MULTIPLIER type so backend applies multiplier logic
     appliesTo: config.appliesTo,
 
@@ -154,7 +148,7 @@ export async function materializeSurgeConfig(
     priority: 10000 + config.priority,
     conflictResolution: 'PRIORITY',
 
-    // Temporal constraints (scoped to next hour for demand-driven)
+    // Temporal constraints (always scoped to next hour from reference point)
     effectiveFrom,
     effectiveTo,
 

@@ -28,7 +28,8 @@ export default function KafkaTopicsPage() {
 
   const topics = [
     { value: 'venue.booking.events', label: 'Booking Events', color: 'blue' },
-    { value: 'venue.demand.hourly', label: 'Demand Hourly', color: 'purple' }
+    { value: 'venue.demand.hourly', label: 'Demand Hourly', color: 'purple' },
+    { value: 'sublocation.tickets', label: 'SubLocation Tickets', color: 'green' }
   ];
 
   const loadMessages = async () => {

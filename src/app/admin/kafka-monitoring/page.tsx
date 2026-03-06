@@ -2,6 +2,18 @@
 
 import { useState, useEffect } from 'react';
 
+/**
+ * Convert a UTC "HH:MM" time string to the local-timezone display string.
+ * Surge time windows are stored in UTC (evaluated by pricing engine via getUTCHours),
+ * but the effective period dates are shown in local time — this keeps them consistent.
+ */
+function utcTimeStrToLocal(utcTimeStr: string): string {
+  const [h, m] = utcTimeStr.split(':').map(Number);
+  const d = new Date();
+  d.setUTCHours(h, m, 0, 0);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 interface Metrics {
   overview: {
     demandHistoryTotal: number;
@@ -202,6 +214,20 @@ export default function KafkaMonitoringPage() {
   const [materializing, setMaterializing] = useState(false);
   const [updatingRatesheet, setUpdatingRatesheet] = useState<string | null>(null);
 
+  // Ticket state machine generator state
+  const [ticketDomain, setTicketDomain] = useState<'COMMERCIAL' | 'PHYSICAL'>('COMMERCIAL');
+  const [commercialScenario, setCommercialScenario] = useState('RESERVATION_FLOW');
+  const [physicalScenario, setPhysicalScenario] = useState('NORMAL_ENTRY');
+  const [ticketCount, setTicketCount] = useState(5);
+  const [ticketRate, setTicketRate] = useState(1);
+  const [startingTicketGen, setStartingTicketGen] = useState(false);
+  const [ticketGenStatus, setTicketGenStatus] = useState<GeneratorStatus | null>(null);
+
+  // Ticket aggregation state
+  const [aggregatingTickets, setAggregatingTickets] = useState(false);
+  const [cleaningTickets, setCleaningTickets] = useState(false);
+  const [ticketResult, setTicketResult] = useState<any>(null);
+
   const aggregateDemandManually = async () => {
     if (!subLocationId) {
       alert('Please select a sublocation');
@@ -315,9 +341,153 @@ export default function KafkaMonitoringPage() {
     }
   };
 
+  // --- Capacity Event Generator Functions ---
+
+  const loadTicketGenStatus = async () => {
+    try {
+      const res = await fetch('/api/kafka/sublocation-generator');
+      if (res.ok) {
+        const data = await res.json();
+        setTicketGenStatus(data);
+      }
+    } catch (error) {
+      console.error('Error loading ticket generator status:', error);
+    }
+  };
+
+  const startTicketGenerator = async () => {
+    if (!subLocationId) {
+      alert('Please select a sublocation');
+      return;
+    }
+
+    setStartingTicketGen(true);
+    try {
+      const scenario = ticketDomain === 'COMMERCIAL' ? commercialScenario : physicalScenario;
+      const res = await fetch('/api/kafka/sublocation-generator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subLocationId,
+          domain: ticketDomain,
+          scenario,
+          tickets: ticketCount,
+          rate: ticketRate,
+        }),
+      });
+
+      if (res.ok) {
+        alert(`${ticketDomain} ticket generator started!`);
+        await loadTicketGenStatus();
+      } else {
+        const error = await res.json();
+        alert(`Failed to start: ${error.error}`);
+      }
+    } catch (error) {
+      alert('Error starting ticket generator');
+      console.error(error);
+    } finally {
+      setStartingTicketGen(false);
+    }
+  };
+
+  const stopTicketGenerator = async (subLocId: string, domain?: string) => {
+    try {
+      let url = `/api/kafka/sublocation-generator?subLocationId=${subLocId}`;
+      if (domain) url += `&domain=${domain}`;
+      const res = await fetch(url, { method: 'DELETE' });
+      if (res.ok) {
+        alert('Generator stopped');
+        await loadTicketGenStatus();
+      } else {
+        const error = await res.json();
+        alert(`Failed to stop: ${error.error}`);
+      }
+    } catch (error) {
+      alert('Error stopping generator');
+      console.error(error);
+    }
+  };
+
+  const aggregateTicketStates = async () => {
+    if (!subLocationId) {
+      alert('Please select a sublocation');
+      return;
+    }
+
+    const confirmed = confirm(
+      `This will read sublocation.tickets from Kafka and process ticket state transitions for:\n\nSubLocation: ${subLocationId.substring(0, 12)}...\n\nTicket states will appear in the Inventory Status (4D) view.\n\nContinue?`
+    );
+    if (!confirmed) return;
+
+    setAggregatingTickets(true);
+    setTicketResult(null);
+    try {
+      const res = await fetch('/api/kafka/aggregate-inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subLocationId }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTicketResult(data);
+        alert(
+          `Ticket states aggregated!\n\n` +
+          `Processed: ${data.processed}\n` +
+          `Created: ${data.created}\n` +
+          `Updated: ${data.updated}\n` +
+          `Rejected: ${data.rejected}`
+        );
+      } else {
+        const error = await res.json();
+        alert(`Failed to aggregate: ${error.error}\n${error.details || ''}`);
+      }
+    } catch (error) {
+      alert('Error aggregating ticket states');
+      console.error(error);
+    } finally {
+      setAggregatingTickets(false);
+    }
+  };
+
+  const cleanSyntheticTickets = async () => {
+    if (!subLocationId) {
+      alert('Please select a sublocation');
+      return;
+    }
+
+    const confirmed = confirm(
+      `This will DELETE all synthetic ticket states for:\n\nSubLocation: ${subLocationId.substring(0, 12)}...\n\nReal data will not be affected.\n\nContinue?`
+    );
+    if (!confirmed) return;
+
+    setCleaningTickets(true);
+    try {
+      const res = await fetch(`/api/kafka/aggregate-inventory?subLocationId=${subLocationId}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTicketResult(null);
+        alert(`Cleaned ${data.deleted} synthetic ticket state(s)`);
+      } else {
+        const error = await res.json();
+        alert(`Failed to clean: ${error.error}`);
+      }
+    } catch (error) {
+      alert('Error cleaning synthetic tickets');
+      console.error(error);
+    } finally {
+      setCleaningTickets(false);
+    }
+  };
+
   useEffect(() => {
     loadMetrics();
     loadEntities();
+    loadTicketGenStatus();
   }, []);
 
   useEffect(() => {
@@ -604,6 +774,255 @@ export default function KafkaMonitoringPage() {
           )}
         </div>
 
+        {/* Ticket State Machine Generators */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-teal-200">
+          <h2 className="text-xl font-bold text-slate-800 mb-4">
+            🎫 Ticket State Machine Generators
+          </h2>
+          <p className="text-sm text-slate-600 mb-4">
+            Generate ticket-level state transitions published to the <code className="bg-slate-100 px-1 rounded text-teal-700">sublocation.tickets</code> Kafka topic. Each ticket represents one unit of capacity.
+          </p>
+
+          {/* Active Generators */}
+          {ticketGenStatus && ticketGenStatus.count > 0 && (
+            <div className="mb-4 p-4 bg-teal-50 border border-teal-200 rounded-lg">
+              <div className="font-semibold text-teal-800 mb-2">
+                Active Generators ({ticketGenStatus.count})
+              </div>
+              {ticketGenStatus.active.map((gen: any) => (
+                <div key={`${gen.subLocationId}:${gen.domain}`} className="flex justify-between items-center py-2">
+                  <span className="text-sm text-teal-700">
+                    {gen.domain} — {gen.subLocationId.substring(0, 12)}... (PID: {gen.pid})
+                  </span>
+                  <button
+                    onClick={() => stopTicketGenerator(gen.subLocationId, gen.domain)}
+                    className="px-3 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                  >
+                    Stop
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Domain Toggle */}
+          <div className="mb-4 flex gap-2">
+            <button
+              onClick={() => setTicketDomain('COMMERCIAL')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                ticketDomain === 'COMMERCIAL'
+                  ? 'bg-teal-500 text-white'
+                  : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+              }`}
+            >
+              Commercial
+            </button>
+            <button
+              onClick={() => setTicketDomain('PHYSICAL')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                ticketDomain === 'PHYSICAL'
+                  ? 'bg-teal-500 text-white'
+                  : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+              }`}
+            >
+              Physical
+            </button>
+          </div>
+
+          {/* Scenario + Controls */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Scenario
+              </label>
+              {ticketDomain === 'COMMERCIAL' ? (
+                <select
+                  value={commercialScenario}
+                  onChange={(e) => setCommercialScenario(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-black"
+                >
+                  <option value="RESERVATION_FLOW">RESERVATION_FLOW (NONE → UPCOMING → ACTIVE)</option>
+                  <option value="FULL_LIFECYCLE">FULL_LIFECYCLE (full cycle back to NONE)</option>
+                  <option value="NO_SHOW_MIX">NO_SHOW_MIX (70% normal, 30% no-show)</option>
+                  <option value="OVERSTAY_MIX">OVERSTAY_MIX (70% normal, 20% overstay, 10% no-show)</option>
+                  <option value="CANCELLATION">CANCELLATION (80% normal, 20% cancelled)</option>
+                </select>
+              ) : (
+                <select
+                  value={physicalScenario}
+                  onChange={(e) => setPhysicalScenario(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-black"
+                >
+                  <option value="NORMAL_ENTRY">NORMAL_ENTRY (sensor → scan confirms)</option>
+                  <option value="DIRECT_SCAN">DIRECT_SCAN (scan without sensor)</option>
+                  <option value="FULL_CYCLE">FULL_CYCLE (entry → occupy → exit)</option>
+                  <option value="GHOST_DETECT">GHOST_DETECT (sensor → cleared)</option>
+                  <option value="SENSOR_ISSUES">SENSOR_ISSUES (offline/online)</option>
+                  <option value="MIXED">MIXED (realistic mix)</option>
+                </select>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Tickets
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={ticketCount}
+                onChange={(e) => setTicketCount(parseInt(e.target.value) || 5)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-black"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">
+                Rate (msgs/sec)
+              </label>
+              <input
+                type="number"
+                min="0.1"
+                max="10"
+                step="0.1"
+                value={ticketRate}
+                onChange={(e) => setTicketRate(parseFloat(e.target.value) || 1)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-black"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={startTicketGenerator}
+            disabled={startingTicketGen || !subLocationId}
+            className="w-full md:w-auto px-6 py-2 bg-gradient-to-r from-teal-500 to-teal-600 text-white font-medium rounded-lg hover:from-teal-600 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {startingTicketGen ? '⏳ Starting...' : `Generate ${ticketDomain} Transitions`}
+          </button>
+
+          {!subLocationId && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                ⚠️ Please select a sublocation in the generator section above
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Aggregate Ticket States Panel */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-teal-200">
+          <h2 className="text-xl font-bold text-slate-800 mb-4">
+            📦 Aggregate Ticket States
+          </h2>
+          <p className="text-sm text-slate-600 mb-4">
+            Reads <code className="bg-slate-100 px-1 rounded text-teal-700">sublocation.tickets</code> from Kafka and processes state transitions into the <code className="bg-slate-100 px-1 rounded text-teal-700">ticket_states</code> collection with transition validation. View results on the <a href="/capacity/inventory-status" className="text-teal-600 hover:underline font-medium">Inventory Status (4D)</a> page.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Aggregate Button */}
+            <div className="p-4 border border-teal-200 rounded-lg bg-teal-50">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">1️⃣</span>
+                <h3 className="font-semibold text-slate-800">Aggregate Transitions</h3>
+              </div>
+              <p className="text-sm text-slate-600 mb-3">
+                Processes ticket state transitions from Kafka into MongoDB with validation.
+              </p>
+              <button
+                onClick={aggregateTicketStates}
+                disabled={aggregatingTickets || !subLocationId}
+                className="w-full px-4 py-2 bg-gradient-to-r from-teal-500 to-teal-600 text-white font-medium rounded-lg hover:from-teal-600 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {aggregatingTickets ? '⏳ Aggregating...' : '📦 Aggregate Ticket States'}
+              </button>
+            </div>
+
+            {/* View 4D Status */}
+            <div className="p-4 border border-emerald-200 rounded-lg bg-emerald-50">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">2️⃣</span>
+                <h3 className="font-semibold text-slate-800">View 4D Status</h3>
+              </div>
+              <p className="text-sm text-slate-600 mb-3">
+                Check how ticket states affect all 4 inventory dimensions.
+              </p>
+              <a
+                href="/capacity/inventory-status"
+                className="block w-full px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-medium rounded-lg hover:from-emerald-600 hover:to-emerald-700 text-center"
+              >
+                🔍 View Inventory Status
+              </a>
+            </div>
+
+            {/* Cleanup */}
+            <div className="p-4 border border-red-200 rounded-lg bg-red-50">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">🗑️</span>
+                <h3 className="font-semibold text-slate-800">Clean Synthetic Tickets</h3>
+              </div>
+              <p className="text-sm text-slate-600 mb-3">
+                Remove all synthetic ticket states for the selected sublocation.
+              </p>
+              <button
+                onClick={cleanSyntheticTickets}
+                disabled={cleaningTickets || !subLocationId}
+                className="w-full px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white font-medium rounded-lg hover:from-red-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cleaningTickets ? '⏳ Cleaning...' : '🗑️ Clean Synthetic Tickets'}
+              </button>
+            </div>
+          </div>
+
+          {/* Result Display */}
+          {ticketResult && (
+            <div className="mt-4 p-4 bg-teal-50 border border-teal-200 rounded-lg">
+              <div className="font-semibold text-teal-800 mb-2">Last Aggregation Result</div>
+              <div className="grid grid-cols-4 gap-4 text-sm mb-3">
+                <div>
+                  <span className="text-slate-600">Processed:</span>{' '}
+                  <span className="font-bold text-teal-700">{ticketResult.processed}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600">Created:</span>{' '}
+                  <span className="font-bold text-teal-700">{ticketResult.created}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600">Updated:</span>{' '}
+                  <span className="font-bold text-slate-700">{ticketResult.updated}</span>
+                </div>
+                <div>
+                  <span className="text-slate-600">Rejected:</span>{' '}
+                  <span className={`font-bold ${ticketResult.rejected > 0 ? 'text-red-600' : 'text-slate-700'}`}>{ticketResult.rejected}</span>
+                </div>
+              </div>
+              {ticketResult.physicalSummary && (
+                <div className="text-sm mb-1">
+                  <span className="text-slate-600">Physical:</span>{' '}
+                  {Object.entries(ticketResult.physicalSummary).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                </div>
+              )}
+              {ticketResult.commercialSummary && (
+                <div className="text-sm mb-1">
+                  <span className="text-slate-600">Commercial:</span>{' '}
+                  {Object.entries(ticketResult.commercialSummary).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                </div>
+              )}
+              {ticketResult.rejected > 0 && ticketResult.rejectedDetails && (
+                <div className="mt-2 text-xs text-red-600">
+                  Rejected: {ticketResult.rejectedDetails.slice(0, 5).map((r: any) => `${r.ticketId}: ${r.reason}`).join('; ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!subLocationId && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                ⚠️ Please select a sublocation in the generator section above
+              </p>
+            </div>
+          )}
+        </div>
+
         {/* Top Locations */}
         <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-slate-200">
           <h2 className="text-xl font-bold text-slate-800 mb-4">
@@ -785,7 +1204,7 @@ export default function KafkaMonitoringPage() {
                                 </span>
                               ) : (
                                 <span>
-                                  {tw.startTime || '00:00'}–{tw.endTime || '24:00'}
+                                  {utcTimeStrToLocal(tw.startTime || '00:00')}–{utcTimeStrToLocal(tw.endTime || '24:00')}
                                 </span>
                               )}
                             </div>
